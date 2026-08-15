@@ -3,11 +3,12 @@
     <div class="reader-top">
       <el-button size="small" @click="$router.push('/library')">← 返回资料库</el-button>
       <span class="reader-title">📖 {{ book?.title || 'PDF 阅读器' }}</span>
+      <el-tag v-if="currentChapter" size="small" type="warning">{{ currentChapter }}</el-tag>
       <span class="reader-tip">本地渲染 · 选中文字可 AI 解释/翻译/高亮 · 深色模式 · 目录跳转 · 阅读位置自动记忆</span>
     </div>
     <div class="reader-body">
       <PdfReader v-if="book" :src="fileUrl" :book-id="book.id" :initial-page="initialPage"
-        :toc="tocFlat" show-toc show-ai />
+        :toc="tocFlat" show-toc show-ai :use-saved-pos="!hasQueryPage" @page-change="onPageChange" />
     </div>
   </div>
 </template>
@@ -21,9 +22,16 @@ import { getBook, bookFileUrl } from '../api'
 const route = useRoute()
 const book = ref(null)
 const tocFlat = ref([])
-const initialPage = ref(1)
+const hasQueryPage = ref(route.query.page != null)
+const initialPage = ref(parseInt(route.query.page) || 1)
+const currentChapter = ref('')
 
 const fileUrl = computed(() => book.value ? bookFileUrl(book.value.id) : '')
+
+const onPageChange = ({ page, chapter }) => {
+  currentChapter.value = chapter
+  document.title = (chapter ? chapter + ' · ' : '') + (book.value?.title || 'PDF 阅读器')
+}
 
 onMounted(async () => {
   const bookId = Number(route.params.bookId)

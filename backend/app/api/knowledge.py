@@ -304,3 +304,24 @@ def _create_ai_tree(db: Session, req: KnowledgeAiGenerateReq, data: list[dict]) 
     walk(data, req.parent_node_id, 0)
     db.commit()
     return total
+
+@router.get("/nodes/{node_id}/annotations", response_model=list)
+def node_annotations(node_id: int, db: Session = Depends(get_db)):
+    """知识树节点关联的 PDF 批注列表（双向联动）。"""
+    from backend.app.models import Annotation
+    from backend.app.schemas import AnnotationResp
+
+    _get_node(db, node_id)
+    items = db.scalars(
+        select(Annotation).where(Annotation.knowledge_node_id == node_id)
+        .order_by(Annotation.book_id, Annotation.page)
+    ).all()
+    out = []
+    for a in items:
+        book = db.get(Book, a.book_id)
+        out.append({
+            "id": a.id, "book_id": a.book_id, "book_title": book.title if book else "",
+            "page": a.page, "rect_json": a.rect_json, "text": a.text or "",
+            "color": a.color, "note": a.note or "", "created_at": a.created_at.isoformat(),
+        })
+    return out

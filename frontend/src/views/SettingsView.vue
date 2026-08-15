@@ -25,8 +25,8 @@
         </el-form-item>
         <el-form-item label="视觉模型">
           <el-select v-model="form.vision_model" style="width: 240px">
-            <el-option value="qwen-vl-max" label="qwen-vl-max（最强，贵）" />
-            <el-option value="qwen-vl-plus" label="qwen-vl-plus（均衡）" />
+            <el-option value="qwen3-vl-plus" label="qwen3-vl-plus（推荐，均衡）" />
+            <el-option value="qwen3-vl-flash" label="qwen3-vl-flash（快，便宜）" />
           </el-select>
         </el-form-item>
         <el-form-item label="检索片段数">
@@ -87,7 +87,7 @@ const form = ref({
   deepseek_api_key: '',
   deepseek_model: 'flash',
   vision_api_key: '',
-  vision_model: 'qwen-vl-max',
+  vision_model: 'qwen3-vl-plus',
   rag_top_k: 5,
   vector_search: false,
 })
@@ -105,7 +105,7 @@ const load = async () => {
       deepseek_api_key: '',
       deepseek_model: s.deepseek_model,
       vision_api_key: '',
-      vision_model: s.vision_model || 'qwen-vl-max',
+      vision_model: s.vision_model || 'qwen3-vl-plus',
       rag_top_k: parseInt(s.rag_top_k),
       vector_search: s.vector_search,
     }

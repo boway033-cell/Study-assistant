@@ -258,3 +258,14 @@ def delete_quiz(quiz_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "题目不存在")
     db.delete(quiz)
     db.commit()
+
+
+@router.delete("/books/{book_id}/quizzes", status_code=204)
+def clear_book_quizzes(book_id: int, db: Session = Depends(get_db)):
+    """清除某本书的全部题目（含作答记录）。"""
+    from backend.app.models import Attempt as _Attempt
+    ids = db.scalars(select(Quiz.id).where(Quiz.book_id == book_id)).all()
+    if ids:
+        db.query(_Attempt).filter(_Attempt.quiz_id.in_(ids)).delete(synchronize_session=False)
+        db.query(Quiz).filter(Quiz.book_id == book_id).delete(synchronize_session=False)
+    db.commit()

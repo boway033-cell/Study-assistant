@@ -3,6 +3,7 @@
     <div v-if="loading" v-loading="true" style="height: 200px" />
     <template v-else>
       <div class="loc-meta">
+        <el-button size="small" type="primary" plain @click="openFull">⛶ 全屏阅读</el-button>
         <el-tag v-if="meta.chapter" size="small" type="info">{{ meta.chapter }}</el-tag>
         <el-tag v-if="meta.pageStart" size="small" type="warning">第 {{ meta.pageStart }} - {{ meta.pageEnd }} 页</el-tag>
         <el-tag size="small" type="success">{{ meta.bookType }}</el-tag>
@@ -22,10 +23,12 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import PdfReader from './PdfReader.vue'
 import { getChunkOriginal, bookFileUrl } from '../api'
 import { ElMessage } from 'element-plus'
 
+const router = useRouter()
 const visible = ref(false)
 const loading = ref(false)
 const original = ref({})
@@ -53,6 +56,11 @@ const open = async ({ bookId, chunkId, chapter = '', pageStart = null, pageEnd =
   } finally {
     loading.value = false
   }
+}
+
+const openFull = () => {
+  visible.value = false
+  router.push('/reader/' + meta.value.bookId + '?page=' + (meta.value.pageStart || 1))
 }
 
 defineExpose({ open })

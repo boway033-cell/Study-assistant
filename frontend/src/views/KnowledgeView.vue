@@ -118,6 +118,15 @@
             </div>
           </template>
           <el-empty v-else description="该节点尚未关联书籍章节，或该章节暂无内容" :image-size="80" />
+
+          <el-divider content-position="left">📌 关联批注（PDF 阅读器）</el-divider>
+          <div v-if="!nodeAnns.length" class="form-tip">还没有关联批注：在阅读器中选中文字 → 高亮 → 挂到此节点</div>
+          <div v-for="a in nodeAnns" :key="a.id" class="node-ann">
+            <span class="ann-dot" :style="{ background: a.color }"></span>
+            <el-tag size="small" type="info">《{{ a.book_title }}》第 {{ a.page }} 页</el-tag>
+            <span class="node-ann-text">{{ a.text || a.note || '' }}</span>
+            <el-button link type="primary" size="small" @click="goRead(a)">去阅读 →</el-button>
+          </div>
         </el-card>
         <el-empty v-else description="点击左侧节点查看详情" style="margin-top: 80px" />
       </el-col>
@@ -170,6 +179,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MindMap from '../components/MindMap.vue'
 import PdfReader from '../components/PdfReader.vue'
@@ -177,11 +187,13 @@ import {
   getKnowledgeTree, createKnowledgeNode, updateKnowledgeNode,
   deleteKnowledgeNode, moveKnowledgeNode, getKnowledgeSource,
   importKnowledgeChapters, aiGenerateKnowledge,
-  listBooks, getBook, getTask, bookFileUrl,
+  listBooks, getBook, getTask, bookFileUrl, getNodeAnnotations,
 } from '../api'
 
+const router = useRouter()
 const tree = ref([])
 const books = ref([])
+const nodeAnns = ref([])
 const viewMode = ref('outline')
 const current = ref(null)
 const edit = ref({ title: '', book_id: null, chapter_id: null, note: '' })
@@ -234,6 +246,17 @@ const selectNode = async (data) => {
     loadToc(data.book_id)
   }
   if (data.chapter_id) loadSource()
+  loadNodeAnns(data.id)
+}
+
+const loadNodeAnns = async (nodeId) => {
+  try {
+    nodeAnns.value = await getNodeAnnotations(nodeId)
+  } catch { nodeAnns.value = [] }
+}
+
+const goRead = (a) => {
+  router.push('/reader/' + a.book_id + '?page=' + a.page)
 }
 
 const loadChapters = async (bookId) => {
@@ -260,6 +283,22 @@ const loadChapters = async (bookId) => {
 const onBookChange = () => {
   edit.value.chapter_id = null
   loadChapters(edit.value.book_id)
+}
+
+const loadToc = async (bookId) => {
+  if (!bookId) { tocFlat.value = []; return }
+  try {
+    const detail = await getBook(bookId)
+    const flat = []
+    const walk = (nodes, level) => {
+      for (const n of nodes) {
+        flat.push({ id: n.id, title: n.title, level: n.level || level, start_page: n.start_page })
+        if (n.children?.length) walk(n.children, level + 1)
+      }
+    }
+    walk(detail.chapters || [], 1)
+    tocFlat.value = flat
+  } catch { tocFlat.value = [] }
 }
 
 const addRoot = async () => {

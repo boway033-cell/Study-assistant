@@ -6,6 +6,7 @@
           <span>刷题自测（AI 分析教材生成）</span>
           <div>
             <el-button type="warning" plain @click="openGen">🤖 AI 生成题目</el-button>
+            <el-button type="danger" plain :disabled="!filterBook" @click="clearBook">🗑 清除本书题目</el-button>
             <el-select v-model="filterBook" placeholder="全部书籍" clearable style="width: 160px; margin: 0 8px" @change="loadQuizzes">
               <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
             </el-select>
@@ -116,8 +117,8 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import { listQuizzes, attemptQuiz, selfGrade, listBooks, getBook, generateQuizzes, getTask } from '../api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { listQuizzes, attemptQuiz, selfGrade, listBooks, getBook, generateQuizzes, getTask, clearBookQuizzes } from '../api'
 
 const quizzes = ref([])
 const loading = ref(false)
@@ -153,6 +154,18 @@ const loadQuizzes = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const clearBook = async () => {
+  if (!filterBook.value) { ElMessage.warning('请先选择要清除的书籍'); return }
+  try {
+    await ElMessageBox.confirm(`确定删除《${books.value.find(b => b.id === filterBook.value)?.title || ''}》的全部题目？`, '清除确认', {
+      confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning',
+    })
+    await clearBookQuizzes(filterBook.value)
+    ElMessage.success('已清除')
+    loadQuizzes()
+  } catch { /* 取消 */ }
 }
 
 const openGen = () => {

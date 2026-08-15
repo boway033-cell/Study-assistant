@@ -1,8 +1,13 @@
-<!-- PdfReader v2：本地渲染为底层（滚动/文本层/标注/目录/位置记忆/深色），AI 为可选增强 -->
+<!-- PdfReader v2.1：本地渲染为底层（滚动/单页/双页、文本层、四色高亮+批注卡片、目录、位置记忆、深色），AI 为可选增强 -->
 <template>
-  <div class="pdf-reader" :class="{ 'pr-dark': dark }">
+  <div ref="rootEl" class="pdf-reader" :class="{ 'pr-dark': dark }">
     <div class="pr-toolbar">
       <el-button v-if="showToc" size="small" :type="showTocPanel ? 'primary' : ''" @click="showTocPanel = !showTocPanel">📑 目录</el-button>
+      <el-radio-group v-model="mode" size="small" class="pr-mode">
+        <el-radio-button value="scroll">连续</el-radio-button>
+        <el-radio-button value="single">单页</el-radio-button>
+        <el-radio-button value="double">双页</el-radio-button>
+      </el-radio-group>
       <el-button-group>
         <el-button size="small" :disabled="page <= 1" @click="goPage(-1)">上一页</el-button>
         <el-button size="small" :disabled="page >= numPages" @click="goPage(1)">下一页</el-button>
@@ -15,7 +20,8 @@
         <el-button size="small" @click="zoomBy(-0.15)">−</el-button>
         <span class="pr-zoom">{{ Math.round(scale * 100) }}%</span>
         <el-button size="small" @click="zoomBy(0.15)">＋</el-button>
-        <el-button size="small" @click="fitWidth">适应</el-button>
+        <el-button size="small" @click="fitWidth">适应宽</el-button>
+        <el-button size="small" @click="fitPage">适应页</el-button>
         <el-button size="small" :type="dark ? 'primary' : ''" @click="dark = !dark">{{ dark ? '☀️' : '🌙' }}</el-button>
       </el-button-group>
       <template v-if="bookId && showAi">
@@ -34,12 +40,14 @@
           @click="jumpToPage(t.start_page)">{{ t.title }}</div>
       </aside>
 
-      <div ref="scroller" class="pr-body" @scroll="onScroll" @mouseup="onMouseUp" @mousedown="onMouseDown">
-        <div v-for="p in pageList" :key="p" class="pr-page" :data-page="p" :style="{ height: pageHeights[p] ? pageHeights[p] + 'px' : undefined }">
+      <div ref="scroller" class="pr-body" :class="'pr-mode-' + mode"
+        @scroll="onScroll" @mouseup="onMouseUp" @mousedown="onMouseDown" @wheel="onWheel">
+        <div v-for="p in pageList" :key="p" class="pr-page" :data-page="p"
+          :style="{ width: pageWidthPx(p) + 'px', height: pageH(p) + 'px' }">
           <canvas :ref="(el) => setCanvasRef(p, el)" class="pr-canvas" />
           <div :ref="(el) => setTextRef(p, el)" class="text-layer"></div>
-          <div v-for="a in pageAnns(p)" :key="a.id" class="pr-hl"
-            :style="hlStyle(a, p)" @click="openAnn(a)" :title="a.text || ''" />
+          <div v-for="(st, i) in hlStyles(p)" :key="st.id + '-' + i" class="pr-hl"
+            :style="st.style" @click.stop="openAnnCard('edit', st.ann, $event)" :title="st.ann.text || ''" />
         </div>
         <div v-if="loading" class="pr-loading" v-loading="true" element-loading-text="正在渲染原文…" />
         <div v-if="errorMsg" class="pr-error">⚠️ {{ errorMsg }}</div>
@@ -50,7 +58,25 @@
     <div v-if="selToolbar" class="pr-sel-bar" :style="{ top: selPos.y + 'px', left: selPos.x + 'px' }">
       <el-button size="small" type="primary" @click="aiAction('explain')">💡 解释</el-button>
       <el-button size="small" type="success" @click="aiAction('translate')">🌐 翻译</el-button>
-      <el-button size="small" type="warning" @click="addHighlight">🖍 高亮</el-button>
+      <el-button size="small" type="warning" @click="openAnnCard('create')">🖍 高亮</el-button>
+    </div>
+
+    <!-- 批注卡片（创建/编辑） -->
+    <div v-if="annCard.visible" class="pr-ann-card" :style="{ top: annCard.y + 'px', left: annCard.x + 'px' }">
+      <div class="ann-card-title">{{ annCard.mode === 'edit' ? '编辑批注' : '添加批注' }}</div>
+      <div class="ann-colors">
+        <span v-for="c in COLORS" :key="c" class="ann-color"
+          :class="{ active: annCard.color === c }" :style="{ background: c }" @click="annCard.color = c" />
+      </div>
+      <el-input v-model="annCard.note" type="textarea" :rows="2" size="small" placeholder="写笔记…" />
+      <el-select v-model="annCard.knowledgeNodeId" placeholder="挂到知识树节点（可选）" clearable size="small" style="width: 100%; margin-top: 6px">
+        <el-option v-for="n in nodeOptions" :key="n.id" :label="n.label" :value="n.id" />
+      </el-select>
+      <div class="ann-actions">
+        <el-button v-if="annCard.mode === 'edit'" size="small" type="danger" plain @click="deleteAnnFromCard">删除</el-button>
+        <el-button size="small" @click="annCard.visible = false">取消</el-button>
+        <el-button size="small" type="primary" @click="saveAnnCard">{{ annCard.mode === 'edit' ? '保存' : '添加' }}</el-button>
+      </div>
     </div>
 
     <!-- AI 结果抽屉 -->
@@ -58,19 +84,28 @@
       <div v-if="aiLoading" v-loading="true" style="height: 200px" />
       <div v-else-if="aiResult" class="ai-result" v-html="aiResultHtml"></div>
       <el-empty v-else description="等待操作" :image-size="80" />
+      <template #footer>
+        <div v-if="!aiLoading && aiResult && !aiResult.startsWith('⚠️') && pendingSel" class="ai-footer">
+          <el-button type="warning" plain size="small" @click="saveAiAsAnnotation">🖍 保存为高亮批注</el-button>
+        </div>
+      </template>
     </el-drawer>
 
     <!-- 标注管理抽屉 -->
     <el-drawer v-model="showAnnPanel" title="我的标注" size="40%">
+      <div class="ann-export" v-if="annotations.length">
+        <el-button size="small" type="primary" plain @click="exportAnns">⬇ 导出 Markdown</el-button>
+      </div>
       <div v-if="!annotations.length" class="form-tip">还没有标注：在正文中选中文字 → 点「🖍 高亮」即可添加</div>
       <div v-for="a in annotations" :key="a.id" class="ann-item">
         <div class="ann-head">
+          <span class="ann-dot" :style="{ background: a.color }"></span>
           <el-tag size="small" type="warning">第 {{ a.page }} 页</el-tag>
           <el-button link size="small" @click="jumpToPage(a.page)">跳转</el-button>
           <el-button link size="small" type="danger" @click="removeAnn(a)">删除</el-button>
         </div>
         <div class="ann-text">{{ a.text || '' }}</div>
-        <el-input v-model="a.note" size="small" placeholder="写笔记…（可关联知识树节点）" @change="saveAnnNote(a)" />
+        <div v-if="a.note" class="ann-note">📝 {{ a.note }}</div>
       </div>
     </el-drawer>
   </div>
@@ -78,25 +113,30 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import {
   listAnnotations, createAnnotation, updateAnnotation, deleteAnnotation,
-  aiExplain, aiSummarize, aiVision, listBooks, getBook,
+  aiExplain, aiSummarize, aiVision, listBooks, getBook, getKnowledgeTree,
 } from '../api'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
+
+const emit = defineEmits(['page-change'])
+const COLORS = ['#f9e572', '#9be5a0', '#8ec8f5', '#f5b8c8']  // 黄/绿/蓝/粉
 
 const props = defineProps({
   src: { type: String, default: '' },
   bookId: { type: Number, default: null },
   initialPage: { type: Number, default: 1 },
-  toc: { type: Array, default: () => [] },      // [{id,title,level,start_page}]
+  toc: { type: Array, default: () => [] },
   showToc: { type: Boolean, default: false },
   showAi: { type: Boolean, default: false },
+  useSavedPos: { type: Boolean, default: true },  // false = 强制从 initialPage 打开（知识树跳转等）
 })
 
+const rootEl = ref(null)
 const scroller = ref(null)
 const canvasRefs = {}
 const textRefs = {}
@@ -108,10 +148,14 @@ const loading = ref(false)
 const errorMsg = ref('')
 const showTocPanel = ref(false)
 const pageList = ref([])
+const mode = ref('scroll')
+const baseHeights = {}   // scale=1 时的页高缓存（缩放不重算）
+const baseWidths = {}
 const pageHeights = ref({})
 const rendered = ref({})
 const annotations = ref([])
 const showAnnPanel = ref(false)
+const nodeOptions = ref([])
 
 // AI 状态
 const aiPanel = ref(false)
@@ -122,13 +166,17 @@ const aiBusy = ref(false)
 const selToolbar = ref(false)
 const selPos = ref({ x: 0, y: 0 })
 let selText = ''
-let selRect = null
+let selRects = null
+let selPage = 1
+let pendingSel = null   // AI 解释后保存为批注用的选区快照
+
+// 批注卡片
+const annCard = ref({ visible: false, mode: 'create', x: 0, y: 0, page: 1, rects: [], text: '', color: COLORS[0], note: '', knowledgeNodeId: null, editingId: null })
 
 let pdfDoc = null
-let renderSeq = 0
+let renderTasks = {}
+const pendingRenders = new Set()
 let bookTitle = ''
-
-const prEl = (p) => document.querySelector('.pr-page[data-page="' + p + '"]')
 
 function setCanvasRef(p, el) { if (el) canvasRefs[p] = el }
 function setTextRef(p, el) { if (el) textRefs[p] = el }
@@ -138,6 +186,24 @@ const aiResultHtml = computed(() => {
   return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br/>').replace(/#{1,3} (.+)/g, '<b>$1</b>')
 })
 
+// ===== 页高/页宽（缩放按比例，不重算）=====
+const pageH = (p) => Math.round((baseHeights[p] || 800) * scale.value)
+const pageWidthPx = (p) => Math.round((baseWidths[p] || 595) * scale.value)
+const pageOffset = (p) => {
+  let acc = 0
+  if (mode.value === 'double') {
+    for (let i = 1; i < p; i++) {
+      if (i === pairStartOf(i)) {
+        const e = pairEndOf(i)
+        acc += Math.max(pageH(i), e > i ? pageH(e) : 0)
+      }
+    }
+    return acc
+  }
+  for (let i = 1; i < p; i++) acc += pageH(i)
+  return acc
+}
+
 // ===== 加载 =====
 const loadPdf = async () => {
   if (!props.src) return
@@ -146,32 +212,31 @@ const loadPdf = async () => {
   if (pdfDoc) { try { pdfDoc.destroy() } catch {} pdfDoc = null }
   try {
     const doc = await pdfjsLib.getDocument({
-      url: props.src,
-      disableAutoFetch: true,
-      cMapUrl: 'cmaps/',
-      cMapPacked: true,
-      standardFontDataUrl: 'standard_fonts/',
+      url: props.src, disableAutoFetch: true,
+      cMapUrl: 'cmaps/', cMapPacked: true, standardFontDataUrl: 'standard_fonts/',
     }).promise
     pdfDoc = doc
     numPages.value = doc.numPages
     pageList.value = Array.from({ length: doc.numPages }, (_, i) => i + 1)
-    // 计算每页高度
-    const heights = {}
-    const tasks = []
+    // 预取前 N 页高度（保证首屏滚动位置正确），其余惰性补全
+    const HEIGHTS = {}
+    const WIDTHS = {}
     for (let i = 1; i <= doc.numPages; i++) {
-      tasks.push(doc.getPage(i).then(pg => {
-        const vp = pg.getViewport({ scale: scale.value })
-        heights[i] = Math.floor(vp.height)
-      }))
+      const pg = await doc.getPage(i)
+      const vp1 = pg.getViewport({ scale: 1 })
+      HEIGHTS[i] = vp1.height
+      WIDTHS[i] = vp1.width
     }
-    await Promise.all(tasks)
-    pageHeights.value = heights
-    // 初始定位
+    Object.assign(baseHeights, HEIGHTS)
+    Object.assign(baseWidths, WIDTHS)
+    pageHeights.value = {}
+    // 初始页：有记忆且允许记忆时用记忆；否则用指定页（知识树跳转等）
     const saved = readPos()
-    const target = saved && saved.page ? saved.page : (props.initialPage || 1)
+    const useSaved = props.useSavedPos && saved && saved.page
+    const target = useSaved ? saved.page : (props.initialPage || 1)
     page.value = Math.min(Math.max(1, target), doc.numPages)
     await renderVisible()
-    if (saved && saved.scrollTop) {
+    if (useSaved && saved.scrollTop) {
       await nextTick()
       scroller.value.scrollTop = saved.scrollTop
     } else {
@@ -179,6 +244,7 @@ const loadPdf = async () => {
       scrollToPage(page.value, false)
     }
     await loadAnnotations()
+    loadNodeOptions()
   } catch (e) {
     console.error('pdf load error', e)
     errorMsg.value = 'PDF 加载失败：' + (e.message || e)
@@ -187,48 +253,71 @@ const loadPdf = async () => {
   }
 }
 
-// ===== 虚拟滚动渲染 =====
-const currentScale = ref(scale.value)
-watch(scale, () => {
-  currentScale.value = scale.value
-  reRenderAll()
-})
+// ===== 显示模式与可见范围 =====
+const pairStartOf = (p) => {
+  if (p <= 1) return 1
+  return p % 2 === 0 ? p : p - 1   // 跨页：(1),(2,3),(4,5)…
+}
+const pairEndOf = (p) => {
+  const s = pairStartOf(p)
+  if (s === 1) return 1
+  return Math.min(numPages.value, s + 1)
+}
 
-const onScroll = () => {
-  const visible = visibleRange()
-  renderVisible(visible)
-  savePosDebounced()
-  // 更新当前页指示
-  const off = pageOffset(visible.start)
-  page.value = visible.start
+// 视口顶部所在页（页码指示用，与渲染缓冲无关）
+const currentPageAt = (st) => {
+  let acc = 0
+  for (let p = 1; p <= numPages.value; p++) {
+    acc += pageH(p)
+    if (acc > st) return p
+  }
+  return numPages.value
 }
 
 const visibleRange = () => {
   if (!scroller.value || !numPages.value) return { start: 1, end: 1 }
   const st = scroller.value.scrollTop
   const ch = scroller.value.clientHeight
-  const total = pageHeights.value
-  let acc = 0
-  let start = 1
-  let end = 1
-  for (let p = 1; p <= numPages.value; p++) {
-    const h = total[p] || 800
-    if (acc + h > st && start === 1) start = p
-    if (acc + h > st + ch) { end = p; break }
-    acc += h
-    end = p
+  if (mode.value === 'scroll') {
+    let acc = 0
+    let start = 1, end = 1
+    for (let p = 1; p <= numPages.value; p++) {
+      const h = pageH(p)
+      if (acc + h > st && start === 1) start = p
+      if (acc + h > st + ch) { end = p; break }
+      acc += h
+      end = p
+    }
+    return { start: Math.max(1, start - 1), end: Math.min(numPages.value, end + 1) }
   }
-  return { start: Math.max(1, start - 1), end: Math.min(numPages.value, end + 1) }
-}
-
-const pageOffset = (p) => {
+  // 单页/双页：只渲染当前页（或当前跨页）
+  if (mode.value === 'double') {
+    let acc = 0
+    let row = 1
+    while (row <= numPages.value) {
+      const s = pairStartOf(row)
+      const e = pairEndOf(s)
+      const h = Math.max(pageH(s), e > s ? pageH(e) : 0)
+      if (acc + h > st) break
+      acc += h
+      row = e + 1
+    }
+    const cur = Math.min(row, numPages.value)
+    return { start: pairStartOf(cur), end: pairEndOf(cur) }
+  }
+  let cur = 1
   let acc = 0
-  for (let i = 1; i < p; i++) acc += pageHeights.value[i] || 800
-  return acc
+  for (let p = 1; p <= numPages.value; p++) {
+    const h = pageH(p)
+    if (acc + h > st) { cur = p; break }
+    acc += h
+  }
+  return { start: cur, end: cur }
 }
 
-const renderVisible = async (range) => {
-  const r = range || visibleRange()
+const renderVisible = async () => {
+  if (!numPages.value) return
+  const r = visibleRange()
   const want = new Set()
   for (let p = r.start; p <= r.end; p++) want.add(p)
   for (const p of Object.keys(rendered.value)) {
@@ -239,18 +328,11 @@ const renderVisible = async (range) => {
   }
 }
 
-const renderTasks = {}
-const pendingRenders = new Set()
-
 const renderPage = async (p) => {
   if (!pdfDoc || rendered.value[p] || pendingRenders.has(p)) return
   pendingRenders.add(p)
   try {
-    // 取消该页旧的渲染任务，避免同一 canvas 并发渲染
-    if (renderTasks[p]) {
-      try { await renderTasks[p].cancel() } catch { /* ignore */ }
-      delete renderTasks[p]
-    }
+    if (renderTasks[p]) { try { await renderTasks[p].cancel() } catch {} delete renderTasks[p] }
     const pdfPage = await pdfDoc.getPage(p)
     const vp = pdfPage.getViewport({ scale: scale.value })
     const cv = canvasRefs[p]
@@ -266,7 +348,6 @@ const renderPage = async (p) => {
     renderTasks[p] = task
     await task.promise
     delete renderTasks[p]
-    // 文本层（本地，支持选择/高亮）
     const tl = textRefs[p]
     if (tl) {
       tl.style.width = Math.floor(vp.width) + 'px'
@@ -284,7 +365,7 @@ const renderPage = async (p) => {
 }
 
 const clearPage = (p) => {
-  if (renderTasks[p]) { try { renderTasks[p].cancel() } catch { /* ignore */ } delete renderTasks[p] }
+  if (renderTasks[p]) { try { renderTasks[p].cancel() } catch {} delete renderTasks[p] }
   pendingRenders.delete(p)
   const cv = canvasRefs[p]
   if (cv) { cv.width = 1; cv.height = 1 }
@@ -293,180 +374,294 @@ const clearPage = (p) => {
   rendered.value[p] = false
 }
 
-const reRenderAll = async () => {
-  // 缩放/深色变化：按新 scale 重算高度与渲染
-  if (!pdfDoc) return
-  const heights = {}
-  for (let i = 1; i <= numPages.value; i++) {
-    const pg = await pdfDoc.getPage(i)
-    heights[i] = Math.floor(pg.getViewport({ scale: scale.value }).height)
-  }
-  pageHeights.value = heights
-  const cur = page.value
-  await nextTick()
-  scrollToPage(cur, false)
+const onScroll = () => {
   renderVisible()
+  const r = visibleRange()
+  // 连续模式：页码=视口顶部页（渲染缓冲只影响渲染，不影响页码）
+  if (mode.value === 'scroll') {
+    page.value = currentPageAt(scroller.value.scrollTop)
+  } else if (mode.value === 'double') {
+    const cur = r.start
+    page.value = pairStartOf(cur)
+  }
+  notifyPageChange()
+  savePosDebounced()
+}
+
+const notifyPageChange = () => {
+  emit('page-change', { page: page.value, chapter: currentChapter()?.title || '' })
+}
+
+const onWheel = (e) => {
+  if (e.ctrlKey || e.metaKey) { zoomBy(e.deltaY > 0 ? -0.1 : 0.1); return }
+  if (mode.value === 'scroll') return  // 连续模式自然滚动
+  if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
+  if (e.deltaY > 0) goPage(1)
+  else goPage(-1)
+  e.preventDefault()
 }
 
 const goPage = (delta) => {
-  const p = Math.min(numPages.value, Math.max(1, page.value + delta))
-  scrollToPage(p)
+  if (mode.value === 'scroll') {
+    const p = Math.min(numPages.value, Math.max(1, page.value + delta))
+    scrollToPage(p)
+    return
+  }
+  if (mode.value === 'double') {
+    const s = pairStartOf(page.value)
+    const next = s === 1 ? 2 : s + 2
+    const p = Math.min(numPages.value, Math.max(1, next))
+    scrollToPage(p)
+    return
+  }
+  scrollToPage(Math.min(numPages.value, Math.max(1, page.value + delta)))
 }
 
 const scrollToPage = (p, smooth = true) => {
   if (!scroller.value) return
-  page.value = p
-  const top = pageOffset(p) + 2
-  scroller.value.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' })
+  const target = Math.min(numPages.value, Math.max(1, p))
+  page.value = target
+  // 单页/双页用瞬时跳转（避免平滑滚动中途 onScroll 把页码回弹）
+  const useSmooth = smooth && mode.value === 'scroll'
+  scroller.value.scrollTo({ top: pageOffset(target) + 2, behavior: useSmooth ? 'smooth' : 'auto' })
   renderVisible()
+  notifyPageChange()
 }
 
-const jumpToPage = (p) => { scrollToPage(p) }
+const jumpToPage = (p) => scrollToPage(p)
 
 const zoomBy = (d) => {
   scale.value = Math.min(2.5, Math.max(0.5, Math.round((scale.value + d) * 100) / 100))
+  renderVisible()
 }
 const fitWidth = () => {
   if (!scroller.value || !numPages.value) return
   const w = scroller.value.clientWidth - 30
-  const base = 595
+  const base = baseWidths[page.value] || 595
   scale.value = Math.max(0.5, Math.min(2, w / base))
+  renderVisible()
+}
+const fitPage = () => {
+  if (!scroller.value || !numPages.value) return
+  const w = scroller.value.clientWidth - 30
+  const h = scroller.value.clientHeight - 30
+  const bw = baseWidths[page.value] || 595
+  const bh = baseHeights[page.value] || 800
+  scale.value = Math.max(0.5, Math.min(2, Math.min(w / bw, h / bh)))
+  renderVisible()
 }
 
-// ===== 位置记忆（本地 localStorage）=====
-const posKey = () => 'sa-reader-' + (props.bookId || props.src)
-const readPos = () => {
-  try {
-    const v = JSON.parse(localStorage.getItem(posKey()) || 'null')
-    return v
-  } catch { return null }
-}
-const savePos = () => {
-  try {
-    localStorage.setItem(posKey(), JSON.stringify({ page: page.value, scrollTop: scroller.value?.scrollTop || 0 }))
-  } catch {}
-}
-let saveTimer = null
-const savePosDebounced = () => {
-  clearTimeout(saveTimer)
-  saveTimer = setTimeout(savePos, 800)
-}
-
-// ===== 标注（本地存储）=====
-const pageAnns = (p) => annotations.value.filter(a => a.page === p)
-const hlStyle = (a, p) => {
-  const h = pageHeights.value[p] || 800
-  let w = 595 * scale.value
-  const el = prEl(p)
-  if (el) w = el.clientWidth
-  let rects = []
-  try { rects = JSON.parse(a.rect_json) } catch {}
-  const first = rects[0] || { x: 0.02, y: 0, w: 0.2, h: 0.03 }
-  return {
-    left: (first.x * 100) + '%',
-    top: (first.y * 100) + '%',
-    width: (first.w * 100) + '%',
-    height: (first.h * 100) + '%',
-    background: (a.color || '#f9e572') + '99',
+watch(mode, (nv) => {
+  if (nv === 'double' && scroller.value) {
+    const w = scroller.value.clientWidth - 40
+    const bw = baseWidths[page.value] || 595
+    if (bw * scale.value * 2 > w) {
+      scale.value = Math.max(0.5, Math.min(2, w / (bw * 2)))
+    }
   }
+  page.value = Math.max(1, Math.min(numPages.value || 1, page.value))
+  scrollToPage(page.value, false)
+})
+
+// ===== 位置记忆 =====
+const posKey = () => 'sa-reader-' + (props.bookId || props.src)
+const readPos = () => { try { return JSON.parse(localStorage.getItem(posKey()) || 'null') } catch { return null } }
+const savePos = () => { try { localStorage.setItem(posKey(), JSON.stringify({ page: page.value, scrollTop: scroller.value?.scrollTop || 0 })) } catch {} }
+let saveTimer = null
+const savePosDebounced = () => { clearTimeout(saveTimer); saveTimer = setTimeout(savePos, 800) }
+
+// ===== 标注 =====
+const hlStyles = (p) => {
+  const out = []
+  for (const a of annotations.value) {
+    if (a.page !== p) continue
+    let rects = []
+    try { rects = JSON.parse(a.rect_json) } catch {}
+    for (const r of rects) {
+      out.push({
+        id: a.id,
+        ann: a,
+        style: {
+          left: (r.x * 100) + '%',
+          top: (r.y * 100) + '%',
+          width: (r.w * 100) + '%',
+          height: (r.h * 100) + '%',
+          background: (a.color || COLORS[0]) + '99',
+        },
+      })
+    }
+  }
+  return out
 }
 
 const loadAnnotations = async () => {
   if (!props.bookId) return
+  try { annotations.value = await listAnnotations(props.bookId) } catch {}
+}
+
+const loadNodeOptions = async () => {
   try {
-    annotations.value = await listAnnotations(props.bookId)
-  } catch { /* ignore */ }
+    const tree = await getKnowledgeTree()
+    const flat = []
+    const walk = (nodes, depth) => {
+      for (const n of nodes) {
+        flat.push({ id: n.id, label: '　'.repeat(depth) + n.title })
+        if (n.children?.length) walk(n.children, depth + 1)
+      }
+    }
+    walk(tree.items || [], 0)
+    nodeOptions.value = flat
+  } catch {}
 }
 
 const onMouseUp = async (e) => {
-  if (!props.bookId) return
-  await nextTick()
   const sel = window.getSelection()
   if (!sel || sel.isCollapsed || !sel.toString().trim()) { selToolbar.value = false; return }
-  // 选区需落在文本层内
   const node = sel.anchorNode
   const tl = node?.parentElement?.closest('.text-layer')
   if (!tl) return
   const rect = sel.getRangeAt(0).getBoundingClientRect()
   if (!rect.width) return
   selText = sel.toString().trim().slice(0, 2000)
-  selRect = sel.getRangeAt(0).getClientRects()
-  const scrollerRect = scroller.value.getBoundingClientRect()
+  selRects = sel.getRangeAt(0).getClientRects()
+  // 选区所在页：以文本层所在 .pr-page 为准（连续模式多页可见时更可靠）
+  const pageEl = tl.closest('.pr-page')
+  selPage = pageEl ? parseInt(pageEl.dataset.page) : page.value
+  const pr = rootEl.value.getBoundingClientRect()
   selPos.value = {
-    x: Math.min(rect.left - scrollerRect.left + scroller.value.scrollLeft, scroller.value.scrollWidth - 300),
-    y: rect.bottom - scrollerRect.top + scroller.value.scrollTop + 8,
+    x: Math.max(8, Math.min(rect.left - pr.left + scroller.value.scrollLeft, pr.width - 320)),
+    y: Math.max(8, rect.bottom - pr.top + scroller.value.scrollTop + 8),
   }
   selToolbar.value = true
 }
 
-const onMouseDown = () => {
-  // 点击别处收起工具条（延迟，避免与 mouseup 冲突）
-  setTimeout(() => { if (!selToolbar.value) return }, 0)
+const onMouseDown = () => {}
+
+// 批注卡片
+const openAnnCard = (modeName, ann = null, ev = null) => {
+  selToolbar.value = false
+  const pr = rootEl.value.getBoundingClientRect()
+  let x, y
+  if (ev) {
+    x = ev.clientX - pr.left + scroller.value.scrollLeft
+    y = ev.clientY - pr.top + scroller.value.scrollTop
+  } else {
+    x = selPos.value.x
+    y = selPos.value.y + 40
+  }
+  // 边界钳制（窄面板/靠边时避免溢出）
+  x = Math.max(8, Math.min(x, pr.width - 280))
+  y = Math.max(8, Math.min(y, pr.height - 260))
+  if (modeName === 'edit' && ann) {
+    annCard.value = {
+      visible: true, mode: 'edit', x, y, page: ann.page,
+      rects: JSON.parse(ann.rect_json || '[]'), text: ann.text || '',
+      color: ann.color || COLORS[0], note: ann.note || '',
+      knowledgeNodeId: ann.knowledge_node_id || null, editingId: ann.id,
+    }
+  } else {
+    annCard.value = {
+      visible: true, mode: 'create', x, y, page: selPage,
+      rects: selRects ? Array.from(selRects) : [], text: selText || '',
+      color: COLORS[0], note: '', knowledgeNodeId: null, editingId: null,
+    }
+  }
+  window.getSelection()?.removeAllRanges()
 }
 
-const addHighlight = async () => {
-  if (!props.bookId || !selText || !selRect) return
-  const pageEl = prEl(page.value)
-  if (!pageEl) return
-  const pageRect = pageEl.getBoundingClientRect()
-  const rects = []
-  for (const r of selRect) {
-    rects.push({
-      x: +( (r.left - pageRect.left) / pageRect.width ).toFixed(4),
-      y: +( (r.top - pageRect.top) / pageRect.height ).toFixed(4),
-      w: +( r.width / pageRect.width ).toFixed(4),
-      h: +( r.height / pageRect.height ).toFixed(4),
-    })
+const saveAnnCard = async () => {
+  const c = annCard.value
+  if (c.mode === 'edit') {
+    try {
+      await updateAnnotation(c.editingId, { note: c.note, color: c.color, knowledge_node_id: c.knowledgeNodeId || null })
+      ElMessage.success('批注已保存')
+    } catch (e) { ElMessage.error(e.message) }
+  } else {
+    if (!props.bookId) { ElMessage.warning('缺少书籍信息'); return }
+    // 把 DOMRect 归一化为 0-1 坐标
+    const pageEl = document.querySelector('.pr-page[data-page="' + c.page + '"]')
+    if (!pageEl) { ElMessage.warning('页面未就绪'); return }
+    const pr = pageEl.getBoundingClientRect()
+    const rects = []
+    for (const r of c.rects) {
+      rects.push({
+        x: +((r.left - pr.left) / pr.width).toFixed(4),
+        y: +((r.top - pr.top) / pr.height).toFixed(4),
+        w: +(r.width / pr.width).toFixed(4),
+        h: +(r.height / pr.height).toFixed(4),
+      })
+    }
+    try {
+      await createAnnotation(props.bookId, {
+        page: c.page, rect_json: JSON.stringify(rects), text: c.text,
+        color: c.color, note: c.note || '', knowledge_node_id: c.knowledgeNodeId || null,
+      })
+      ElMessage.success('已添加高亮')
+    } catch (e) { ElMessage.error(e.message) }
   }
-  let knowledge_node_id = null
-  try {
-    const { value } = await ElMessageBox.prompt('可选：输入笔记（留空仅高亮）', '高亮标注', {
-      confirmButtonText: '保存', cancelButtonText: '取消',
-      inputPlaceholder: '写下你的理解…',
-    })
-    knowledge_node_id = null
-  } catch { /* 取消 */ }
-  try {
-    await createAnnotation(props.bookId, {
-      page: page.value,
-      rect_json: JSON.stringify(rects),
-      text: selText,
-      color: '#f9e572',
-      note: knowledge_node_id === null ? null : '',
-    })
-    ElMessage.success('已添加高亮')
-    selToolbar.value = false
-    window.getSelection()?.removeAllRanges()
-    loadAnnotations()
-  } catch (e) {
-    ElMessage.error(e.message)
-  }
+  annCard.value.visible = false
+  loadAnnotations()
 }
 
-const openAnn = (a) => {
-  ElMessageBox.confirm((a.text || '') + '\n\n笔记：' + (a.note || '（无）'), '标注详情', {
-    confirmButtonText: '删除', cancelButtonText: '关闭', type: 'info',
-  }).then(async () => {
-    await deleteAnnotation(a.id)
+const deleteAnnFromCard = async () => {
+  try {
+    await deleteAnnotation(annCard.value.editingId)
+    ElMessage.success('已删除')
+    annCard.value.visible = false
     loadAnnotations()
-  }).catch(() => {})
+  } catch (e) { ElMessage.error(e.message) }
 }
 
 const removeAnn = async (a) => {
   await deleteAnnotation(a.id)
   loadAnnotations()
 }
-const saveAnnNote = async (a) => {
-  try {
-    await updateAnnotation(a.id, { note: a.note || '' })
-    ElMessage.success('笔记已保存')
-  } catch (e) { ElMessage.error(e.message) }
+
+const exportAnns = () => {
+  const lines = ['# 标注导出（' + (bookTitle || 'PDF') + '）', '']
+  const byPage = {}
+  for (const a of annotations.value) {
+    (byPage[a.page] = byPage[a.page] || []).push(a)
+  }
+  for (const pg of Object.keys(byPage).sort((x, y) => x - y)) {
+    lines.push('## 第 ' + pg + ' 页')
+    for (const a of byPage[pg]) {
+      lines.push('')
+      if (a.text) lines.push('> ' + a.text.replace(/\n/g, ' '))
+      if (a.note) lines.push('- 📝 ' + a.note.replace(/\n/g, ' '))
+    }
+    lines.push('')
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = (bookTitle || 'reader') + '-标注.md'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
-// ===== AI 增强（可选：无 Key 时后端返回友好提示）=====
+// ===== AI 增强（可选）=====
 const aiAction = async (action) => {
   selToolbar.value = false
   if (!selText) return
+  // 记录选区快照（用于「保存为批注」）
+  if (selRects) {
+    const pageEl = document.querySelector('.pr-page[data-page="' + selPage + '"]')
+    if (pageEl) {
+      const pr2 = pageEl.getBoundingClientRect()
+      pendingSel = {
+        page: selPage,
+        rects: Array.from(selRects).map(r => ({
+          x: +((r.left - pr2.left) / pr2.width).toFixed(4),
+          y: +((r.top - pr2.top) / pr2.height).toFixed(4),
+          w: +(r.width / pr2.width).toFixed(4),
+          h: +(r.height / pr2.height).toFixed(4),
+        })),
+        text: selText,
+      }
+    }
+  }
   aiTitle.value = action === 'translate' ? '翻译' : 'AI 解释'
   aiPanel.value = true
   aiLoading.value = true
@@ -475,11 +670,23 @@ const aiAction = async (action) => {
     const resp = await aiExplain({ text: selText, action, book_title: bookTitle, chapter_title: '' })
     if (!resp.ok) throw new Error(resp.error || 'AI 调用失败')
     aiResult.value = resp.result
-  } catch (e) {
-    aiResult.value = '⚠️ ' + e.message
-  } finally {
-    aiLoading.value = false
-  }
+  } catch (e) { aiResult.value = '⚠️ ' + e.message } finally { aiLoading.value = false }
+}
+
+const saveAiAsAnnotation = async () => {
+  if (!pendingSel || !props.bookId || !aiResult.value || aiResult.value.startsWith('⚠️')) return
+  try {
+    await createAnnotation(props.bookId, {
+      page: pendingSel.page,
+      rect_json: JSON.stringify(pendingSel.rects),
+      text: pendingSel.text,
+      color: COLORS[0],
+      note: '💡 AI 解读：' + aiResult.value.slice(0, 1500),
+      knowledge_node_id: null,
+    })
+    ElMessage.success('已保存为高亮批注')
+    loadAnnotations()
+  } catch (e) { ElMessage.error(e.message) }
 }
 
 const summarizeChapter = async () => {
@@ -491,26 +698,16 @@ const summarizeChapter = async () => {
   aiBusy.value = true
   try {
     const cur = currentChapter()
-    if (!cur) { aiResult.value = '⚠️ 未找到当前页所属章节' ; return }
+    if (!cur) { aiResult.value = '⚠️ 未找到当前页所属章节'; return }
     const resp = await aiSummarize({ book_id: props.bookId, chapter_id: cur.id })
     if (!resp.ok) throw new Error(resp.error || 'AI 调用失败')
     aiResult.value = resp.result
-  } catch (e) {
-    aiResult.value = '⚠️ ' + e.message
-  } finally {
-    aiLoading.value = false
-    aiBusy.value = false
-  }
+  } catch (e) { aiResult.value = '⚠️ ' + e.message } finally { aiLoading.value = false; aiBusy.value = false }
 }
 
 const currentChapter = () => {
   const flat = []
-  const walk = (nodes) => {
-    for (const n of nodes) {
-      flat.push(n)
-      if (n.children?.length) walk(n.children)
-    }
-  }
+  const walk = (nodes) => { for (const n of nodes) { flat.push(n); if (n.children?.length) walk(n.children) } }
   walk(props.toc || [])
   let best = null
   for (const c of flat) {
@@ -535,12 +732,7 @@ const analyzePage = async () => {
     const resp = await aiVision({ book_id: props.bookId, page: page.value, image })
     if (!resp.ok) throw new Error(resp.error || '视觉分析失败')
     aiResult.value = resp.result
-  } catch (e) {
-    aiResult.value = '⚠️ ' + e.message
-  } finally {
-    aiLoading.value = false
-    aiBusy.value = false
-  }
+  } catch (e) { aiResult.value = '⚠️ ' + e.message } finally { aiLoading.value = false; aiBusy.value = false }
 }
 
 // ===== 生命周期 =====
@@ -550,12 +742,6 @@ onMounted(async () => {
     const b = resp.items.find(x => x.id === props.bookId)
     bookTitle = b?.title || ''
   } catch {}
-  if (props.bookId) {
-    try {
-      const detail = await getBook(props.bookId)
-      // 若无 toc 传入，用书籍章节树（需要扁平化）
-    } catch {}
-  }
   loadPdf()
 })
 
@@ -566,12 +752,13 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.pdf-reader { display: flex; flex-direction: column; height: 100%; min-height: 360px; }
+.pdf-reader { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 360px; }
 .pr-toolbar {
   display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-wrap: wrap;
   background: var(--el-fill-color-lighter); border-radius: 8px 8px 0 0;
   border: 1px solid var(--el-border-color-extra-light);
 }
+.pr-mode :deep(.el-radio-button__inner) { padding: 6px 10px; font-size: 12px; }
 .pr-pageinfo { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--el-text-color-secondary); }
 .pr-total { white-space: nowrap; }
 .pr-zoom { font-size: 12px; color: var(--el-text-color-secondary); min-width: 44px; text-align: center; }
@@ -581,12 +768,15 @@ onBeforeUnmount(() => {
 .pr-toc-item { font-size: 12px; padding: 4px 8px; cursor: pointer; color: var(--el-text-color-regular); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pr-toc-item:hover { background: var(--el-color-primary-light-9); }
 .pr-toc-item.active { background: var(--el-color-primary-light-8); color: var(--el-color-primary); font-weight: 600; }
-.pr-body { position: relative; flex: 1; overflow: auto; padding: 10px 14px; background: #525659; text-align: center; }
-.pr-page { position: relative; margin: 0 auto 10px; box-shadow: 0 2px 10px rgba(0,0,0,.4); background: #fff; width: min-content; }
+.pr-body { position: relative; flex: 1; overflow: auto; padding: 10px 14px; background: #525659; }
+.pr-body.pr-mode-scroll, .pr-body.pr-mode-double { text-align: center; }
+.pr-page { position: relative; box-shadow: 0 2px 10px rgba(0,0,0,.4); background: #fff; }
+.pr-mode-scroll .pr-page, .pr-mode-single .pr-page { display: block; margin: 0 auto 10px; }
+.pr-mode-double .pr-page { display: inline-block; vertical-align: top; margin: 0 4px 10px; }
 .pr-canvas { display: block; }
-.text-layer { position: absolute; inset: 0; overflow: hidden; opacity: 0.25; line-height: 1; }
+.text-layer { position: absolute; inset: 0; overflow: hidden; line-height: 1; }
 .text-layer :deep(span) { position: absolute; white-space: pre; transform-origin: 0 0; color: transparent; }
-.text-layer :deep(span::selection) { background: rgba(0, 120, 255, 0.3); }
+.text-layer :deep(span::selection) { background: rgba(59, 130, 246, 0.35); }
 .pr-hl { position: absolute; border-radius: 2px; pointer-events: auto; cursor: pointer; }
 .pr-hl:hover { outline: 1px solid #c45656; }
 .pr-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
@@ -598,9 +788,23 @@ onBeforeUnmount(() => {
   background: #fff; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25);
   border: 1px solid var(--el-border-color-light);
 }
+.pr-ann-card {
+  position: absolute; z-index: 60; width: 260px; padding: 10px;
+  background: #fff; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.3);
+  border: 1px solid var(--el-border-color-light);
+}
+.ann-card-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.ann-colors { display: flex; gap: 6px; margin-bottom: 8px; }
+.ann-color { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
+.ann-color.active { border-color: #3e7fa3; }
+.ann-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
 .ai-result { font-size: 14px; line-height: 1.9; white-space: pre-wrap; color: var(--el-text-color-primary); }
+.ai-footer { text-align: right; }
+.ann-export { margin-bottom: 10px; }
 .ann-item { padding: 10px; border: 1px solid var(--el-border-color-extra-light); border-radius: 8px; margin-bottom: 8px; }
 .ann-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.ann-text { font-size: 13px; color: var(--el-text-color-regular); margin-bottom: 6px; }
+.ann-dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.ann-text { font-size: 13px; color: var(--el-text-color-regular); margin-bottom: 4px; }
+.ann-note { font-size: 12px; color: var(--el-text-color-secondary); }
 .form-tip { color: var(--el-text-color-secondary); font-size: 12px; }
 </style>
