@@ -11,7 +11,7 @@
       <el-menu :default-active="$route.path" router class="menu">
         <el-menu-item index="/library"><el-icon><Folder /></el-icon>资料库</el-menu-item>
         <el-menu-item index="/chat"><el-icon><ChatDotRound /></el-icon>AI 问答</el-menu-item>
-        <el-menu-item index="/review"><el-icon><Clock /></el-icon>卡片复习</el-menu-item>
+        <el-menu-item index="/knowledge"><el-icon><Share /></el-icon>知识树</el-menu-item>
         <el-menu-item index="/quiz"><el-icon><EditPen /></el-icon>刷题自测</el-menu-item>
         <el-menu-item index="/stats"><el-icon><DataAnalysis /></el-icon>学习统计</el-menu-item>
         <el-menu-item index="/settings"><el-icon><Setting /></el-icon>设置</el-menu-item>
@@ -30,11 +30,50 @@
         <router-view />
       </el-main>
     </el-container>
+
+    <!-- 首次使用引导：未配置 API Key 时提示 -->
+    <el-dialog v-model="showKeyGuide" title="欢迎使用保研复习助手 👋" width="520px" :close-on-click-modal="false" append-to-body>
+      <div class="guide-body">
+        <p>本应用的 <b>AI 问答与分析</b> 基于 <b>DeepSeek 云端</b> 大模型；<b>文本解析 / 切块 / 检索等分析全部在本地完成</b>，仅将「提问 + 检索片段」发送到云端。</p>
+        <p>使用前需要配置一个 <b>DeepSeek API Key</b>：</p>
+        <ol class="guide-steps">
+          <li>打开 <a href="https://platform.deepseek.com" target="_blank">platform.deepseek.com</a> 注册并创建 API Key；</li>
+          <li>点击下方「去设置」，把 Key 粘贴到 <b>设置 → DeepSeek API Key</b>；</li>
+          <li>保存后在 <b>设置</b> 页点击「重新检测」确认连接成功。</li>
+        </ol>
+        <p class="guide-tip">💡 模型档位：<b>flash</b>（快速，日常问答）/ <b>pro</b>（深度推理，难题分析），可在设置页或问答页随时切换。</p>
+      </div>
+      <template #footer>
+        <el-button @click="showKeyGuide = false">稍后再说</el-button>
+        <el-button type="primary" @click="goSettings">去设置</el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 
 <script setup>
-import { Folder, ChatDotRound, Clock, EditPen, DataAnalysis, Setting } from '@element-plus/icons-vue'
+import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { Folder, ChatDotRound, Share, EditPen, DataAnalysis, Setting } from '@element-plus/icons-vue'
+import { getSettings } from './api'
+
+const router = useRouter()
+const showKeyGuide = ref(false)
+
+const goSettings = () => {
+  showKeyGuide.value = false
+  router.push('/settings')
+}
+
+onMounted(async () => {
+  // 首次使用引导：未配置 API Key 时弹窗提示
+  try {
+    const s = await getSettings()
+    if (!s.deepseek_configured) {
+      showKeyGuide.value = true
+    }
+  } catch { /* 后端未启动等场景静默 */ }
+})
 </script>
 
 <style>
@@ -143,4 +182,10 @@ html, body, #app { height: 100%; }
 }
 
 .main { background: var(--el-bg-color-page); overflow: auto; }
+
+/* —— 首次使用引导弹窗 —— */
+.guide-body { line-height: 1.9; font-size: 14px; color: var(--el-text-color-primary); }
+.guide-body p { margin-bottom: 10px; }
+.guide-steps { padding-left: 20px; margin-bottom: 10px; }
+.guide-tip { color: var(--el-text-color-secondary); font-size: 13px; }
 </style>

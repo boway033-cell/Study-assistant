@@ -1,5 +1,5 @@
-"""ORM 模型：books / chapters / chunks / notes / chat_logs / cards / review_logs / quizzes / attempts / settings
-对应 docs/02-database.md。"""
+"""ORM 模型：books / chapters / chunks / notes / chat_logs / quizzes / attempts / knowledge_nodes / settings
+对应 docs/02-database.md。卡片学习已取消，无 cards / review_logs 表。"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -33,7 +33,6 @@ class Book(Base):
 
     chapters: Mapped[list["Chapter"]] = relationship(back_populates="book", cascade="all, delete-orphan")
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="book", cascade="all, delete-orphan")
-    cards: Mapped[list["Card"]] = relationship(back_populates="book", cascade="all, delete-orphan")
     quizzes: Mapped[list["Quiz"]] = relationship(back_populates="book", cascade="all, delete-orphan")
 
 
@@ -52,7 +51,6 @@ class Chapter(Base):
     book: Mapped["Book"] = relationship(back_populates="chapters")
     children: Mapped[list["Chapter"]] = relationship()
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="chapter")
-    cards: Mapped[list["Card"]] = relationship(back_populates="chapter")
     quizzes: Mapped[list["Quiz"]] = relationship(back_populates="chapter")
 
 
@@ -92,51 +90,9 @@ class ChatLog(Base):
     question: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     sources_json: Mapped[str | None] = mapped_column(Text)
-    mode: Mapped[str] = mapped_column(String(10), nullable=False)  # local/cloud
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)  # deepseek
     model_name: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
-
-
-class Card(Base):
-    __tablename__ = "cards"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"), nullable=False, index=True)
-    chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id"))
-    front: Mapped[str] = mapped_column(Text, nullable=False)
-    back: Mapped[str] = mapped_column(Text, nullable=False)
-    tags: Mapped[str | None] = mapped_column(String(255))
-    source: Mapped[str] = mapped_column(String(20), default="manual")  # manual/auto
-    # FSRS 状态
-    state: Mapped[str] = mapped_column(String(20), nullable=False, default="New")  # New/Learning/Review/Relearning
-    stability: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    difficulty: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    due: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    last_review: Mapped[datetime | None] = mapped_column(DateTime)
-    elapsed_days: Mapped[int] = mapped_column(Integer, default=0)
-    scheduled_days: Mapped[int] = mapped_column(Integer, default=0)
-    reps: Mapped[int] = mapped_column(Integer, default=0)
-    lapses: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
-
-    book: Mapped["Book"] = relationship(back_populates="cards")
-    chapter: Mapped["Chapter | None"] = relationship(back_populates="cards")
-    review_logs: Mapped[list["ReviewLog"]] = relationship(back_populates="card", cascade="all, delete-orphan")
-
-
-class ReviewLog(Base):
-    __tablename__ = "review_logs"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"), nullable=False, index=True)
-    rating: Mapped[str] = mapped_column(String(10), nullable=False)  # again/hard/good/easy
-    state_before: Mapped[str | None] = mapped_column(String(20))
-    state_after: Mapped[str | None] = mapped_column(String(20))
-    elapsed_days: Mapped[int | None] = mapped_column(Integer)
-    scheduled_days: Mapped[int | None] = mapped_column(Integer)
-    reviewed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
-
-    card: Mapped["Card"] = relationship(back_populates="review_logs")
 
 
 class Quiz(Base):
@@ -170,6 +126,24 @@ class Attempt(Base):
     answered_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     quiz: Mapped["Quiz"] = relationship(back_populates="attempts")
+
+
+class KnowledgeNode(Base):
+    """知识树节点：用户自主搭建的知识结构，可关联书籍章节以便右侧展示原文。"""
+
+    __tablename__ = "knowledge_nodes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_nodes.id"))
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    book_id: Mapped[int | None] = mapped_column(ForeignKey("books.id"))
+    chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id"))
+    note: Mapped[str | None] = mapped_column(Text)  # 用户笔记/总结
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+    parent: Mapped["KnowledgeNode | None"] = relationship(remote_side="KnowledgeNode.id", back_populates="children")
+    children: Mapped[list["KnowledgeNode"]] = relationship(back_populates="parent")
 
 
 class Setting(Base):

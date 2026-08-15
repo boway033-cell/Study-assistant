@@ -14,7 +14,6 @@ class BookListItem(BaseModel):
     status: str
     total_pages: int | None = None
     chapter_count: int = 0
-    card_count: int = 0
     quiz_count: int = 0
     created_at: datetime
 
@@ -109,7 +108,7 @@ class NoteResp(BaseModel):
 class ChatReq(BaseModel):
     book_id: int | None = None  # None = 全部书籍
     question: str = Field(min_length=1)
-    mode: str = "auto"  # auto/local/cloud
+    model: str | None = None  # flash / pro；None = 用设置页默认
 
 
 class ChatSource(BaseModel):
@@ -122,7 +121,7 @@ class ChatHistoryItem(BaseModel):
     id: int
     question: str
     answer: str
-    mode: str
+    model: str = ""
     sources: list[ChatSource] = []
     created_at: datetime
 
@@ -130,70 +129,6 @@ class ChatHistoryItem(BaseModel):
 class ChatHistoryResp(BaseModel):
     total: int
     items: list[ChatHistoryItem]
-
-
-# ---------- 卡片 ----------
-class CardGenReq(BaseModel):
-    chapter_ids: list[int] = []
-    max_per_chapter: int = Field(default=20, ge=1, le=100)
-
-
-class ReviewQueueItem(BaseModel):
-    id: int
-    front: str
-    back: str
-    state: str
-    due: datetime
-    book_title: str
-    chapter_title: str | None = None
-
-
-class ReviewQueueResp(BaseModel):
-    due_count: int
-    new_count: int
-    items: list[ReviewQueueItem]
-
-
-class ReviewReq(BaseModel):
-    rating: str  # again/hard/good/easy
-
-
-class ReviewResp(BaseModel):
-    card_id: int
-    state: str
-    stability: float
-    difficulty: float
-    due: datetime
-    scheduled_days: int
-
-
-class CardCreateReq(BaseModel):
-    book_id: int
-    chapter_id: int | None = None
-    front: str
-    back: str
-    tags: str | None = None
-
-
-class CardUpdateReq(BaseModel):
-    front: str | None = None
-    back: str | None = None
-    tags: str | None = None
-
-
-class CardResp(BaseModel):
-    id: int
-    book_id: int
-    chapter_id: int | None = None
-    front: str
-    back: str
-    tags: str | None = None
-    state: str
-    due: datetime
-    reps: int
-    lapses: int
-    book_title: str = ""
-    chapter_title: str | None = None
 
 
 # ---------- 题目 ----------
@@ -249,10 +184,8 @@ class SelfGradeReq(BaseModel):
 # ---------- 统计 ----------
 class OverviewResp(BaseModel):
     book_count: int
-    card_count: int
-    due_today: int
-    reviews_done: int
     quiz_count: int
+    attempts_total: int
     avg_mastery: float
     streak_days: int
 
@@ -261,8 +194,7 @@ class ChapterMastery(BaseModel):
     chapter_id: int
     title: str
     mastery: float
-    cards: int
-    due: int
+    quizzes: int
     wrong_rate: float
 
 
@@ -271,15 +203,13 @@ class MasteryResp(BaseModel):
     chapters: list[ChapterMastery]
 
 
-class DailyReview(BaseModel):
+class DailyActivity(BaseModel):
     date: str
-    reviews: int
-    new_cards: int
-    due: int
+    attempts: int
 
 
-class ReviewHistoryResp(BaseModel):
-    daily: list[DailyReview]
+class ActivityResp(BaseModel):
+    daily: list[DailyActivity]
 
 
 class WeaknessItem(BaseModel):
@@ -295,25 +225,65 @@ class WeaknessResp(BaseModel):
     items: list[WeaknessItem]
 
 
+# ---------- 知识树 ----------
+class KnowledgeNodeResp(BaseModel):
+    id: int
+    parent_id: int | None = None
+    title: str
+    book_id: int | None = None
+    chapter_id: int | None = None
+    note: str | None = None
+    order_index: int = 0
+    children: list["KnowledgeNodeResp"] = []
+
+
+class KnowledgeTreeResp(BaseModel):
+    total: int
+    items: list[KnowledgeNodeResp]
+
+
+class KnowledgeNodeCreateReq(BaseModel):
+    parent_id: int | None = None
+    title: str = Field(min_length=1, max_length=255)
+
+
+class KnowledgeNodeUpdateReq(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    note: str | None = None
+    book_id: int | None = None
+    chapter_id: int | None = None
+
+
+class KnowledgeMoveReq(BaseModel):
+    parent_id: int | None = None
+
+
+class KnowledgeSourceResp(BaseModel):
+    node_id: int
+    node_title: str
+    book_id: int | None = None
+    book_title: str | None = None
+    chapter_id: int | None = None
+    chapter_title: str | None = None
+    page_start: int | None = None
+    page_end: int | None = None
+    text: str = ""
+
+
 # ---------- 设置 ----------
 class SettingsResp(BaseModel):
-    llm_mode: str
     deepseek_api_key: str  # 脱敏
-    ollama_model: str
-    daily_new_cards: str
+    deepseek_model: str    # flash / pro
     rag_top_k: str
     vector_search: bool
-    ollama_connected: bool
     deepseek_configured: bool
 
 
 class SettingsUpdateReq(BaseModel):
-    llm_mode: str | None = None
     deepseek_api_key: str | None = None
-    daily_new_cards: int | None = None
+    deepseek_model: str | None = None  # flash / pro
     rag_top_k: int | None = None
     vector_search: bool | None = None
-    ollama_model: str | None = None
 
 
 class ProbeItem(BaseModel):
@@ -322,5 +292,4 @@ class ProbeItem(BaseModel):
 
 
 class ProbeResp(BaseModel):
-    ollama: ProbeItem
     deepseek: ProbeItem

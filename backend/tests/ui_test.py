@@ -1,5 +1,5 @@
 """UI 端到端测试（遵循 webapp-testing skill：recon-then-action）
-覆盖：资料库(搜索) → 卡片复习 → 刷题 → 统计 → 设置
+覆盖：资料库(搜索) → 知识树 → 刷题 → 统计 → 设置 → AI 问答
 """
 import sys
 import time
@@ -46,13 +46,19 @@ with sync_playwright() as p:
           f"count={page.locator('.result-item').count()}")
     page.screenshot(path="backend/tests/ui_2_search.png", full_page=True)
 
-    print("=== 3. 卡片复习页 ===")
-    page.click("text=卡片复习")
+    print("=== 3. 知识树页 ===")
+    page.click("text=知识树")
     page.wait_for_timeout(1500)
-    page.wait_for_selector(".el-table__row", timeout=10000)
-    check("卡片列表", page.locator(".el-table__row").count() >= 2,
-          f"count={page.locator('.el-table__row').count()}")
-    page.screenshot(path="backend/tests/ui_3_review.png", full_page=True)
+    check("知识树入口", page.locator("text=新建知识树").count() >= 1)
+    # 创建一个根节点验证 CRUD
+    page.click("text=新建知识树")
+    page.wait_for_timeout(800)
+    # ElMessageBox prompt 输入框
+    page.locator(".el-message-box__input input").fill("测试知识树")
+    page.click(".el-message-box__btns button:has-text('创建')")
+    page.wait_for_timeout(1000)
+    check("知识树节点创建", page.locator("text=测试知识树").count() >= 1)
+    page.screenshot(path="backend/tests/ui_3_knowledge.png", full_page=True)
 
     print("=== 4. 刷题自测页 ===")
     page.click("text=刷题自测")
@@ -81,12 +87,13 @@ with sync_playwright() as p:
     print("=== 6. 设置页 ===")
     page.click("text=设置")
     page.wait_for_timeout(1500)
-    check("设置表单", page.locator(".el-form-item").count() >= 5,
+    check("设置表单", page.locator(".el-form-item").count() >= 3,
           f"count={page.locator('.el-form-item').count()}")
+    check("模型档位", page.locator("text=模型档位").count() == 1)
     check("连接状态面板", page.locator("text=连接状态").count() == 1)
     page.screenshot(path="backend/tests/ui_6_settings.png", full_page=True)
 
-    print("=== 7. AI 问答页（错误处理）===")
+    print("=== 7. AI 问答页（DeepSeek 云端）===")
     page.click("text=AI 问答")
     page.wait_for_timeout(1500)
     page.fill("textarea", "什么是拉格朗日中值定理")
@@ -94,10 +101,27 @@ with sync_playwright() as p:
         if "发送" in b.inner_text() or "生成中" in b.inner_text():
             b.click()
             break
-    page.wait_for_timeout(3000)
+    # 等待回答流式完成（或出现错误提示）
+    page.wait_for_timeout(15000)
     body = page.inner_text("body")
-    check("错误提示显示", "⚠️" in body)
+    # 正常情况：AI 给出回答（不出现 ⚠️ 错误）；网络失败时也应优雅提示
+    check("问答有响应", ("⚠️" in body) or (len(page.locator(".msg.assistant").all()) > 0),
+          "assistant msg=" + str(len(page.locator(".msg.assistant").all())))
     page.screenshot(path="backend/tests/ui_7_chat.png", full_page=True)
+
+    # 清理：删除测试创建的知识树节点（通过 API）
+    import urllib.request
+    import json as _json
+    try:
+        with urllib.request.urlopen(BASE + "/api/knowledge/tree", timeout=5) as r:
+            tree_data = _json.loads(r.read())
+        for root_node in tree_data.get("items", []):
+            if root_node.get("title") == "测试知识树":
+                req = urllib.request.Request(BASE + f"/api/knowledge/nodes/{root_node['id']}", method="DELETE")
+                urllib.request.urlopen(req, timeout=5)
+                print("  🧹 已清理测试知识树节点")
+    except Exception as e:
+        print("  ⚠️ 清理失败:", e)
 
     browser.close()
 

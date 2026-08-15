@@ -1,7 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import LibraryView from '../views/LibraryView.vue'
 import ChatView from '../views/ChatView.vue'
-import ReviewView from '../views/ReviewView.vue'
+import KnowledgeView from '../views/KnowledgeView.vue'
 import QuizView from '../views/QuizView.vue'
 import StatsView from '../views/StatsView.vue'
 import SettingsView from '../views/SettingsView.vue'
@@ -12,7 +12,7 @@ const routes = [
   { path: '/', redirect: '/library' },
   { path: '/library', name: 'library', component: LibraryView, meta: { title: '资料库' } },
   { path: '/chat', name: 'chat', component: ChatView, meta: { title: 'AI 问答' } },
-  { path: '/review', name: 'review', component: ReviewView, meta: { title: '卡片复习' } },
+  { path: '/knowledge', name: 'knowledge', component: KnowledgeView, meta: { title: '知识树' } },
   { path: '/quiz', name: 'quiz', component: QuizView, meta: { title: '刷题自测' } },
   { path: '/stats', name: 'stats', component: StatsView, meta: { title: '学习统计' } },
   { path: '/settings', name: 'settings', component: SettingsView, meta: { title: '设置' } },

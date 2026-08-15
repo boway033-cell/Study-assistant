@@ -34,7 +34,6 @@
               </template>
             </el-table-column>
             <el-table-column prop="total_pages" label="页数" width="70" />
-            <el-table-column prop="card_count" label="卡片" width="70" />
             <el-table-column prop="quiz_count" label="题目" width="70" />
             <el-table-column label="操作" width="150">
               <template #default="{ row }">

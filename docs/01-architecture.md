@@ -1,6 +1,6 @@
 # 01 · 技术架构设计
 
-- 版本：v0.2（已按「低内存占用 / Python 3.14 / 不触碰系统原有内容」修正）
+- 版本：v0.4（DeepSeek 云端唯一 AI / 知识树 / 卡片已移除）
 - 配套文档：[00-PRD.md](00-PRD.md) / [02-database.md](02-database.md) / [03-api.md](03-api.md)
 
 ---
@@ -10,34 +10,32 @@
 ```
 ┌────────────────────────────────────────────────────────────┐
 │  浏览器 (http://127.0.0.1:8000)                             │
-│  Vue3 + Vite + Element Plus + pdf.js + ECharts              │
+│  Vue3 + Vite + Element Plus + ECharts                      │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────────────┐  │
-│  │ 资料库页 │ │ AI问答页 │ │ 复习页   │ │ 刷题/统计页   │  │
+│  │ 资料库页 │ │ AI问答页 │ │ 知识树页 │ │ 刷题/统计/设置 │  │
 │  └──────────┘ └──────────┘ └──────────┘ └───────────────┘  │
 └────────────────────────────┬───────────────────────────────┘
                              │ HTTP REST + SSE（流式问答）
 ┌────────────────────────────▼───────────────────────────────┐
-│  FastAPI 应用 (uvicorn, Python 3.11+)                       │
+│  FastAPI 应用 (uvicorn, Python 3.14)                       │
 │                                                             │
-│  api/           路由层（books / chat / cards / quizzes /    │
-│                 stats / settings / interview）              │
+│  api/           路由层（books / chat / knowledge / quizzes /│
+│                 stats / settings）                          │
 │  services/      业务层（可替换，面向接口）                    │
 │    parser/      文档解析：PDF / DOCX / PPTX / OCR           │
-│    rag/         切片 + 向量化 + 检索                         │
-│    llm/         LLM 路由：Ollama ⇄ DeepSeek                 │
-│    srs/         FSRS 复习调度                                │
-│    quiz_gen/    题目生成与判分                               │
-│    stats/       掌握度计算                                   │
+│    analyzer/    版面分析 + 文本清洗 + 关键信息提取           │
+│    rag/         切片 + FTS5 检索 + 向量检索(可选)            │
+│    llm/         DeepSeekProvider（flash/pro 档位）           │
 │  worker/        后台任务（解析 / 向量化 / 批量生成）          │
 │  models/        SQLAlchemy ORM 模型                         │
-│  core/          配置、日志、依赖注入                         │
+│  core/          配置、数据库、依赖注入                       │
 └──────────────┬──────────────────────────────┬──────────────┘
                │                              │
       ┌────────▼────────┐            ┌────────▼────────┐
-      │ SQLite (aiosqlite)│           │ 本地文件/向量    │
-      │ + FTS5 全文索引   │           │ data/uploads    │
-      │                 │            │ data/chroma     │
-      └─────────────────┘            │ data/models     │
+      │ SQLite          │            │ 本地文件        │
+      │ + FTS5 全文索引  │            │ data/uploads    │
+      │                 │            │ data/chroma(可选)│
+      └─────────────────┘            │ data/models(可选)│
                                      └─────────────────┘
 ```
 
@@ -46,149 +44,136 @@
 | 层 | 选型 | 版本建议 | 理由 |
 |---|---|---|---|
 | 后端框架 | FastAPI + Uvicorn | fastapi≥0.110 | 异步、SSE 流式、自动 OpenAPI 文档 |
-| ORM | SQLAlchemy 2.0 + aiosqlite | — | 类型安全、异步兼容 |
+| ORM | SQLAlchemy 2.0 | — | 类型安全 |
 | 数据库 | SQLite（WAL 模式） | 内置 | 单机零配置，够用 |
-| 全文检索 | SQLite FTS5 + jieba | — | 中文需 jieba 分词后建索引 |
+| 全文检索 | SQLite FTS5 + jieba | — | 中文需 jieba 分词后建索引（零内存） |
 | PDF 解析 | PyMuPDF (fitz) | ≥1.24 | 快、可提取目录/文字/页码 |
-| 表格/复杂版式 | pdfplumber | — | 辅助解析表格 |
-| Word | python-docx | — | 段落与标题层级 |
-| PPT | python-pptx | — | 文本与备注提取 |
-| OCR（可选） | PaddleOCR | — | 扫描版 PDF；**体积大（paddle 依赖 1GB+）、内存占用高，默认不安装**，仅按需启用（P2） |
-| 向量库 | ChromaDB | ≥0.4 | 本地、纯 Python、持久化简单 |
-| 嵌入模型 | **fastembed** + bge-small-zh-v1.5 | fastembed≥0.4 | **不用 sentence-transformers（其依赖 torch，常驻内存 1.5GB+）**；fastembed 基于 ONNX Runtime，内存 <500MB，CPU 即可 |
-| 本地 LLM | Ollama + **qwen2.5:3b-instruct**（量化版约 2GB） | — | 免费离线；**不用 7b**（需 4-6GB 内存，超出本机空闲预算）；qwen2.5:1.5b 可作为更低配选项 |
-| 云端 LLM | DeepSeek API（deepseek-chat） | openai SDK | 质量高、成本低 |
-| 记忆算法 | py-fsrs | — | Anki 同款 FSRS-6 |
-| 前端 | Vue3 + Vite + TS + Element Plus | — | 组件全、开发快 |
-| PDF 阅读器 | pdf.js | — | 浏览器内渲染、支持标注扩展 |
-| 图表 | ECharts | — | 热力图、曲线 |
+| Word / PPT | python-docx / python-pptx | — | 段落与标题层级 |
+| OCR（可选） | PaddleOCR / tesseract | — | 扫描版 PDF；体积大，默认不安装，按需启用（P2） |
+| 向量库（可选） | ChromaDB | ≥0.4 | 本地、纯 Python；`vector_search` 默认关 |
+| 嵌入模型（可选） | fastembed + bge-small-zh-v1.5 | fastembed≥0.4 | ONNX Runtime，内存 <500MB，全离线 |
+| **云端 LLM** | **DeepSeek API（deepseek-v4-flash / deepseek-v4-pro）** | httpx | **唯一 AI 后端（本地 Ollama 已取消）**；质量高、成本低 |
+| 前端 | Vue3 + Vite + Element Plus | — | 组件全、开发快 |
+| 图表 | ECharts | — | 趋势图、掌握度柱状图 |
 | 部署 | start.bat 启动 uvicorn 并托管前端静态产物 | — | 免装 Node 即可用 |
 
-## 3. 目录结构（规划）
+## 3. 目录结构
 
 ```
 study-assistant/
 ├── start.bat                 # 一键启动（Windows）
 ├── requirements.txt
+├── .env                      # DEEPSEEK_API_KEY 等（不纳入 git）
 ├── backend/
 │   ├── app/
 │   │   ├── main.py           # FastAPI 入口，挂载静态资源
-│   │   ├── core/             # config / logging / deps
+│   │   ├── core/             # config（含 .env 加载）/ database
 │   │   ├── models/           # SQLAlchemy 模型（见 02-database）
-│   │   ├── api/              # 路由（每模块一个文件）
+│   │   ├── api/              # books/chat/knowledge/quizzes/stats/settings
 │   │   ├── services/
-│   │   │   ├── parser/       # pdf_parser.py / docx_parser.py / pptx_parser.py / ocr.py
-│   │   │   ├── rag/          # chunker.py / embedder.py / retriever.py
-│   │   │   ├── llm/          # base.py / ollama.py / deepseek.py / router.py
-│   │   │   ├── srs/          # fsrs_service.py
-│   │   │   ├── quiz_gen/     # generator.py / grader.py
-│   │   │   └── stats/        # mastery.py
-│   │   └── worker/           # background_tasks.py（asyncio 任务 + 进度状态）
+│   │   │   ├── parser/       # PDF/DOCX/PPTX + ocr.py
+│   │   │   ├── analyzer/     # layout / textclean / keyinfo
+│   │   │   ├── rag/          # chunker / semantic_chunker / fts / retriever / vector / toc_*
+│   │   │   └── llm/          # DeepSeekProvider + load_llm_config
+│   │   └── worker/           # tasks.py（后台线程+事件循环）/ import_task.py
 │   └── data/                 # study.db / uploads/ / chroma/ / models/
 ├── frontend/
-│   ├── src/
-│   │   ├── views/            # LibraryView / ChatView / ReviewView / QuizView / StatsView / SettingsView
-│   │   ├── components/       # PdfViewer.vue / ChapterTree.vue / CardDeck.vue / ...
-│   │   ├── api/              # axios 封装
-│   │   ├── stores/           # Pinia
-│   │   └── router/
-│   └── dist/                 # 构建产物，由 FastAPI 托管
+│   └── src/
+│       ├── views/            # Library / Chat / Knowledge / Quiz / Stats / Settings
+│       ├── components/       # OriginalViewer.vue
+│       ├── api/              # axios 封装
+│       └── router/           # hash 路由
 └── docs/                     # 本文档系列
 ```
 
 ## 4. 关键流程设计
 
-### 4.1 文档导入与解析流程（增强版：版面分析 + 清洗 + 关键信息）
+### 4.1 文档导入与解析流程（100% 本地）
 
 ```
 上传文件 → 存 data/uploads → 创建 Book(status=parsing)
-  → 后台任务：
-      1. 类型分发：pdf/docx/pptx 解析器；扫描版（页均文本 <30 字符）自动触发 OCR
+  → 后台任务（不联网）：
+      1. 类型分发：pdf/docx/pptx 解析器；扫描版（页均文本 <30 字符）自动触发 OCR 提示
       2. 版面分析（PDF）：按字体/字号/位置识别 标题/正文/页眉页脚/表格/公式
       3. 文本清洗：去页眉页脚重复、行去重、重复字符压缩、断行合并
       4. 关键信息提取：定义句/定理命题/关键词 → book_analysis 表
-      5. 章节树（目录书签或启发式）→ chapters 表
-      6. 按章节切块（chunk）→ 写 chunks（清洗后文本）
+      5. 章节树（目录书签 → 启发式 → LLM 兜底）→ chapters 表
+      6. 按章节语义切块 → chunks（保留页码映射）
       7. FTS5 索引（jieba 分词，BM25 风格，零内存）← P0 检索主力
-      8. 【P1 可选】嵌入向量化（fastembed + bge-small-zh）→ ChromaDB（默认关闭）
-  → Book.status = ready（失败则 failed + 错误信息）
-进度通过内存任务表 + 轮询接口暴露（/api/tasks/{id}）
+      8. 【P1 可选】嵌入向量化（fastembed）→ ChromaDB（默认关闭）
+  → Book.status = ready
 ```
 
-### 4.2 AI 问答流程（RAG + SSE + 宽定位）
+### 4.2 AI 问答流程（RAG + SSE + 宽定位 + 右侧原文）
 
 ```
-POST /api/chat {book_id, question, mode}
+POST /api/chat {book_id, question, model: flash|pro}
   1. 选择书籍范围 → 取书 ID 过滤
   2. 宽定位检索（retriever.retrieve）：
      a. FTS5 关键词检索 top-k
-     b. 命中不足(<3) → LIKE 子串匹配兜底（任何含词的 chunk 都命中）
-     c. 章节级上下文：命中 chunk 拉取同章节相邻 chunk，保证完整输出
-     d. 全文兜底：仍无命中 → 返回目录结构（is_outline），引导用户而非"无法fetch"
-  3. 组装 prompt（优先 context 完整内容，截断保护 12000 字符）
-  4. llm router 按 mode（DB 配置）调用 Ollama / DeepSeek，流式返回
-  5. 前端 SSE 逐字渲染；完成后整条记录存 chat_logs
-答案引用：在流式结束后返回 sources 列表，前端渲染为可点击页码
+     b. 命中不足 → LIKE 子串匹配兜底
+     c. 章节级上下文：命中 chunk 拉取同章节相邻 chunk
+     d. 全文兜底：仍无命中 → 返回目录结构
+  3. 组装 prompt（context 完整内容，截断保护 12000 字符）
+  4. 从 DB 读配置（key/模型档位）→ DeepSeekProvider 流式返回
+  5. 前端 SSE 逐字渲染；完成后存 chat_logs
+  6. 前端右侧原文面板自动展示首个出处的 chunk 原文（文本/PDF iframe）
 ```
 
-### 4.3 卡片复习流程（FSRS）
+### 4.3 知识树流程
 
 ```
-生成卡片（自动/手动）→ state=New
-  复习时：
-    GET /api/cards/review-queue → 到期卡片（due <= now，按 due 排序）
-    展示正面 → 用户自答 → 翻面 → 评级（again/hard/good/easy）
-    POST /api/cards/{id}/review {rating}
-    → py-fsrs 更新 stability/difficulty/due → 写 review_logs
-  新卡每日限量（默认 20）防爆库；到期卡不限量
+GET  /api/knowledge/tree            # 全量嵌套树
+POST /api/knowledge/nodes           # 建节点（parent_id + title）
+PATCH /api/knowledge/nodes/{id}     # 改标题/笔记/关联书籍章节
+POST /api/knowledge/nodes/{id}/move # 移动（防环校验）
+DELETE /api/knowledge/nodes/{id}    # 删除子树
+GET  /api/knowledge/nodes/{id}/source  # 关联章节原文（合并该章 chunks）
 ```
 
 ### 4.4 题目生成流程
 
 ```
-POST /api/books/{id}/generate-quizzes {chapter_ids, types, count}
-  → 取章节切片 → LLM 生成 JSON 数组题目
-  → 前端预览（可编辑）→ 确认后批量入库 quizzes
+POST /api/books/{id}/generate-quizzes
+  → 取章节切片 → DeepSeek 生成 JSON 题目 → 入库
 答题：POST /api/quizzes/{id}/attempt
   → 选择/填空：比对答案自动判分
   → 简答：显示参考答案，用户自评对错
 ```
 
-## 5. LLM 双模式抽象
+## 5. LLM 抽象（仅 DeepSeek）
 
 ```python
-# services/llm/base.py
-class LLMProvider(Protocol):
-    name: str
-    async def stream_chat(self, messages: list[dict]) -> AsyncIterator[str]: ...
+# services/llm/__init__.py
+DEEPSEEK_MODELS = {"flash": "deepseek-v4-flash", "pro": "deepseek-v4-pro"}
 
-# services/llm/ollama.py
-class OllamaProvider:  # 调 http://localhost:11434/api/chat
-    ...
-
-# services/llm/deepseek.py
-class DeepSeekProvider:  # openai SDK，base_url=https://api.deepseek.com
-    ...
-
-# services/llm/router.py
 def load_llm_config(db) -> dict:
-    # 配置优先级：数据库 settings 表（设置页写入）> 环境默认
-    # 关键：LLM 层必须读 DB，否则设置页切换模式/填 Key 不生效（曾为真实 bug）
-    ...
+    # 配置优先级：数据库 settings 表（设置页写入）> .env / 内存默认
+    return {
+        "deepseek_api_key": ...,
+        "deepseek_base_url": ...,
+        "deepseek_model": ...,  # flash / pro
+    }
 
-def get_provider(mode: str, cfg: dict) -> LLMProvider:
-    # mode 来自 settings 表（cfg），或请求参数覆盖
-    return OllamaProvider(base_url=cfg["ollama_base_url"], model=cfg["ollama_model"]) \
-        if mode == "local" else DeepSeekProvider(api_key=cfg["deepseek_api_key"])
+class DeepSeekProvider(LLMProvider):
+    name = "deepseek"
+    async def stream_chat(self, messages): ...   # SSE 流式
+
+class LLMRouter:
+    @staticmethod
+    def get(mode, cfg) -> LLMProvider:
+        return DeepSeekProvider(api_key=cfg["deepseek_api_key"],
+                                base_url=cfg["deepseek_base_url"],
+                                model=cfg["deepseek_model"])
 ```
 
-> 嵌入模型始终本地（bge-small-zh），向量化只做一次，不重复产生云端费用。
+> 关键点：LLM 层**必须从 DB 读配置**（设置页改模型/填 Key 即时生效）。
+> 文本解析/检索始终本地；只有 chat / 题目生成 / 章节 LLM 兜底会调用云端。
 
 ## 6. 任务与并发
 
-- 后台任务用 `asyncio.create_task` + 内存任务注册表（简单可靠，单人单机足够）
-- 长任务（解析、批量向量化）串行执行（单机 CPU 有限），任务队列 FIFO
-- 向量化在后台批量做，避免阻塞上传响应
+- 后台任务用**独立后台线程 + 独立事件循环**（`worker/tasks.py`）：`run_coroutine_threadsafe` 提交 + `asyncio.wrap_future` 等待（sync 端点线程池陷阱的修复）
+- 长任务（解析、批量生成）串行执行（FIFO 队列），避免并发耗尽内存
 
 ## 7. 部署与启动
 
@@ -207,9 +192,10 @@ python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 
 | 风险 | 对策 |
 |---|---|
-| 扫描版 PDF 无文本层 | 检测文本量阈值，提示启用 PaddleOCR（P1） |
-| 目录缺失/乱 | 按字体大小/页序启发式分级，可手动编辑章节 |
-| 向量化耗时 | 后台任务 + 进度条；模型量化版加速 |
-| 本地 LLM 质量不足 | 双模式切换，关键复习用云端 |
+| 扫描版 PDF 无文本层 | 检测文本量阈值，提示启用 OCR（P1） |
+| 云端 API 不可用/Key 失效 | 首次引导配置 + 设置页探测；错误提示清晰 |
+| pro 模型响应慢 | flash/pro 可切换，日常问答用 flash |
+| 向量化耗时 | 后台任务 + 进度条；默认关闭省内存 |
 | FTS5 中文分词 | jieba 分词后建索引，搜索时同样分词 |
 | 大 PDF 内存占用 | 流式读取、按页处理，控制 chunk 大小 |
+| 知识树误删 | 删除需确认，子树级联删除有提示 |

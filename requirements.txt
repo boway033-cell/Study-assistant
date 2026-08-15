@@ -6,6 +6,7 @@ uvicorn[standard]>=0.32
 sqlalchemy>=2.0
 aiosqlite>=0.20
 python-multipart>=0.0.9   # 文件上传表单
+python-dotenv>=1.0        # 读取项目根 .env（API Key 等）
 
 # 文档解析
 pymupdf>=1.24        # PDF 解析（快、目录/文字/页码）
@@ -15,17 +16,13 @@ python-pptx>=1.0     # PPT 解析
 # 全文检索（中文分词）
 jieba>=0.42
 
-# HTTP 客户端（LLM 调用）
+# HTTP 客户端（LLM 调用，DeepSeek OpenAI 兼容接口）
 httpx>=0.27
-openai>=1.50         # DeepSeek API（OpenAI 兼容）
-
-# 记忆算法
-fsrs>=4.0            # FSRS 间隔重复（Anki 同款）
+openai>=1.50
 
 # 测试
 pytest>=8.0
 pytest-asyncio>=0.24
-httpx  # 已在上方
 
 # ===== P1 可选（向量检索，默认不装，避免内存占用）=====
 # fastembed>=0.4

@@ -9,14 +9,26 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 PROJECT_ROOT = BACKEND_DIR.parent
 
 
+def _load_dotenv() -> None:
+    """加载项目根目录 .env（可选，未安装 python-dotenv 时静默跳过）。"""
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(PROJECT_ROOT / ".env")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
 
 class Settings:
-    """集中配置。.env 文件为可选，未安装 python-dotenv 时手动导出环境变量。"""
+    """集中配置。.env 文件为可选（项目根目录 .env）。"""
 
     def __init__(self) -> None:
+        _load_dotenv()
+
         self.host: str = _env("HOST", "127.0.0.1")
         self.port: int = int(_env("PORT", "8000"))
 
@@ -26,19 +38,15 @@ class Settings:
         self.db_path: Path = self.data_dir / "study.db"
         self.chroma_dir: Path = self.data_dir / "chroma"
 
-        # LLM
-        self.llm_mode: str = _env("LLM_MODE", "local")  # local / cloud
-        self.ollama_base_url: str = _env("OLLAMA_BASE_URL", "http://localhost:11434")
-        self.ollama_model: str = _env("OLLAMA_MODEL", "qwen2.5:3b-instruct")
+        # LLM：仅云端 DeepSeek（本地 AI 已取消）
         self.deepseek_base_url: str = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
         self.deepseek_api_key: str = _env("DEEPSEEK_API_KEY", "")
+        # 模型档位：flash=deepseek-chat（快）/ pro=deepseek-reasoner（深度思考）
+        self.deepseek_model: str = _env("DEEPSEEK_MODEL", "flash")
 
         # 检索
         self.rag_top_k: int = int(_env("RAG_TOP_K", "5"))
         self.vector_search: bool = _env("VECTOR_SEARCH", "false").lower() == "true"
-
-        # 卡片
-        self.daily_new_cards: int = int(_env("DAILY_NEW_CARDS", "20"))
 
         # 解析
         self.chunk_size: int = int(_env("CHUNK_SIZE", "600"))
@@ -53,3 +61,11 @@ class Settings:
 
 
 settings = Settings()
+
+
+# DeepSeek 模型档位映射（实测 API 返回的模型名）
+# flash → deepseek-v4-flash（快速）；pro → deepseek-v4-pro（深度推理）
+DEEPSEEK_MODELS: dict[str, str] = {
+    "flash": "deepseek-v4-flash",
+    "pro": "deepseek-v4-pro",
+}

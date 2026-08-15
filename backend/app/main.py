@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.app.api import books, cards, chat, quizzes, settings, stats
+from backend.app.api import books, chat, knowledge, quizzes, settings, stats
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import Base, engine
 from backend.app.services.rag import fts
@@ -45,7 +45,7 @@ app.add_middleware(
 
 app.include_router(books.router)
 app.include_router(chat.router)
-app.include_router(cards.router)
+app.include_router(knowledge.router)
 app.include_router(quizzes.router)
 app.include_router(stats.router)
 app.include_router(settings.router)

@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
-from backend.app.models import Book, Card, Chapter, Chunk, Note, Quiz
+from backend.app.models import Book, Chapter, Chunk, Note, Quiz
 from backend.app.schemas import (
     BookDetailResp,
     BookListItem,
@@ -59,10 +59,7 @@ def list_books(
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
     books = db.scalars(q.order_by(Book.created_at.desc()).offset((page - 1) * page_size).limit(page_size)).all()
 
-    # 统计各书的卡片/题目数
-    card_counts = dict(db.execute(
-        select(Card.book_id, func.count()).group_by(Card.book_id)
-    ).all())
+    # 统计各书题目数
     quiz_counts = dict(db.execute(
         select(Quiz.book_id, func.count()).group_by(Quiz.book_id)
     ).all())
@@ -74,7 +71,7 @@ def list_books(
         BookListItem(
             id=b.id, title=b.title, file_type=b.file_type, status=b.status,
             total_pages=b.total_pages, chapter_count=chapter_counts.get(b.id, 0),
-            card_count=card_counts.get(b.id, 0), quiz_count=quiz_counts.get(b.id, 0),
+            quiz_count=quiz_counts.get(b.id, 0),
             created_at=b.created_at,
         )
         for b in books

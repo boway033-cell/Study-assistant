@@ -6,11 +6,10 @@
           <template #header>总览</template>
           <div class="stat-grid">
             <el-statistic title="书籍" :value="overview.book_count" />
-            <el-statistic title="卡片" :value="overview.card_count" />
-            <el-statistic title="今日到期" :value="overview.due_today" />
-            <el-statistic title="累计复习" :value="overview.reviews_done" />
             <el-statistic title="题目" :value="overview.quiz_count" />
+            <el-statistic title="累计作答" :value="overview.attempts_total" />
             <el-statistic title="平均掌握度" :value="overview.avg_mastery" :precision="2" />
+            <el-statistic title="连续学习" :value="overview.streak_days" suffix="天" />
           </div>
         </el-card>
         <el-card shadow="never" style="margin-top: 16px">
@@ -29,13 +28,13 @@
 
       <el-col :span="16">
         <el-card shadow="never">
-          <template #header>近 30 天复习趋势</template>
+          <template #header>近 30 天作答趋势</template>
           <div ref="trendChart" style="height: 300px" />
         </el-card>
         <el-card shadow="never" style="margin-top: 16px">
           <template #header>
             <div class="card-header">
-              <span>章节掌握度</span>
+              <span>章节掌握度（基于作答数据）</span>
               <el-select v-model="masteryBook" placeholder="选择书籍" clearable style="width: 200px" @change="loadMastery">
                 <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
               </el-select>
@@ -52,11 +51,11 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
-import { getOverview, getReviewHistory, getWeakness, getMastery, listBooks } from '../api'
+import { getOverview, getActivity, getWeakness, getMastery, listBooks } from '../api'
 
 const overview = ref({})
 const weakness = ref([])
-const reviewHistory = ref([])
+const activity = ref([])
 const books = ref([])
 const masteryBook = ref(null)
 const masteryData = ref([])
@@ -73,7 +72,7 @@ const loadAll = async () => {
     weakness.value = (await getWeakness()).items
   } catch { /* ignore */ }
   try {
-    reviewHistory.value = (await getReviewHistory(30)).daily
+    activity.value = (await getActivity(30)).daily
     renderTrend()
   } catch { /* ignore */ }
 }
@@ -84,12 +83,12 @@ const renderTrend = () => {
   trendInstance.setOption({
     tooltip: { trigger: 'axis' },
     grid: { left: 40, right: 20, top: 30, bottom: 30 },
-    xAxis: { type: 'category', data: reviewHistory.value.map((d) => d.date.slice(5)) },
+    xAxis: { type: 'category', data: activity.value.map((d) => d.date.slice(5)) },
     yAxis: { type: 'value' },
     series: [
       {
-        name: '复习数', type: 'line', smooth: true, areaStyle: {},
-        data: reviewHistory.value.map((d) => d.reviews),
+        name: '作答数', type: 'line', smooth: true, areaStyle: {},
+        data: activity.value.map((d) => d.attempts),
       },
     ],
   })

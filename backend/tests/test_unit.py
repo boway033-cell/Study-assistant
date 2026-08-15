@@ -1,4 +1,4 @@
-"""后端单元测试：解析、分词、FSRS、FTS 检索、LLM 配置
+"""后端单元测试：解析、分词、FTS 检索、LLM 配置（DeepSeek 云端）
 
 运行：.venv\\Scripts\\python.exe -m pytest backend/tests/test_unit.py -q
 """
@@ -96,42 +96,6 @@ class TestTokenizer:
         assert tokenize_query("!!!") == ""
 
 
-# ---------- FSRS ----------
-class TestFSRS:
-    def _make_card(self):
-        from datetime import datetime
-        from backend.app.models import Card
-
-        return Card(
-            id=1, book_id=1, front="q", back="a", state="New",
-            due=datetime.now(), stability=0, difficulty=0,
-        )
-
-    def test_review_good_increases_stability(self):
-        from backend.app.services.srs.fsrs_service import review_card
-
-        card = self._make_card()
-        s1 = review_card(card, "good")
-        assert s1["state"] in ("Learning", "Review")
-        assert card.stability > 0
-        assert card.reps == 1
-
-    def test_review_again_increases_lapses(self):
-        from backend.app.services.srs.fsrs_service import review_card
-
-        card = self._make_card()
-        review_card(card, "again")
-        assert card.lapses == 1
-        assert card.reps == 1
-
-    def test_invalid_rating(self):
-        from backend.app.services.srs.fsrs_service import review_card
-
-        card = self._make_card()
-        with pytest.raises(ValueError):
-            review_card(card, "unknown")
-
-
 # ---------- FTS 检索 ----------
 class TestFTS:
     def test_tokenize_query_safe_chars(self):
@@ -142,7 +106,7 @@ class TestFTS:
         assert not any(c in expr for c in ("!", ",", "."))
 
 
-# ---------- LLM 配置（云端切换修复） ----------
+# ---------- LLM 配置（DeepSeek 云端，设置页即时生效） ----------
 class TestLLMConfig:
     """使用独立内存 DB，避免污染真实 study.db（settings 主键冲突）。"""
 
@@ -152,6 +116,7 @@ class TestLLMConfig:
         from sqlalchemy.orm import sessionmaker
 
         from backend.app.core.database import Base
+        import backend.app.models  # noqa: F401  确保 ORM 模型注册到 metadata
 
         engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
         Base.metadata.create_all(bind=engine)
@@ -162,50 +127,45 @@ class TestLLMConfig:
         engine.dispose()
 
     def test_load_config_from_db(self):
-        """数据库中的设置应优先于内存默认（云端切换 bug 的核心）。"""
+        """数据库中的设置应优先于内存默认（设置页改 Key/模型即时生效）。"""
         from backend.app.models import Setting
         from backend.app.services.llm import load_llm_config
 
         db = self._db
-        db.add(Setting(key="llm_mode", value="cloud"))
         db.add(Setting(key="deepseek_api_key", value="sk-test-123456"))
+        db.add(Setting(key="deepseek_model", value="pro"))
         db.commit()
         cfg = load_llm_config(db)
-        assert cfg["llm_mode"] == "cloud"
         assert cfg["deepseek_api_key"] == "sk-test-123456"
+        assert cfg["deepseek_model"] == "pro"
 
     def test_load_config_fallback_default(self):
         """未在 DB 中设置的项回退到内存默认。"""
         from backend.app.services.llm import load_llm_config
 
         cfg = load_llm_config(self._db)
-        assert cfg["llm_mode"] in ("local", "cloud")
-        assert cfg["ollama_model"]  # 有默认值
+        assert cfg["deepseek_model"] in ("flash", "pro")  # 有默认档位
+        assert "ollama" not in cfg  # 本地 AI 已取消
 
-    def test_router_uses_db_mode(self):
-        """LLMRouter.get 应使用 DB 中的模式（修复：切换云端后仍走 Ollama）。"""
+    def test_router_returns_deepseek(self):
+        """LLMRouter.get 只返回 DeepSeek 提供器（本地模式已取消）。"""
         from backend.app.models import Setting
         from backend.app.services.llm import LLMRouter, load_llm_config
 
         db = self._db
-        db.add(Setting(key="llm_mode", value="cloud"))
         db.add(Setting(key="deepseek_api_key", value="sk-test-123456"))
         db.commit()
         cfg = load_llm_config(db)
         provider = LLMRouter.get("auto", cfg)
-        assert provider.name == "cloud"
+        assert provider.name == "deepseek"
+        assert provider.model == "deepseek-v4-flash"
 
-    def test_router_mode_override(self):
-        """显式传 mode 应覆盖 DB 配置。"""
-        from backend.app.models import Setting
-        from backend.app.services.llm import LLMRouter, load_llm_config
+    def test_resolve_model_mapping(self):
+        """flash/pro 档位映射到实际 API 模型名。"""
+        from backend.app.services.llm import resolve_model
 
-        db = self._db
-        db.add(Setting(key="llm_mode", value="cloud"))
-        db.commit()
-        cfg = load_llm_config(db)
-        provider = LLMRouter.get("local", cfg)  # 显式 local
-        assert provider.name == "local"
+        assert resolve_model("flash") == "deepseek-v4-flash"
+        assert resolve_model("pro") == "deepseek-v4-pro"
 
 
 if __name__ == "__main__":

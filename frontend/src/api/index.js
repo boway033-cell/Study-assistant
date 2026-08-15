@@ -66,15 +66,6 @@ export const chatStream = async (body, onEvent) => {
 export const chatHistory = (params) => http.get('/chat/history', { params })
 export const deleteChat = (id) => http.delete(`/chat/${id}`)
 
-// ===== 卡片 =====
-export const reviewQueue = () => http.get('/cards/review-queue')
-export const reviewCard = (id, rating) => http.post(`/cards/${id}/review`, { rating })
-export const listCards = (params) => http.get('/cards', { params })
-export const createCard = (data) => http.post('/cards', data)
-export const updateCard = (id, data) => http.patch(`/cards/${id}`, data)
-export const deleteCard = (id) => http.delete(`/cards/${id}`)
-export const generateCards = (bookId) => http.post(`/books/${bookId}/generate-cards`)
-
 // ===== 题目 =====
 export const listQuizzes = (params) => http.get('/quizzes', { params })
 export const attemptQuiz = (id, answer) => http.post(`/quizzes/${id}/attempt`, { user_answer: answer })
@@ -86,8 +77,16 @@ export const generateQuizzes = (bookId) => http.post(`/books/${bookId}/generate-
 // ===== 统计 =====
 export const getOverview = () => http.get('/stats/overview')
 export const getMastery = (bookId) => http.get('/stats/mastery', { params: { book_id: bookId } })
-export const getReviewHistory = (days) => http.get('/stats/review-history', { params: { days } })
+export const getActivity = (days) => http.get('/stats/activity', { params: { days } })
 export const getWeakness = () => http.get('/stats/weakness')
+
+// ===== 知识树 =====
+export const getKnowledgeTree = () => http.get('/knowledge/tree')
+export const createKnowledgeNode = (data) => http.post('/knowledge/nodes', data)
+export const updateKnowledgeNode = (id, data) => http.patch(`/knowledge/nodes/${id}`, data)
+export const deleteKnowledgeNode = (id) => http.delete(`/knowledge/nodes/${id}`)
+export const moveKnowledgeNode = (id, parentId) => http.post(`/knowledge/nodes/${id}/move`, { parent_id: parentId })
+export const getKnowledgeSource = (id) => http.get(`/knowledge/nodes/${id}/source`)
 
 // ===== 设置 =====
 export const getSettings = () => http.get('/settings')
