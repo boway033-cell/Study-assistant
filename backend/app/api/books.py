@@ -90,11 +90,37 @@ def get_book(book_id: int, db: Session = Depends(get_db)):
     chapters = db.scalars(
         select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.order_index)
     ).all()
+    analysis = _get_analysis(db, book_id)
     return BookDetailResp(
         id=book.id, title=book.title, file_type=book.file_type, status=book.status,
         total_pages=book.total_pages, error_msg=book.error_msg,
-        chapters=_build_chapter_tree(chapters),
+        chapters=_build_chapter_tree(chapters), analysis=analysis,
     )
+
+
+def _get_analysis(db: Session, book_id: int):
+    """读取智能分析结果。"""
+    import json
+    from backend.app.models import BookAnalysis
+
+    a = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book_id))
+    if not a:
+        return None
+    def _load(s):
+        try:
+            return json.loads(s) if s else []
+        except json.JSONDecodeError:
+            return []
+    table_pages = _load(a.table_pages)
+    return {
+        "definitions": _load(a.definitions_json),
+        "theorems": _load(a.theorems_json),
+        "keywords": _load(a.keywords_json),
+        "body_size": a.body_size,
+        "header_count": a.header_count,
+        "footer_count": a.footer_count,
+        "table_pages": table_pages,
+    }
 
 
 @router.post("/books/upload", status_code=201)

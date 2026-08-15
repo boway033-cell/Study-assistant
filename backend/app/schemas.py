@@ -42,6 +42,18 @@ class BookDetailResp(BaseModel):
     total_pages: int | None = None
     error_msg: str | None = None
     chapters: list[ChapterNode] = []
+    analysis: "BookAnalysisResp | None" = None
+
+
+class BookAnalysisResp(BaseModel):
+    """智能分析结果。"""
+    definitions: list[dict] = []
+    theorems: list[dict] = []
+    keywords: list[str] = []
+    body_size: float | None = None
+    header_count: int = 0
+    footer_count: int = 0
+    table_pages: list[int] = []
 
 
 class BookRenameReq(BaseModel):

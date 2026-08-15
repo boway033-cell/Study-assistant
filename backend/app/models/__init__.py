@@ -177,3 +177,20 @@ class Setting(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class BookAnalysis(Base):
+    """书籍智能分析结果（关键信息提取 + 版面统计），一对一。"""
+
+    __tablename__ = "book_analysis"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"), nullable=False, unique=True, index=True)
+    definitions_json: Mapped[str | None] = mapped_column(Text)  # [{term, definition}]
+    theorems_json: Mapped[str | None] = mapped_column(Text)     # [{type, number, statement}]
+    keywords_json: Mapped[str | None] = mapped_column(Text)     # [str]
+    body_size: Mapped[float | None] = mapped_column(Float)       # 正文字号
+    header_count: Mapped[int] = mapped_column(Integer, default=0)
+    footer_count: Mapped[int] = mapped_column(Integer, default=0)
+    table_pages: Mapped[str | None] = mapped_column(Text)        # JSON 页码列表
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)

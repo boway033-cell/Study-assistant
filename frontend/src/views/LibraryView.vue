@@ -55,11 +55,11 @@
             v-model="searchQ"
             placeholder="输入关键词，如：拉格朗日 / 特征值 / 定积分"
             clearable
-            @keyup.enter="doSearch"
+            @keyup.enter="doSearch()"
             @clear="results = null"
           >
             <template #append>
-              <el-button @click="doSearch">搜索</el-button>
+              <el-button @click="doSearch()">搜索</el-button>
             </template>
           </el-input>
 
@@ -93,6 +93,34 @@
             empty-text="暂无章节"
           />
           <el-alert v-if="currentBook.status === 'failed'" type="error" :title="'解析失败：' + (currentBook.error_msg || '')" style="margin-top: 12px" />
+
+          <!-- 智能分析结果 -->
+          <template v-if="currentBook.analysis">
+            <el-divider content-position="left">📊 智能分析</el-divider>
+
+            <div v-if="currentBook.analysis.theorems?.length" class="analysis-section">
+              <div class="analysis-title">定理 / 公式</div>
+              <el-tag v-for="(t, i) in currentBook.analysis.theorems" :key="i"
+                size="small" type="warning" class="analysis-tag">{{ t.type }}</el-tag>
+            </div>
+
+            <div v-if="currentBook.analysis.definitions?.length" class="analysis-section">
+              <div class="analysis-title">关键定义</div>
+              <div v-for="(d, i) in currentBook.analysis.definitions.slice(0, 8)" :key="i" class="analysis-item">
+                <b>{{ d.term }}</b>：{{ d.definition }}
+              </div>
+            </div>
+
+            <div v-if="currentBook.analysis.keywords?.length" class="analysis-section">
+              <div class="analysis-title">关键词（{{ currentBook.analysis.keywords.length }}）</div>
+              <span v-for="(k, i) in currentBook.analysis.keywords.slice(0, 20)" :key="i"
+                class="keyword-chip" @click="searchKeyword(k)">{{ k }}</span>
+            </div>
+
+            <div class="analysis-section analysis-meta">
+              正文字号 {{ currentBook.analysis.body_size }} · 表格 {{ currentBook.analysis.table_pages?.length || 0 }} 处
+            </div>
+          </template>
         </el-card>
       </el-col>
     </el-row>
@@ -189,6 +217,12 @@ const doSearch = async () => {
   }
 }
 
+const searchKeyword = (kw) => {
+  // 关键词芯片点击：赋值后立即搜索（不用事件对象，避免被当作 kw 传入）
+  searchQ.value = kw
+  doSearch()
+}
+
 onMounted(loadBooks)
 </script>
 
@@ -200,4 +234,15 @@ onMounted(loadBooks)
 .result-page { color: #909399; font-size: 12px; }
 .result-snippet { font-size: 14px; line-height: 1.6; color: #303133; }
 .result-count { color: #909399; font-size: 12px; margin-bottom: 8px; }
+.analysis-section { margin-bottom: 12px; }
+.analysis-title { font-size: 13px; font-weight: 600; color: #606266; margin-bottom: 6px; }
+.analysis-tag { margin: 2px 4px 2px 0; cursor: pointer; }
+.keyword-chip {
+  display: inline-block; padding: 2px 10px; margin: 2px 4px 2px 0;
+  background: #f4f4f5; border-radius: 4px; font-size: 12px; color: #606266;
+  cursor: pointer; user-select: none;
+}
+.keyword-chip:hover { background: #ecf5ff; color: #409eff; }
+.analysis-item { font-size: 13px; line-height: 1.6; margin-bottom: 4px; color: #303133; }
+.analysis-meta { font-size: 12px; color: #909399; }
 </style>

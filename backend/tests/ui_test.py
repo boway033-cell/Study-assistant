@@ -38,11 +38,9 @@ with sync_playwright() as p:
 
     print("=== 2. 全文搜索 ===")
     page.fill("input[placeholder*='输入关键词']", "拉格朗日")
-    # 遍历按钮找到"搜索"（避免 text= 匹配歧义）
-    for b in page.locator("button").all():
-        if "搜索" in b.inner_text():
-            b.click()
-            break
+    page.wait_for_timeout(300)
+    # 用 button:has-text 精确定位搜索按钮
+    page.locator("button:has-text('搜索')").first.click()
     page.wait_for_timeout(2000)
     check("搜索结果", page.locator(".result-item").count() >= 1,
           f"count={page.locator('.result-item').count()}")

@@ -98,29 +98,35 @@ study-assistant/
 
 ## 4. 关键流程设计
 
-### 4.1 文档导入与解析流程
+### 4.1 文档导入与解析流程（增强版：版面分析 + 清洗 + 关键信息）
 
 ```
 上传文件 → 存 data/uploads → 创建 Book(status=parsing)
   → 后台任务：
-      1. 类型分发：pdf/docx/pptx 解析器
-      2. 提取目录 → 写入 chapters（多级，parent_id）
-      3. 按章节切块（chunk，保留页码区间）→ 写 chunks
-      4. 全文字段写入 FTS5 索引（jieba 分词）← P0 检索主力（BM25 风格，零内存）
-      5. 【P1 可选】嵌入向量化（fastembed + bge-small-zh）→ 写 ChromaDB
-         （设置中开关 vector_search，默认关闭，避免模型下载与内存占用）
+      1. 类型分发：pdf/docx/pptx 解析器；扫描版（页均文本 <30 字符）自动触发 OCR
+      2. 版面分析（PDF）：按字体/字号/位置识别 标题/正文/页眉页脚/表格/公式
+      3. 文本清洗：去页眉页脚重复、行去重、重复字符压缩、断行合并
+      4. 关键信息提取：定义句/定理命题/关键词 → book_analysis 表
+      5. 章节树（目录书签或启发式）→ chapters 表
+      6. 按章节切块（chunk）→ 写 chunks（清洗后文本）
+      7. FTS5 索引（jieba 分词，BM25 风格，零内存）← P0 检索主力
+      8. 【P1 可选】嵌入向量化（fastembed + bge-small-zh）→ ChromaDB（默认关闭）
   → Book.status = ready（失败则 failed + 错误信息）
 进度通过内存任务表 + 轮询接口暴露（/api/tasks/{id}）
 ```
 
-### 4.2 AI 问答流程（RAG + SSE）
+### 4.2 AI 问答流程（RAG + SSE + 宽定位）
 
 ```
 POST /api/chat {book_id, question, mode}
   1. 选择书籍范围 → 取书 ID 过滤
-  2. retriever: 问题向量化 → ChromaDB top-k(默认 5) → 返回片段(带页码)
-  3. 组装 prompt：系统提示 + 检索片段 + 用户问题
-  4. llm router 按 mode 调用 Ollama / DeepSeek，流式返回
+  2. 宽定位检索（retriever.retrieve）：
+     a. FTS5 关键词检索 top-k
+     b. 命中不足(<3) → LIKE 子串匹配兜底（任何含词的 chunk 都命中）
+     c. 章节级上下文：命中 chunk 拉取同章节相邻 chunk，保证完整输出
+     d. 全文兜底：仍无命中 → 返回目录结构（is_outline），引导用户而非"无法fetch"
+  3. 组装 prompt（优先 context 完整内容，截断保护 12000 字符）
+  4. llm router 按 mode（DB 配置）调用 Ollama / DeepSeek，流式返回
   5. 前端 SSE 逐字渲染；完成后整条记录存 chat_logs
 答案引用：在流式结束后返回 sources 列表，前端渲染为可点击页码
 ```
