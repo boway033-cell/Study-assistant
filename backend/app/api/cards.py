@@ -39,10 +39,8 @@ def _to_resp(card: Card, db: Session) -> CardResp:
 
 @router.post("/books/{book_id}/generate-cards")
 def generate_cards(book_id: int, db: Session = Depends(get_db)):
-    """生成卡片（P0 简化：直接调用 LLM 生成并入库，见 docs/03-api.md §3.1）。"""
-    from backend.app.services.rag import fts, retriever
+    """生成卡片：优先 LLM（已配置时），否则规则式兜底（零成本）。"""
     from backend.app.services.llm import LLMRouter, load_llm_config
-    import json
 
     book = db.get(Book, book_id)
     if not book:
@@ -56,24 +54,59 @@ def generate_cards(book_id: int, db: Session = Depends(get_db)):
     if not chapters:
         raise HTTPException(400, "书籍没有章节")
 
+    # 判断 LLM 是否可用（本地 Ollama 或云端 Key）
+    cfg = load_llm_config(db)
+    use_llm = False
+    llm_provider = None
+    if cfg["llm_mode"] == "cloud" and cfg["deepseek_api_key"]:
+        use_llm = True
+    elif cfg["llm_mode"] == "local":
+        # 探测本地 Ollama 是否真正可用（未装则回退规则）
+        try:
+            from backend.app.services.llm import OllamaProvider
+            probe_provider = OllamaProvider(base_url=cfg["ollama_base_url"], model=cfg["ollama_model"])
+            import asyncio
+            ok, _ = asyncio.run(probe_provider.check_available())
+            use_llm = ok
+        except Exception:  # noqa: BLE001
+            use_llm = False
+
     async def run(record):
-        # 从数据库读取 LLM 配置（设置页的切换/Key 才能生效）
-        cfg = load_llm_config(db)
-        provider = LLMRouter.get("auto", cfg)
         created = 0
         failed = 0
-        for i, ch in enumerate(chapters):
-            record.progress = i / len(chapters)
-            record.stage = f"生成卡片: {ch.title}"
-            try:
-                cards = await _gen_cards_for_chapter(provider, db, book_id, ch)
-                created += len(cards)
-            except Exception:  # noqa: BLE001
-                failed += 1
-        return {"generated": created, "failed": failed}
+        if use_llm:
+            provider = LLMRouter.get("auto", cfg)
+            for i, ch in enumerate(chapters):
+                record.progress = i / len(chapters)
+                record.stage = f"AI 生成卡片: {ch.title}"
+                try:
+                    cards = await _gen_cards_for_chapter(provider, db, book_id, ch)
+                    created += len(cards)
+                except Exception:  # noqa: BLE001
+                    failed += 1
+        else:
+            # 规则式兜底
+            record.stage = "规则式生成卡片（未配置 AI，使用启发式提取）"
+            from backend.app.services.cards.rule_cards import generate_cards_rule_based
+            chapter_texts = {}
+            for ch in chapters:
+                chunks = db.scalars(
+                    select(Chunk).where(Chunk.chapter_id == ch.id).order_by(Chunk.chunk_index)
+                ).all()
+                chapter_texts[ch.id] = "\n".join(c.content for c in chunks)
+            rule_cards = generate_cards_rule_based(
+                book_id, [{"id": c.id, "title": c.title} for c in chapters], chapter_texts
+            )
+            for rc in rule_cards:
+                db.add(Card(book_id=book_id, chapter_id=rc["chapter_id"],
+                            front=rc["front"], back=rc["back"], tags=rc["tags"],
+                            source="auto", state="New", due=new_card_due()))
+                created += 1
+            db.commit()
+        return {"generated": created, "failed": failed, "mode": "llm" if use_llm else "rule"}
 
     record = submit("cards", run)
-    return {"task_id": record.id, "estimated": len(chapters) * 10}
+    return {"task_id": record.id, "estimated": len(chapters) * 10, "mode": "llm" if use_llm else "rule"}
 
 
 async def _gen_cards_for_chapter(provider, db: Session, book_id: int, chapter: Chapter) -> int:

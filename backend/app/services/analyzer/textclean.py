@@ -44,8 +44,11 @@ def merge_broken_english(text: str) -> str:
 
 
 def merge_broken_chinese(text: str) -> str:
-    """中文断行合并：句末标点缺失时，将下一行拼到上一行（处理 OCR 换行）。"""
-    # 行尾非标点结尾 + 行首非缩进/标题 → 合并
+    """中文断行合并：句末标点缺失时，将下一行拼到上一行（处理 OCR 换行）。
+
+    规则：上一行未以标点/数字闭合，且上一行不是标题，且当前行不是标题 →
+    合并。标题行（章节标题）保持独立，防止正文混入标题。
+    """
     lines = text.split("\n")
     out: list[str] = []
     for line in lines:
@@ -53,24 +56,35 @@ def merge_broken_chinese(text: str) -> str:
             if out:
                 out.append("")
             continue
-        if out and out[-1] and not _line_ends_closed(out[-1]) and not _looks_like_title(line):
-            out[-1] = out[-1] + line.strip()
+        prev = out[-1] if out else ""
+        if (prev and prev.strip()
+                and not _line_ends_closed(prev)
+                and not _looks_like_title(prev)
+                and not _looks_like_title(line)):
+            out[-1] = prev + line.strip()
         else:
             out.append(line)
     return "\n".join(out)
 
 
 def _line_ends_closed(line: str) -> bool:
-    """行是否以句末标点或明确结束符结尾。"""
-    return bool(re.search(r"[。；：！？；，、.?!;:)\]]\s*$", line))
+    """行是否以句末标点、明确结束符或页码数字结尾。"""
+    s = line.strip()
+    # 句末标点
+    if re.search(r"[。；：！？；，、.?!;:)\]]\s*$", s):
+        return True
+    # 页码/纯数字结尾（如「第1章公共管理导论   3」→ 不合并下行）
+    if re.search(r"[\d]+\s*$", s):
+        return True
+    return False
 
 
 def _looks_like_title(line: str) -> bool:
-    """是否像标题（短 + 编号开头或全书式标题）。"""
+    """是否像标题（短 + 编号开头或章节式标题）。"""
     s = line.strip()
     if len(s) > 30:
         return False
-    if re.match(r"^(第[一二三四五六七八九十\d]+[章节篇]|\d+(\.\d+)*\s|[一二三四五六七八九十]+、)", s):
+    if re.match(r"^第\s*[一二三四五六七八九十\d]+\s*[章节篇编部]|\d+(\.\d+)*\s|[一二三四五六七八九十]+、", s):
         return True
     return False
 

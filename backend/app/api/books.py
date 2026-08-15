@@ -223,6 +223,12 @@ def delete_book(book_id: int, db: Session = Depends(get_db)):
     if not book:
         raise HTTPException(404, "书籍不存在")
     file_path = book.file_path
+    # 先删智能分析记录（BookAnalysis 外键）
+    from backend.app.models import BookAnalysis
+    ba = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book_id))
+    if ba:
+        db.delete(ba)
+        db.flush()
     db.delete(book)
     db.commit()
     # 删除上传文件与 FTS 索引（仅项目 data 目录内）
@@ -237,6 +243,12 @@ def delete_book(book_id: int, db: Session = Depends(get_db)):
         fts.delete_book_index(book_id)
     except Exception:  # noqa: BLE001
         pass
+    # 清理向量（若开启）
+    try:
+        from backend.app.services.rag import vector
+        vector.delete_book_vectors(book_id)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @router.post("/books/{book_id}/reparse")
@@ -244,9 +256,18 @@ def reparse_book(book_id: int, db: Session = Depends(get_db)):
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
-    # 清空旧章节/chunks
+    # 清空旧章节/chunks/分析/向量
+    from backend.app.models import BookAnalysis
+    ba = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book_id))
+    if ba:
+        db.delete(ba)
     db.query(Chunk).filter(Chunk.book_id == book_id).delete()
     db.query(Chapter).filter(Chapter.book_id == book_id).delete()
+    try:
+        from backend.app.services.rag import vector
+        vector.delete_book_vectors(book_id)
+    except Exception:  # noqa: BLE001
+        pass
     book.status = "pending"
     book.error_msg = None
     db.commit()
