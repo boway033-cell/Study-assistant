@@ -343,7 +343,24 @@ GET /api/settings/probe
 
 ---
 
-## 7. 状态码约定
+## 7. PDF 标注 /api
+
+```
+GET    /api/books/{book_id}/annotations?page=3
+POST   /api/books/{book_id}/annotations   body: {"page":3,"rect_json":"[{x,y,w,h}]","text":"…","color":"#f9e572","note":"…","knowledge_node_id":null}
+PATCH  /api/annotations/{id}              body: {"note":"…","color":"…"}
+DELETE /api/annotations/{id}
+```
+
+## 8. AI 增强 /api/ai（可选，无 Key 时返回友好错误）
+
+```
+POST /api/ai/explain     body: {"text":"选中内容","action":"explain|translate","book_title":"…","chapter_title":"…"}
+POST /api/ai/summarize   body: {"book_id":3,"chapter_id":4}        # 章节总结（本地文本 → DeepSeek）
+POST /api/ai/vision      body: {"book_id":3,"page":4,"image":"data:image/jpeg;base64,…","prompt":null}  # Qwen-VL
+```
+
+## 9. 状态码约定
 
 | 码 | 场景 |
 |---|---|

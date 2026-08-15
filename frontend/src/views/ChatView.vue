@@ -81,7 +81,7 @@
             </div>
             <div v-if="sourceView === 'text'" class="source-text">{{ source.text }}</div>
             <div v-else-if="sourceView === 'pdf'" class="pdf-box">
-              <PdfReader :src="pdfUrl" :initial-page="source.page_start || 1" />
+              <PdfReader :src="pdfUrl" :book-id="source.book_id" :initial-page="source.page_start || 1" />
             </div>
           </template>
           <el-empty v-else description="提问后，答案引用的原文会自动显示在这里" :image-size="80" />

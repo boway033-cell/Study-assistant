@@ -146,6 +146,25 @@ class KnowledgeNode(Base):
     children: Mapped[list["KnowledgeNode"]] = relationship(back_populates="parent")
 
 
+class Annotation(Base):
+    """PDF 阅读器标注：高亮选区 + 笔记，可关联知识树节点。"""
+
+    __tablename__ = "annotations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"), nullable=False, index=True)
+    page: Mapped[int] = mapped_column(Integer, nullable=False)
+    rect_json: Mapped[str] = mapped_column(Text, nullable=False)  # [{x,y,w,h} 归一化坐标]
+    text: Mapped[str | None] = mapped_column(Text)                # 选中的原文
+    color: Mapped[str] = mapped_column(String(20), default="#f9e572")
+    note: Mapped[str | None] = mapped_column(Text)                # 用户笔记
+    knowledge_node_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_nodes.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+    book: Mapped["Book"] = relationship()
+    knowledge_node: Mapped["KnowledgeNode | None"] = relationship()
+
+
 class Setting(Base):
     __tablename__ = "settings"
 

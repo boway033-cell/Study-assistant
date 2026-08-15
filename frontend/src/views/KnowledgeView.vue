@@ -113,7 +113,8 @@
             </div>
             <div v-if="sourceView === 'text'" class="source-text">{{ source.text }}</div>
             <div v-else-if="sourceView === 'pdf'" class="pdf-box">
-              <PdfReader :src="pdfUrl" :initial-page="source.page_start || 1" />
+              <PdfReader :src="pdfUrl" :book-id="source.book_id" :initial-page="source.page_start || 1"
+                :toc="tocFlat" show-toc show-ai />
             </div>
           </template>
           <el-empty v-else description="该节点尚未关联书籍章节，或该章节暂无内容" :image-size="80" />
@@ -199,9 +200,10 @@ const aiMode = ref('new')
 const aiRunning = ref(false)
 const aiStage = ref('')
 
+const tocFlat = ref([])
 const pdfUrl = computed(() => {
   if (!source.value.book_id || !source.value.page_start) return ''
-  return `${bookFileUrl(source.value.book_id)}#page=${source.value.page_start}`
+  return bookFileUrl(source.value.book_id)
 })
 
 const loadTree = async () => {
@@ -229,6 +231,7 @@ const selectNode = async (data) => {
     const book = books.value.find((b) => b.id === data.book_id)
     pdfBookType.value = book?.file_type || ''
     await loadChapters(data.book_id)
+    loadToc(data.book_id)
   }
   if (data.chapter_id) loadSource()
 }

@@ -16,6 +16,19 @@
           </el-radio-group>
           <div class="form-tip">flash = deepseek-v4-flash（响应快，适合日常问答）；pro = deepseek-v4-pro（深度思考，适合难题/长文分析）</div>
         </el-form-item>
+        <el-divider content-position="left">视觉分析（可选 · Qwen-VL，阿里百炼）</el-divider>
+        <el-form-item label="视觉 API Key">
+          <el-input v-model="form.vision_api_key" type="password" show-password
+            :placeholder="hasVisionKey ? '已配置（留空保存则保留原 Key）' : 'sk-... 在阿里云百炼获取'" />
+          <div class="form-tip" v-if="hasVisionKey">✅ 已配置视觉 Key（用于 PDF 阅读器「AI 解读本页/图表/公式」）</div>
+          <div class="form-tip" v-else>可选：到 <a href="https://bailian.console.aliyun.com" target="_blank">阿里云百炼</a> 开通并创建 API Key；不配置则视觉解读不可用，其余功能不受影响</div>
+        </el-form-item>
+        <el-form-item label="视觉模型">
+          <el-select v-model="form.vision_model" style="width: 240px">
+            <el-option value="qwen-vl-max" label="qwen-vl-max（最强，贵）" />
+            <el-option value="qwen-vl-plus" label="qwen-vl-plus（均衡）" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="检索片段数">
           <el-input-number v-model="form.rag_top_k" :min="1" :max="20" />
         </el-form-item>
@@ -38,11 +51,17 @@
         </div>
       </template>
       <el-descriptions :column="1" border>
-        <el-descriptions-item label="云端 DeepSeek">
+        <el-descriptions-item label="云端 DeepSeek（问答）">
           <el-tag :type="probeData.deepseek?.ok ? 'success' : 'danger'">
             {{ probeData.deepseek?.ok ? '已连接' : '未连接' }}
           </el-tag>
           <div class="form-tip">{{ probeData.deepseek?.reason || '' }}</div>
+        </el-descriptions-item>
+        <el-descriptions-item label="视觉模型（Qwen-VL）">
+          <el-tag :type="probeData.vision?.ok ? 'success' : 'danger'">
+            {{ probeData.vision?.ok ? '已配置' : '未配置' }}
+          </el-tag>
+          <div class="form-tip">{{ probeData.vision?.reason || '' }}</div>
         </el-descriptions-item>
       </el-descriptions>
     </el-card>
@@ -67,20 +86,26 @@ import { getSettings, updateSettings, probeSettings } from '../api'
 const form = ref({
   deepseek_api_key: '',
   deepseek_model: 'flash',
+  vision_api_key: '',
+  vision_model: 'qwen-vl-max',
   rag_top_k: 5,
   vector_search: false,
 })
 const probeData = ref({})
 const hasKey = ref(false)
+const hasVisionKey = ref(false)
 
 const load = async () => {
   try {
     const s = await getSettings()
     // 后端返回脱敏 key（sk-***xxx）：非空表示已配置，输入框留空让用户重新填写
     hasKey.value = s.deepseek_api_key !== '' && s.deepseek_configured
+    hasVisionKey.value = s.vision_api_key !== '' && s.vision_configured
     form.value = {
       deepseek_api_key: '',
       deepseek_model: s.deepseek_model,
+      vision_api_key: '',
+      vision_model: s.vision_model || 'qwen-vl-max',
       rag_top_k: parseInt(s.rag_top_k),
       vector_search: s.vector_search,
     }
@@ -95,6 +120,8 @@ const save = async () => {
       // 用户留空 = 保留已存 Key；填写 = 更新
       deepseek_api_key: form.value.deepseek_api_key || undefined,
       deepseek_model: form.value.deepseek_model,
+      vision_api_key: form.value.vision_api_key || undefined,
+      vision_model: form.value.vision_model,
       rag_top_k: form.value.rag_top_k,
       vector_search: form.value.vector_search,
     })

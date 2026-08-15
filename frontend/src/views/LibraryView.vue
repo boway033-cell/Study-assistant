@@ -38,6 +38,7 @@
             <el-table-column label="操作" width="150">
               <template #default="{ row }">
                 <el-button link type="primary" size="small" @click="openBook(row)">详情</el-button>
+                <el-button link type="success" size="small" @click="readBook(row)">阅读</el-button>
                 <el-popconfirm title="确认删除？将删除该书的全部解析数据" @confirm="removeBook(row)">
                   <template #reference>
                     <el-button link type="danger" size="small">删除</el-button>
@@ -133,10 +134,12 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { listBooks, uploadBook, deleteBook, getBook, searchBooks, getTask } from '../api'
 import OriginalViewer from '../components/OriginalViewer.vue'
 
+const router = useRouter()
 const books = ref([])
 const loading = ref(false)
 const uploading = ref(false)
@@ -199,6 +202,10 @@ const removeBook = async (row) => {
   } catch (e) {
     ElMessage.error(e.message)
   }
+}
+
+const readBook = (row) => {
+  router.push('/reader/' + row.id)
 }
 
 const openBook = async (row) => {

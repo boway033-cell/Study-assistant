@@ -90,6 +90,17 @@ export const getKnowledgeSource = (id) => http.get(`/knowledge/nodes/${id}/sourc
 export const importKnowledgeChapters = (data) => http.post('/knowledge/import-chapters', data)
 export const aiGenerateKnowledge = (data) => http.post('/knowledge/ai-generate', data)
 
+// ===== PDF 标注 =====
+export const listAnnotations = (bookId, params) => http.get(`/books/${bookId}/annotations`, { params })
+export const createAnnotation = (bookId, data) => http.post(`/books/${bookId}/annotations`, data)
+export const updateAnnotation = (id, data) => http.patch(`/annotations/${id}`, data)
+export const deleteAnnotation = (id) => http.delete(`/annotations/${id}`)
+
+// ===== AI 增强（可选，无 Key 时后端返回友好错误）=====
+export const aiExplain = (data) => http.post('/ai/explain', data)
+export const aiSummarize = (data) => http.post('/ai/summarize', data)
+export const aiVision = (data) => http.post('/ai/vision', data)
+
 // ===== 设置 =====
 export const getSettings = () => http.get('/settings')
 export const updateSettings = (data) => http.put('/settings', data)

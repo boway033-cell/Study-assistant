@@ -59,9 +59,12 @@
 - 选择/填空/简答，自动判分 + 简答自评，错题本
 - **掌握度基于作答数据**：章节错题率 → 掌握度；薄弱章节排行、近 30 天作答趋势
 
-### 3.6 原文定位面板
-- 搜索/问答结果 → 右侧抽屉：chunk 原文全文 + 页码区间 + PDF 原文 iframe（`#page=N` 定位）
-- API：`/books/{id}/file`、`/books/{id}/chunk/{cid}`、`/books/{id}/page/{n}`
+### 3.6 PDF 阅读器（v2，本地渲染为底层 + AI 可选增强）
+- **阅读页** `/#/reader/{bookId}`（资料库点「阅读」进入）：pdf.js 连续滚动渲染、文本层可选择
+- **本地能力（无 AI 也完整）**：翻页/缩放/适应宽度、**目录侧边栏跳转**、**深色模式**、**阅读位置记忆**（localStorage）、**高亮标注 + 笔记**（annotations 表，可选关联知识树节点）
+- **AI 可选增强（无 Key 优雅降级）**：选中文字 → 💡解释/🌐翻译（DeepSeek）；📝总结本章（DeepSeek）；🤖解读本页 → **Qwen-VL 视觉分析**（图表/公式/示意图，需在设置页配置阿里百炼 Key）
+- 原文定位面板：搜索/问答结果 → chunk 原文 + 页码区间 + 阅读器
+- API：`/books/{id}/file`（inline）、`/books/{id}/annotations`、`/api/ai/explain|summarize|vision`
 
 ### 3.7 白露节气蓝白主题
 - 天青主色 `#3e7fa3`、月白背景 `#f4f8fa`、凝露表头 `#eef5f8`、缥碧成功色 `#5f9b8f`

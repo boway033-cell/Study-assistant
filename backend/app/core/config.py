@@ -48,6 +48,11 @@ class Settings:
         # 模型档位：flash=deepseek-chat（快）/ pro=deepseek-reasoner（深度思考）
         self.deepseek_model: str = _env("DEEPSEEK_MODEL", "flash")
 
+        # 视觉分析（Qwen-VL，阿里百炼 OpenAI 兼容接口；可选增强，未配置不影响本地功能）
+        self.vision_api_key: str = _env("VISION_API_KEY", "")
+        self.vision_base_url: str = _env("VISION_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        self.vision_model: str = _env("VISION_MODEL", "qwen-vl-max")
+
         # 检索
         self.rag_top_k: int = int(_env("RAG_TOP_K", "5"))
         self.vector_search: bool = _env("VECTOR_SEARCH", "false").lower() == "true"

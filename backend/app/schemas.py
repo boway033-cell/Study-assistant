@@ -282,18 +282,77 @@ class KnowledgeSourceResp(BaseModel):
     text: str = ""
 
 
+# ---------- PDF 标注 ----------
+class AnnotationCreateReq(BaseModel):
+    page: int = Field(ge=1)
+    rect_json: str  # [{x,y,w,h}] 归一化坐标
+    text: str | None = None
+    color: str = "#f9e572"
+    note: str | None = None
+    knowledge_node_id: int | None = None
+
+
+class AnnotationUpdateReq(BaseModel):
+    note: str | None = None
+    color: str | None = None
+    knowledge_node_id: int | None = None
+
+
+class AnnotationResp(BaseModel):
+    id: int
+    book_id: int
+    page: int
+    rect_json: str
+    text: str | None = None
+    color: str
+    note: str | None = None
+    knowledge_node_id: int | None = None
+    created_at: datetime
+
+
+# ---------- AI 增强 ----------
+class AiExplainReq(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+    action: str = "explain"  # explain / translate
+    book_title: str = ""
+    chapter_title: str = ""
+
+
+class AiSummaryReq(BaseModel):
+    book_id: int
+    chapter_id: int
+
+
+class AiVisionReq(BaseModel):
+    book_id: int
+    page: int
+    image: str  # dataURL (jpeg/png base64)
+    prompt: str | None = None
+
+
+class AiResp(BaseModel):
+    ok: bool
+    result: str = ""
+    error: str = ""
+
+
 # ---------- 设置 ----------
 class SettingsResp(BaseModel):
     deepseek_api_key: str  # 脱敏
     deepseek_model: str    # flash / pro
+    vision_api_key: str    # 脱敏（Qwen-VL 视觉分析）
+    vision_model: str
     rag_top_k: str
     vector_search: bool
     deepseek_configured: bool
+    vision_configured: bool
 
 
 class SettingsUpdateReq(BaseModel):
     deepseek_api_key: str | None = None
     deepseek_model: str | None = None  # flash / pro
+    vision_api_key: str | None = None
+    vision_model: str | None = None
     rag_top_k: int | None = None
     vector_search: bool | None = None
 
@@ -305,3 +364,4 @@ class ProbeItem(BaseModel):
 
 class ProbeResp(BaseModel):
     deepseek: ProbeItem
+    vision: ProbeItem
