@@ -24,6 +24,7 @@
           :props="{ label: 'title', children: 'children' }"
           node-key="id"
           draggable
+          default-expand-all
           :allow-drop="allowDrop"
           highlight-current
           :expand-on-click-node="false"

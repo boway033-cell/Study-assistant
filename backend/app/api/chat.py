@@ -33,7 +33,8 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
         cfg = {**cfg, "deepseek_model": req.model}
     provider = LLMRouter.get("auto", cfg)
     sources_payload = [
-        {"chunk_id": s["chunk_id"], "page": s.get("page"), "snippet": s.get("snippet", "")}
+        {"chunk_id": s["chunk_id"], "book_id": s.get("book_id"), "page": s.get("page"),
+         "snippet": s.get("snippet", "")}
         for s in sources
     ]
 

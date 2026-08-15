@@ -166,7 +166,7 @@ const fetchChapterTitle = async (bookIdVal, chapterId) => {
 }
 
 const showSource = (m, s, idx) => {
-  const bid = m.bookId || bookId.value
+  const bid = s.book_id || m.bookId || bookId.value
   if (!bid) {
     ElMessage.warning('请先选择提问的书籍')
     return
@@ -200,7 +200,7 @@ const send = async () => {
           const s0 = data.sources[0]
           activeSourceIndex.value = messages.value.length - 1
           activeSourceIdx.value = 0
-          loadSourcePanel(aiMsg.value.bookId || bookId.value, s0.chunk_id)
+          loadSourcePanel(s0.book_id || aiMsg.value.bookId || bookId.value, s0.chunk_id)
         }
       } else if (event === 'error') {
         aiMsg.value.content = '⚠️ ' + data.message
@@ -229,7 +229,7 @@ const viewHistory = (h) => {
   if (h.sources?.length) {
     activeSourceIndex.value = messages.value.length - 1
     activeSourceIdx.value = 0
-    loadSourcePanel(bookId.value, h.sources[0].chunk_id)
+    loadSourcePanel(h.sources[0].book_id || bookId.value, h.sources[0].chunk_id)
   }
   scrollBottom()
 }

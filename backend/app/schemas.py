@@ -113,6 +113,7 @@ class ChatReq(BaseModel):
 
 class ChatSource(BaseModel):
     chunk_id: int
+    book_id: int | None = None
     page: int | None = None
     snippet: str
 
