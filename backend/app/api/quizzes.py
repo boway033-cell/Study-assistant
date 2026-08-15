@@ -38,7 +38,7 @@ def _parse_options(options_json: str | None) -> list[str] | None:
 @router.post("/books/{book_id}/generate-quizzes")
 def generate_quizzes(book_id: int, db: Session = Depends(get_db)):
     """AI 生成题目（P0 简化：后台任务直接调用 LLM 并入库）。"""
-    from backend.app.services.llm import LLMRouter
+    from backend.app.services.llm import LLMRouter, load_llm_config
 
     book = db.get(Book, book_id)
     if not book:
@@ -54,7 +54,9 @@ def generate_quizzes(book_id: int, db: Session = Depends(get_db)):
 
     async def run(record):
         from backend.app.models import Chunk
-        provider = LLMRouter.get()
+        # 从数据库读取 LLM 配置（设置页的切换/Key 才能生效）
+        cfg = load_llm_config(db)
+        provider = LLMRouter.get("auto", cfg)
         created = 0
         for i, ch in enumerate(chapters):
             record.progress = i / len(chapters)

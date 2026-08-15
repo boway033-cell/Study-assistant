@@ -13,7 +13,9 @@
           </div>
         </el-form-item>
         <el-form-item label="DeepSeek API Key">
-          <el-input v-model="form.deepseek_api_key" type="password" show-password placeholder="sk-..." />
+          <el-input v-model="form.deepseek_api_key" type="password" show-password
+            :placeholder="hasKey ? '已配置（留空保存则保留原 Key）' : 'sk-...'" />
+          <div class="form-tip" v-if="hasKey">✅ 已配置 API Key（出于安全考虑不显示完整内容）</div>
         </el-form-item>
         <el-form-item label="本地模型名">
           <el-input v-model="form.ollama_model" placeholder="qwen2.5:3b-instruct" />
@@ -85,13 +87,16 @@ const form = ref({
   vector_search: false,
 })
 const probeData = ref({})
+const hasKey = ref(false)
 
 const load = async () => {
   try {
     const s = await getSettings()
+    // 后端返回脱敏 key（sk-***xxx）：非空表示已配置，输入框留空让用户重新填写
+    hasKey.value = s.deepseek_api_key !== '' && s.deepseek_configured
     form.value = {
       llm_mode: s.llm_mode,
-      deepseek_api_key: s.deepseek_api_key === '' ? '' : '', // 脱敏，重新填写才更新
+      deepseek_api_key: '',
       ollama_model: s.ollama_model,
       daily_new_cards: parseInt(s.daily_new_cards),
       rag_top_k: parseInt(s.rag_top_k),
@@ -106,6 +111,7 @@ const save = async () => {
   try {
     await updateSettings({
       llm_mode: form.value.llm_mode,
+      // 用户留空 = 保留已存 Key；填写 = 更新
       deepseek_api_key: form.value.deepseek_api_key || undefined,
       ollama_model: form.value.ollama_model,
       daily_new_cards: form.value.daily_new_cards,
@@ -113,6 +119,9 @@ const save = async () => {
       vector_search: form.value.vector_search,
     })
     ElMessage.success('设置已保存')
+    // 保存后若切换了模式，重新探测连接状态
+    probe()
+    load()
   } catch (e) {
     ElMessage.error(e.message)
   }

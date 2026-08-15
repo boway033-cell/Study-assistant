@@ -8,7 +8,7 @@ from backend.app.core.config import settings as app_settings
 from backend.app.core.database import get_db
 from backend.app.models import Setting
 from backend.app.schemas import ProbeItem, ProbeResp, SettingsResp, SettingsUpdateReq
-from backend.app.services.llm import DeepSeekProvider, OllamaProvider
+from backend.app.services.llm import DeepSeekProvider, OllamaProvider, load_llm_config
 
 router = APIRouter(prefix="/api", tags=["settings"])
 
@@ -47,16 +47,16 @@ def _mask_key(key: str) -> str:
 
 @router.get("/settings", response_model=SettingsResp)
 def get_settings(db: Session = Depends(get_db)):
-    mode = _get_setting(db, "llm_mode")
-    api_key = _get_setting(db, "deepseek_api_key")
+    cfg = load_llm_config(db)
+    api_key = cfg["deepseek_api_key"]
     return SettingsResp(
-        llm_mode=mode,
+        llm_mode=cfg["llm_mode"],
         deepseek_api_key=_mask_key(api_key),
-        ollama_model=_get_setting(db, "ollama_model"),
+        ollama_model=cfg["ollama_model"],
         daily_new_cards=_get_setting(db, "daily_new_cards"),
         rag_top_k=_get_setting(db, "rag_top_k"),
         vector_search=_get_setting(db, "vector_search") == "true",
-        ollama_connected=bool(app_settings.ollama_base_url),
+        ollama_connected=bool(cfg["ollama_base_url"]),
         deepseek_configured=bool(api_key),
     )
 
@@ -86,10 +86,11 @@ def update_settings(req: SettingsUpdateReq, db: Session = Depends(get_db)):
 
 
 @router.get("/settings/probe", response_model=ProbeResp)
-async def probe():
-    ollama = OllamaProvider()
+async def probe(db: Session = Depends(get_db)):
+    cfg = load_llm_config(db)
+    ollama = OllamaProvider(base_url=cfg["ollama_base_url"], model=cfg["ollama_model"])
     ollama_ok, ollama_reason = await ollama.check_available()
-    deepseek = DeepSeekProvider()
+    deepseek = DeepSeekProvider(api_key=cfg["deepseek_api_key"], base_url=cfg["deepseek_base_url"])
     deepseek_ok, deepseek_reason = await deepseek.check_available()
     return ProbeResp(
         ollama=ProbeItem(ok=ollama_ok, reason=ollama_reason),

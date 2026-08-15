@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from backend.app.core.database import get_db
 from backend.app.models import Book, ChatLog
 from backend.app.schemas import ChatHistoryItem, ChatHistoryResp, ChatReq, ChatSource
-from backend.app.services.llm import LLMRouter
+from backend.app.services.llm import LLMRouter, load_llm_config
 from backend.app.services.rag import fts, retriever
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -27,7 +27,9 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
     sources = retriever.retrieve(req.question, book_id=req.book_id)
     messages = retriever.build_prompt(req.question, sources)
 
-    provider = LLMRouter.get(req.mode)
+    # 关键修复：从数据库读取 LLM 配置（设置页的切换/Key 才能生效）
+    cfg = load_llm_config(db)
+    provider = LLMRouter.get(req.mode, cfg)
     sources_payload = [
         {"chunk_id": s["chunk_id"], "page": s.get("page"), "snippet": s.get("snippet", "")}
         for s in sources

@@ -41,7 +41,7 @@ def _to_resp(card: Card, db: Session) -> CardResp:
 def generate_cards(book_id: int, db: Session = Depends(get_db)):
     """生成卡片（P0 简化：直接调用 LLM 生成并入库，见 docs/03-api.md §3.1）。"""
     from backend.app.services.rag import fts, retriever
-    from backend.app.services.llm import LLMRouter
+    from backend.app.services.llm import LLMRouter, load_llm_config
     import json
 
     book = db.get(Book, book_id)
@@ -57,7 +57,9 @@ def generate_cards(book_id: int, db: Session = Depends(get_db)):
         raise HTTPException(400, "书籍没有章节")
 
     async def run(record):
-        provider = LLMRouter.get()
+        # 从数据库读取 LLM 配置（设置页的切换/Key 才能生效）
+        cfg = load_llm_config(db)
+        provider = LLMRouter.get("auto", cfg)
         created = 0
         failed = 0
         for i, ch in enumerate(chapters):

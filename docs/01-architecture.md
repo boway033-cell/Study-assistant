@@ -165,9 +165,15 @@ class DeepSeekProvider:  # openai SDK，base_url=https://api.deepseek.com
     ...
 
 # services/llm/router.py
-def get_provider(mode: str) -> LLMProvider:
-    # mode 来自 settings 表，或请求参数覆盖
-    return OllamaProvider() if mode == "local" else DeepSeekProvider()
+def load_llm_config(db) -> dict:
+    # 配置优先级：数据库 settings 表（设置页写入）> 环境默认
+    # 关键：LLM 层必须读 DB，否则设置页切换模式/填 Key 不生效（曾为真实 bug）
+    ...
+
+def get_provider(mode: str, cfg: dict) -> LLMProvider:
+    # mode 来自 settings 表（cfg），或请求参数覆盖
+    return OllamaProvider(base_url=cfg["ollama_base_url"], model=cfg["ollama_model"]) \
+        if mode == "local" else DeepSeekProvider(api_key=cfg["deepseek_api_key"])
 ```
 
 > 嵌入模型始终本地（bge-small-zh），向量化只做一次，不重复产生云端费用。

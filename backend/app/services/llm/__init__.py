@@ -1,12 +1,35 @@
-"""LLM 抽象层：本地 Ollama ⇄ 云端 DeepSeek（docs/01-architecture.md §5）"""
+"""LLM 抽象层：本地 Ollama ⇄ 云端 DeepSeek（docs/01-architecture.md §5）
+
+配置优先级：数据库 settings 表（用户设置页写入）> 环境变量/内存默认值。
+"""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
 
 from backend.app.core.config import settings
+from backend.app.models import Setting
+
+
+def load_llm_config(db) -> dict[str, str]:
+    """从数据库读取 LLM 配置；未设置项回退到环境默认。
+
+    这是「设置页切换模式/填 Key 后生效」的关键：此前 LLM 层只读内存配置，
+    导致云端切换与 API Key 全部不生效。
+    """
+    def _get(key: str, default: str) -> str:
+        s = db.get(Setting, key)
+        return s.value if s else default
+
+    return {
+        "llm_mode": _get("llm_mode", settings.llm_mode),
+        "deepseek_api_key": _get("deepseek_api_key", settings.deepseek_api_key),
+        "deepseek_base_url": _get("deepseek_base_url", settings.deepseek_base_url),
+        "ollama_base_url": _get("ollama_base_url", settings.ollama_base_url),
+        "ollama_model": _get("ollama_model", settings.ollama_model),
+    }
 
 
 class LLMProvider(ABC):
@@ -111,13 +134,23 @@ class DeepSeekProvider(LLMProvider):
 
 
 class LLMRouter:
-    """按 mode 返回 provider。mode: auto/local/cloud"""
+    """按 mode 返回 provider。mode: auto/local/cloud。
+
+    cfg 由 load_llm_config(db) 提供（数据库优先）；不传时使用内存默认。
+    """
 
     @staticmethod
-    def get(mode: str = "auto") -> LLMProvider:
+    def get(mode: str = "auto", cfg: dict[str, Any] | None = None) -> LLMProvider:
+        cfg = cfg or {}
         resolved = mode
         if mode == "auto":
-            resolved = settings.llm_mode
+            resolved = cfg.get("llm_mode") or settings.llm_mode
         if resolved == "cloud":
-            return DeepSeekProvider()
-        return OllamaProvider()
+            return DeepSeekProvider(
+                api_key=cfg.get("deepseek_api_key"),
+                base_url=cfg.get("deepseek_base_url"),
+            )
+        return OllamaProvider(
+            base_url=cfg.get("ollama_base_url"),
+            model=cfg.get("ollama_model"),
+        )

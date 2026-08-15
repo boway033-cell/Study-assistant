@@ -1,4 +1,4 @@
-"""后端单元测试：解析、分词、FSRS、FTS 检索
+"""后端单元测试：解析、分词、FSRS、FTS 检索、LLM 配置
 
 运行：.venv\\Scripts\\python.exe -m pytest backend/tests/test_unit.py -q
 """
@@ -140,6 +140,72 @@ class TestFTS:
         # 特殊字符应被过滤，不产生非法 MATCH 表达式
         expr = tokenize_query("概率与统计 2024!")
         assert not any(c in expr for c in ("!", ",", "."))
+
+
+# ---------- LLM 配置（云端切换修复） ----------
+class TestLLMConfig:
+    """使用独立内存 DB，避免污染真实 study.db（settings 主键冲突）。"""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_db(self):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from backend.app.core.database import Base
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        self._db = Session()
+        yield
+        self._db.close()
+        engine.dispose()
+
+    def test_load_config_from_db(self):
+        """数据库中的设置应优先于内存默认（云端切换 bug 的核心）。"""
+        from backend.app.models import Setting
+        from backend.app.services.llm import load_llm_config
+
+        db = self._db
+        db.add(Setting(key="llm_mode", value="cloud"))
+        db.add(Setting(key="deepseek_api_key", value="sk-test-123456"))
+        db.commit()
+        cfg = load_llm_config(db)
+        assert cfg["llm_mode"] == "cloud"
+        assert cfg["deepseek_api_key"] == "sk-test-123456"
+
+    def test_load_config_fallback_default(self):
+        """未在 DB 中设置的项回退到内存默认。"""
+        from backend.app.services.llm import load_llm_config
+
+        cfg = load_llm_config(self._db)
+        assert cfg["llm_mode"] in ("local", "cloud")
+        assert cfg["ollama_model"]  # 有默认值
+
+    def test_router_uses_db_mode(self):
+        """LLMRouter.get 应使用 DB 中的模式（修复：切换云端后仍走 Ollama）。"""
+        from backend.app.models import Setting
+        from backend.app.services.llm import LLMRouter, load_llm_config
+
+        db = self._db
+        db.add(Setting(key="llm_mode", value="cloud"))
+        db.add(Setting(key="deepseek_api_key", value="sk-test-123456"))
+        db.commit()
+        cfg = load_llm_config(db)
+        provider = LLMRouter.get("auto", cfg)
+        assert provider.name == "cloud"
+
+    def test_router_mode_override(self):
+        """显式传 mode 应覆盖 DB 配置。"""
+        from backend.app.models import Setting
+        from backend.app.services.llm import LLMRouter, load_llm_config
+
+        db = self._db
+        db.add(Setting(key="llm_mode", value="cloud"))
+        db.commit()
+        cfg = load_llm_config(db)
+        provider = LLMRouter.get("local", cfg)  # 显式 local
+        assert provider.name == "local"
 
 
 if __name__ == "__main__":
