@@ -18,7 +18,7 @@
 | 后端 | Python 3.14 + FastAPI + SQLAlchemy + SQLite（WAL） |
 | 前端 | Vue3 + Vite + Element Plus + ECharts（hash 路由，构建产物由 FastAPI 托管） |
 | 虚拟环境 | 项目内 `.venv`（已装全部依赖） |
-| 启动 | 双击 `start.bat` 或 `cd 项目根 && .venv/Scripts/python -m uvicorn backend.app.main:app --port 8000`，访问 `http://127.0.0.1:8000` |
+| 启动 | 双击 `start.bat`（稳健版：自检已在运行/端口占用 → 启动 → 自动开浏览器）；或 `python launcher.py [端口]`；停止用 `stop.bat` |
 | 前端开发 | `cd frontend && npm run dev`（5173，代理 /api 到 8000）；改完 `npm run build` 后重启后端生效 |
 | 数据 | `backend/data/`（study.db + uploads/ + chroma/ + models/），备份=复制该目录 |
 | git | 已初始化为本地仓库，提交历史含各阶段里程碑 |
@@ -42,21 +42,22 @@
 - **右侧原文面板**：提问后答案引用的原文自动在右侧展示（文本 / PDF 原文 iframe 可切换）
 - **首次使用引导**：未配置 API Key 时弹窗引导去设置页填写
 
-### 3.3 知识树（新增）
-- 用户自主搭建知识树：新建/重命名/删除/拖拽移动节点
-- 节点可**关联书籍章节** → 右侧展示该章教材原文（本地解析文本 + PDF iframe）
-- 节点可写自己的理解/总结笔记
-- API：`/api/knowledge/tree`、`/api/knowledge/nodes`（CRUD + move + source）
+### 3.3 知识树（v2：大纲 + 思维导图双视图）
+- **双视图**：大纲树（编辑/拖拽）⇄ 思维导图（自绘 SVG，点击节点/缩放/平移）一键切换
+- **三种建树方式**：手动新建 / **从书籍章节一键导入骨架**（`/api/knowledge/import-chapters`）/ **AI 生成课程框架**（`/api/knowledge/ai-generate`，DeepSeek 分析章节+关键词，后台任务+进度）
+- 节点可**关联任意书/章节**（跨书整合）→ 右侧展示教材原文：**文本视图 + pdf.js 内置 PDF 阅读器**（无需下载，滚轮翻页/Ctrl+滚轮缩放）
+- 节点有自由内容区（自己的理解/总结/易错点）
+- API：`/api/knowledge/tree`、`/api/knowledge/nodes`（CRUD + move + source）+ import-chapters + ai-generate
 
 ### 3.4 语义切块 + 向量检索
 - **语义切块**（`semantic_chunker.py`）：段落边界切分，**每块保留页码映射**
 - **向量检索**（`vector.py`）：fastembed（bge-small-zh-v1.5 ONNX，512 维，全离线）+ ChromaDB
 - 混合检索：向量 + FTS + LIKE 去重合并（设置页 `vector_search` 开关，默认关=省内存）
 
-### 3.5 刷题与统计（已去卡片化）
+### 3.5 刷题与统计（AI 分析教材生成）
+- **AI 生成题目**：刷题页「🤖 AI 生成题目」→ 选书/选章 → DeepSeek 分析对应章节原文自动生成（选择+简答各 5 道/章，后台任务+进度条），**不再需要手动输入**
 - 选择/填空/简答，自动判分 + 简答自评，错题本
-- **掌握度基于作答数据**（卡片学习已取消）：章节错题率 → 掌握度
-- 薄弱章节排行、近 30 天作答趋势
+- **掌握度基于作答数据**：章节错题率 → 掌握度；薄弱章节排行、近 30 天作答趋势
 
 ### 3.6 原文定位面板
 - 搜索/问答结果 → 右侧抽屉：chunk 原文全文 + 页码区间 + PDF 原文 iframe（`#page=N` 定位）
@@ -133,9 +134,13 @@
 ## 10. 快速上手命令
 
 ```bash
-# 启动
+# 启动（稳健版：自动检查端口/已在运行，启动后自动开浏览器）
 cd D:/86153/Documents/study-assistant
+.venv/Scripts/python launcher.py            # 默认 8000
+.venv/Scripts/python launcher.py 8001       # 指定端口
+# 或直接
 .venv/Scripts/python -m uvicorn backend.app.main:app --port 8000
+# 停止：stop.bat
 
 # 前端构建（改完 vue 后）
 cd frontend && npm run build

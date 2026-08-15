@@ -72,7 +72,7 @@ export const attemptQuiz = (id, answer) => http.post(`/quizzes/${id}/attempt`, {
 export const selfGrade = (id, correct) => http.post(`/quizzes/${id}/self-grade`, { is_correct: correct })
 export const wrongQuizzes = (params) => http.get('/quizzes/wrong', { params })
 export const importQuizzes = (data) => http.post('/quizzes/batch-import', data)
-export const generateQuizzes = (bookId) => http.post(`/books/${bookId}/generate-quizzes`)
+export const generateQuizzes = (bookId, data) => http.post(`/books/${bookId}/generate-quizzes`, data || {})
 
 // ===== 统计 =====
 export const getOverview = () => http.get('/stats/overview')
@@ -87,6 +87,8 @@ export const updateKnowledgeNode = (id, data) => http.patch(`/knowledge/nodes/${
 export const deleteKnowledgeNode = (id) => http.delete(`/knowledge/nodes/${id}`)
 export const moveKnowledgeNode = (id, parentId) => http.post(`/knowledge/nodes/${id}/move`, { parent_id: parentId })
 export const getKnowledgeSource = (id) => http.get(`/knowledge/nodes/${id}/source`)
+export const importKnowledgeChapters = (data) => http.post('/knowledge/import-chapters', data)
+export const aiGenerateKnowledge = (data) => http.post('/knowledge/ai-generate', data)
 
 // ===== 设置 =====
 export const getSettings = () => http.get('/settings')

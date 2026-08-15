@@ -32,8 +32,12 @@ class Settings:
         self.host: str = _env("HOST", "127.0.0.1")
         self.port: int = int(_env("PORT", "8000"))
 
-        # 数据目录（绝对路径，确保不依赖运行 cwd）
-        self.data_dir: Path = Path(_env("DATA_DIR", str(BACKEND_DIR / "data"))).resolve()
+        # 数据目录（绝对路径：相对路径按项目根解析，不依赖运行 cwd）
+        _data_raw = _env("DATA_DIR", str(BACKEND_DIR / "data"))
+        _data_path = Path(_data_raw)
+        if not _data_path.is_absolute():
+            _data_path = PROJECT_ROOT / _data_path
+        self.data_dir: Path = _data_path.resolve()
         self.uploads_dir: Path = self.data_dir / "uploads"
         self.db_path: Path = self.data_dir / "study.db"
         self.chroma_dir: Path = self.data_dir / "chroma"

@@ -46,23 +46,31 @@ with sync_playwright() as p:
           f"count={page.locator('.result-item').count()}")
     page.screenshot(path="backend/tests/ui_2_search.png", full_page=True)
 
-    print("=== 3. 知识树页 ===")
+    print("=== 3. 知识树页（大纲/导图双视图）===")
     page.click("text=知识树")
     page.wait_for_timeout(1500)
-    check("知识树入口", page.locator("text=新建知识树").count() >= 1)
+    check("知识树入口", page.locator("button:has-text('＋ 新建')").count() >= 1)
+    check("章节导入按钮", page.locator("button:has-text('从章节导入')").count() == 1)
+    check("AI 生成按钮", page.locator("button:has-text('AI 生成框架')").count() == 1)
     # 创建一个根节点验证 CRUD
-    page.click("text=新建知识树")
+    page.click("button:has-text('＋ 新建')")
     page.wait_for_timeout(800)
-    # ElMessageBox prompt 输入框
     page.locator(".el-message-box__input input").fill("测试知识树")
     page.click(".el-message-box__btns button:has-text('创建')")
     page.wait_for_timeout(1000)
     check("知识树节点创建", page.locator("text=测试知识树").count() >= 1)
+    # 导图视图
+    page.click("text=导图")
+    page.wait_for_timeout(800)
+    check("导图视图", page.locator(".mm-svg").count() == 1)
+    page.click("text=大纲")
+    page.wait_for_timeout(500)
     page.screenshot(path="backend/tests/ui_3_knowledge.png", full_page=True)
 
-    print("=== 4. 刷题自测页 ===")
+    print("=== 4. 刷题自测页（AI 生成入口）===")
     page.click("text=刷题自测")
     page.wait_for_timeout(1500)
+    check("AI 生成题目入口", page.locator("button:has-text('AI 生成题目')").count() == 1)
     page.wait_for_selector(".el-table__row", timeout=10000)
     check("题目列表", page.locator(".el-table__row").count() >= 2,
           f"count={page.locator('.el-table__row').count()}")

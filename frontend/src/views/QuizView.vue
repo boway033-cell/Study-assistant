@@ -3,23 +3,27 @@
     <el-card shadow="never">
       <template #header>
         <div class="card-header">
-          <span>刷题自测</span>
+          <span>刷题自测（AI 分析教材生成）</span>
           <div>
-            <el-select v-model="filterBook" placeholder="全部书籍" clearable style="width: 160px; margin-right: 8px" @change="loadQuizzes">
+            <el-button type="warning" plain @click="openGen">🤖 AI 生成题目</el-button>
+            <el-select v-model="filterBook" placeholder="全部书籍" clearable style="width: 160px; margin: 0 8px" @change="loadQuizzes">
               <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
             </el-select>
             <el-radio-group v-model="filterType" size="small" @change="loadQuizzes">
-              <el-radio-button label="">全部</el-radio-button>
-              <el-radio-button label="choice">选择</el-radio-button>
-              <el-radio-button label="blank">填空</el-radio-button>
-              <el-radio-button label="short">简答</el-radio-button>
+              <el-radio-button value="">全部</el-radio-button>
+              <el-radio-button value="choice">选择</el-radio-button>
+              <el-radio-button value="blank">填空</el-radio-button>
+              <el-radio-button value="short">简答</el-radio-button>
             </el-radio-group>
           </div>
         </div>
       </template>
 
       <div v-if="!currentQuiz" class="quiz-list">
-        <el-table :data="quizzes" v-loading="loading" empty-text="暂无题目（可在设置中配置 AI 后生成）">
+        <el-alert v-if="!quizzes.length" type="info" :closable="false" show-icon
+          title="暂无题目：点击右上角「AI 生成题目」，选择书籍后让 DeepSeek 分析教材内容自动生成"
+          style="margin-bottom: 12px" />
+        <el-table :data="quizzes" v-loading="loading" empty-text="暂无题目（点右上角 AI 生成）">
           <el-table-column prop="question" label="题目" min-width="200" show-overflow-tooltip />
           <el-table-column prop="q_type" label="题型" width="80">
             <template #default="{ row }">
@@ -43,7 +47,6 @@
         </div>
         <div class="quiz-question">{{ currentQuiz.question }}</div>
 
-        <!-- 选择题 -->
         <div v-if="currentQuiz.q_type === 'choice'" class="choice-list">
           <div
             v-for="(opt, i) in currentQuiz.options"
@@ -54,7 +57,6 @@
           >{{ opt }}</div>
         </div>
 
-        <!-- 填空/简答 -->
         <div v-else>
           <el-input
             v-model="userAnswer"
@@ -73,9 +75,7 @@
           >提交答案</el-button>
           <template v-else>
             <div class="result-box" :class="result?.is_correct ? 'ok' : 'no'">
-              <div v-if="currentQuiz.q_type !== 'short'">
-                {{ result?.is_correct ? '✅ 回答正确' : '❌ 回答错误' }}
-              </div>
+              <div v-if="currentQuiz.q_type !== 'short'">{{ result?.is_correct ? '✅ 回答正确' : '❌ 回答错误' }}</div>
               <div class="result-answer">参考答案：{{ result?.answer }}</div>
               <div v-if="result?.explanation" class="result-explanation">解析：{{ result?.explanation }}</div>
             </div>
@@ -86,13 +86,38 @@
         </div>
       </div>
     </el-card>
+
+    <!-- AI 生成对话框 -->
+    <el-dialog v-model="showGen" title="🤖 AI 生成题目（DeepSeek 分析教材内容）" width="500px">
+      <el-form label-width="90px">
+        <el-form-item label="选择书籍">
+          <el-select v-model="genBook" placeholder="选择已解析完成的书籍" style="width: 100%" @change="onGenBook">
+            <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="生成章节">
+          <el-select v-model="genChapter" placeholder="全部章节（默认）" clearable style="width: 100%">
+            <el-option v-for="c in genChapters" :key="c.id" :label="c.title" :value="c.id" />
+          </el-select>
+          <div class="form-tip">不选 = 全书所有章节；每题由 AI 依据对应章节原文生成，选择/简答各 5 道</div>
+        </el-form-item>
+        <div v-if="genRunning" class="gen-progress">
+          <el-progress :percentage="genProgress" :indeterminate="genProgress === 0" />
+          <div class="form-tip">🤖 {{ genStage }}（DeepSeek 正在分析教材原文）</div>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="showGen = false" :disabled="genRunning">关闭</el-button>
+        <el-button type="warning" :loading="genRunning" @click="doGenerate">开始生成</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { listQuizzes, attemptQuiz, selfGrade, listBooks } from '../api'
+import { listQuizzes, attemptQuiz, selfGrade, listBooks, getBook, generateQuizzes, getTask } from '../api'
 
 const quizzes = ref([])
 const loading = ref(false)
@@ -103,6 +128,13 @@ const currentQuiz = ref(null)
 const userAnswer = ref('')
 const answered = ref(false)
 const result = ref(null)
+const showGen = ref(false)
+const genBook = ref(null)
+const genChapter = ref(null)
+const genChapters = ref([])
+const genRunning = ref(false)
+const genProgress = ref(0)
+const genStage = ref('')
 
 const typeName = (t) => ({ choice: '选择', blank: '填空', short: '简答' }[t] || t)
 const typeTag = (t) => ({ choice: 'primary', blank: 'warning', short: 'success' }[t] || 'info')
@@ -120,6 +152,76 @@ const loadQuizzes = async () => {
     ElMessage.error(e.message)
   } finally {
     loading.value = false
+  }
+}
+
+const openGen = () => {
+  if (!books.value.length) {
+    ElMessage.warning('还没有可用的书籍，请先到资料库上传教材')
+    return
+  }
+  showGen.value = true
+  genChapter.value = null
+  genChapters.value = []
+  genProgress.value = 0
+}
+
+const onGenBook = async () => {
+  genChapter.value = null
+  genChapters.value = []
+  if (!genBook.value) return
+  try {
+    const detail = await getBook(genBook.value)
+    const flat = []
+    const walk = (nodes, depth) => {
+      for (const n of nodes) {
+        flat.push({ id: n.id, title: '　'.repeat(depth) + n.title })
+        if (n.children?.length) walk(n.children, depth + 1)
+      }
+    }
+    walk(detail.chapters || [], 0)
+    genChapters.value = flat
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+const doGenerate = async () => {
+  if (!genBook.value) {
+    ElMessage.warning('请选择书籍')
+    return
+  }
+  genRunning.value = true
+  genProgress.value = 0
+  genStage.value = '提交任务…'
+  try {
+    const resp = await generateQuizzes(genBook.value, {
+      chapter_ids: genChapter.value ? [genChapter.value] : [],
+    })
+    genStage.value = 'AI 分析教材中…'
+    for (let i = 0; i < 180; i++) {
+      await new Promise((r) => setTimeout(r, 1500))
+      const t = await getTask(resp.task_id)
+      genProgress.value = Math.round((t.progress || 0) * 100)
+      genStage.value = t.stage === '生成题目' ? (t.message || '生成题目中…') : (t.message || t.stage || '')
+      if (t.status === 'done') {
+        ElMessage.success(`生成完成，共 ${t.result?.generated || 0} 道题`)
+        genRunning.value = false
+        showGen.value = false
+        loadQuizzes()
+        return
+      }
+      if (t.status === 'failed') {
+        ElMessage.error('生成失败：' + (t.message || t.error || ''))
+        genRunning.value = false
+        return
+      }
+    }
+    ElMessage.warning('生成超时，请稍后刷新查看')
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    genRunning.value = false
   }
 }
 
@@ -168,7 +270,7 @@ onMounted(async () => {
   loadQuizzes()
   try {
     const resp = await listBooks({ page_size: 100 })
-    books.value = resp.items
+    books.value = resp.items.filter((b) => b.status === 'ready')
   } catch { /* ignore */ }
 })
 </script>
@@ -193,4 +295,6 @@ onMounted(async () => {
 .result-box.no { background: var(--el-color-danger-light-9); color: var(--el-color-danger); }
 .result-answer { font-size: 14px; margin-top: 4px; }
 .result-explanation { font-size: 13px; color: var(--el-text-color-regular); margin-top: 4px; }
+.form-tip { color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px; }
+.gen-progress { margin-top: 8px; }
 </style>

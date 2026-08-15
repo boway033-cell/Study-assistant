@@ -30,6 +30,40 @@ def load_llm_config(db) -> dict[str, str]:
     }
 
 
+def parse_json_response(text: str):
+    """从 LLM 回答中稳健地提取 JSON（容忍 markdown 代码块与前后杂文）。
+
+    依次尝试：直接解析 → 去 markdown 围栏 → 正则提取首个数组/对象块。
+    """
+    import json as _json
+    import re
+
+    if not text:
+        return None
+    text = text.strip()
+    # 1. 直接解析
+    try:
+        return _json.loads(text)
+    except (ValueError, TypeError):
+        pass
+    # 2. 去掉 markdown 围栏后解析
+    fence = chr(96) * 3
+    cleaned = re.sub(rf"^\s*{fence}(?:json)?\s*", "", text)
+    cleaned = re.sub(rf"\s*{fence}$", "", cleaned).strip()
+    try:
+        return _json.loads(cleaned)
+    except (ValueError, TypeError):
+        pass
+    # 3. 正则提取首个数组/对象块
+    for pat in (r"\[.*?\]", r"\{.*?\}"):
+        m = re.search(pat, text, re.DOTALL)
+        if m:
+            try:
+                return _json.loads(m.group(0))
+            except (ValueError, TypeError):
+                continue
+    return None
+
 def resolve_model(model: str | None) -> str:
     """把档位名（flash/pro）解析为 DeepSeek API 模型名；已是模型名则原样返回。"""
     if not model:

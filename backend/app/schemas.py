@@ -80,6 +80,7 @@ class TaskResp(BaseModel):
     progress: float | None = None
     stage: str | None = None
     message: str | None = None
+    error: str | None = None
     result: dict | None = None
 
 
@@ -257,6 +258,16 @@ class KnowledgeNodeUpdateReq(BaseModel):
 
 class KnowledgeMoveReq(BaseModel):
     parent_id: int | None = None
+
+
+class KnowledgeImportReq(BaseModel):
+    book_id: int
+    parent_node_id: int | None = None  # None = 新建一棵"《书名》章节骨架"根节点
+
+
+class KnowledgeAiGenerateReq(BaseModel):
+    book_id: int
+    parent_node_id: int | None = None
 
 
 class KnowledgeSourceResp(BaseModel):

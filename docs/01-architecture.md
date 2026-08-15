@@ -54,6 +54,10 @@
 | 嵌入模型（可选） | fastembed + bge-small-zh-v1.5 | fastembed≥0.4 | ONNX Runtime，内存 <500MB，全离线 |
 | **云端 LLM** | **DeepSeek API（deepseek-v4-flash / deepseek-v4-pro）** | httpx | **唯一 AI 后端（本地 Ollama 已取消）**；质量高、成本低 |
 | 前端 | Vue3 + Vite + Element Plus | — | 组件全、开发快 |
+| PDF 阅读器 | **pdf.js（pdfjs-dist）** | ≥4 | Mozilla 开源（~48k★），Firefox 同内核；页面内直接渲染，无需下载 |
+| 启动器 | launcher.py + start.bat/stop.bat | — | 自检端口/已在运行，自动开浏览器 |
+| 思维导图 | 自绘 SVG（零依赖） | — | 知识树导图视图，低内存 |
+
 | 图表 | ECharts | — | 趋势图、掌握度柱状图 |
 | 部署 | start.bat 启动 uvicorn 并托管前端静态产物 | — | 免装 Node 即可用 |
 

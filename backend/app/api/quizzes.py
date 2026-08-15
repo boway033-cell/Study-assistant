@@ -12,6 +12,7 @@ from backend.app.models import Attempt, Book, Chapter, Quiz
 from backend.app.schemas import (
     AttemptReq,
     AttemptResp,
+    QuizGenReq,
     QuizImportItem,
     QuizImportReq,
     QuizListItem,
@@ -36,8 +37,8 @@ def _parse_options(options_json: str | None) -> list[str] | None:
 
 
 @router.post("/books/{book_id}/generate-quizzes")
-def generate_quizzes(book_id: int, db: Session = Depends(get_db)):
-    """AI 生成题目（P0 简化：后台任务直接调用 LLM 并入库）。"""
+def generate_quizzes(book_id: int, req: QuizGenReq | None = None, db: Session = Depends(get_db)):
+    """AI 分析教材内容生成题目（后台任务）：默认全章节，可按章节筛选。"""
     from backend.app.services.llm import LLMRouter, load_llm_config
 
     book = db.get(Book, book_id)
@@ -46,16 +47,18 @@ def generate_quizzes(book_id: int, db: Session = Depends(get_db)):
     if book.status != "ready":
         raise HTTPException(409, "书籍尚未解析完成")
 
-    chapters = db.scalars(
-        select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.order_index)
-    ).all()
+    q = select(Chapter).where(Chapter.book_id == book_id)
+    if req is not None and req.chapter_ids:
+        q = q.where(Chapter.id.in_(req.chapter_ids))
+    chapters = db.scalars(q.order_by(Chapter.order_index)).all()
     if not chapters:
         raise HTTPException(400, "书籍没有章节")
 
     async def run(record):
         from backend.app.models import Chunk
-        # 从数据库读取 LLM 配置（设置页的切换/Key 才能生效）
+        # 从数据库读取 LLM 配置；批量生成固定用 flash（速度快、省 token）
         cfg = load_llm_config(db)
+        cfg = {**cfg, "deepseek_model": "flash"}
         provider = LLMRouter.get("auto", cfg)
         created = 0
         for i, ch in enumerate(chapters):
@@ -81,7 +84,8 @@ def generate_quizzes(book_id: int, db: Session = Depends(get_db)):
             try:
                 async for delta in provider.stream_chat(prompt):
                     answer += delta
-                data = json.loads(answer.strip().strip("`").removeprefix("json"))
+                from backend.app.services.llm import parse_json_response
+                data = parse_json_response(answer)
                 for item in data[:10]:
                     q_type = "choice" if item.get("type") == "choice" else "short"
                     opts = item.get("options")

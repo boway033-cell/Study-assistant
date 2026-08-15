@@ -188,7 +188,25 @@ POST   /api/knowledge/nodes/{id}/move    body: {"parent_id": 5}  # 防环校验
 
 > 关联章节时后端以章节所属书籍为准（保证书/章一致）。
 
-### 3.3 节点关联章节原文
+### 3.3 从书籍章节一键导入骨架
+
+```
+POST /api/knowledge/import-chapters
+body: {"book_id": 3, "parent_node_id": null}   // parent_node_id=null → 新建《书名》章节骨架根节点
+```
+
+响应 201：新创建的根节点（含章节子节点树）。
+
+### 3.4 AI 生成课程框架（后台任务）
+
+```
+POST /api/knowledge/ai-generate
+body: {"book_id": 3, "parent_node_id": null}
+```
+
+响应 202：`{"task_id": "knowledge-ai-xxx", "status": "running"}`，用 `GET /api/tasks/{id}` 轮询，完成后 result.created = 节点数。
+
+### 3.5 节点关联章节原文
 
 ```
 GET /api/knowledge/nodes/{id}/source
@@ -204,14 +222,16 @@ GET /api/knowledge/nodes/{id}/source
 
 ## 4. 刷题 /api/quizzes
 
-### 4.1 生成题目（后台任务）
+### 4.1 生成题目（后台任务，AI 分析教材内容生成）
 
 ```
 POST /api/books/{book_id}/generate-quizzes
-body: {"chapter_ids": [10], "types": ["choice", "blank", "short"], "count_per_type": 5}
+body: {"chapter_ids": [10]}     // 可选；缺省 = 全部章节；每章生成选择+简答各 5 道
 ```
 
-响应：`{"task_id": "t-quiz-1", "estimated": 50}`
+响应：`{"task_id": "t-quiz-1", "estimated": 50}`，用 `GET /api/tasks/{id}` 轮询进度，完成后 result.generated = 题目数。
+
+> 批量生成固定使用 flash 模型（速度快、省 token）。
 
 ### 4.2 题目列表 / 4.3 提交答案 / 4.4 简答自评 / 4.5 错题本 / 4.6 管理
 

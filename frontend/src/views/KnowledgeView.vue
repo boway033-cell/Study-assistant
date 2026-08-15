@@ -1,117 +1,187 @@
 <template>
-  <el-row :gutter="16">
-    <!-- 左：知识树编辑 -->
-    <el-col :span="9">
-      <el-card shadow="never">
-        <template #header>
-          <div class="card-header">
-            <span>我的知识树</span>
-            <div>
-              <el-button size="small" type="primary" plain @click="addRoot">＋ 新建知识树</el-button>
-              <el-button size="small" @click="loadTree">刷新</el-button>
+  <div>
+    <el-row :gutter="16">
+      <!-- 左：知识树（大纲 / 导图 双视图） -->
+      <el-col :span="9">
+        <el-card shadow="never" class="kt-card">
+          <template #header>
+            <div class="card-header">
+              <span>我的知识树</span>
+              <div class="header-actions">
+                <el-radio-group v-model="viewMode" size="small">
+                  <el-radio-button value="outline">大纲</el-radio-button>
+                  <el-radio-button value="mindmap">导图</el-radio-button>
+                </el-radio-group>
+                <el-button size="small" type="primary" plain @click="addRoot">＋ 新建</el-button>
+                <el-button size="small" @click="loadTree">刷新</el-button>
+              </div>
             </div>
-          </div>
-        </template>
-        <div v-if="!tree.length" class="tree-empty">
-          <el-empty description="还没有知识树" :image-size="80">
-            <el-button type="primary" @click="addRoot">创建第一棵知识树</el-button>
-          </el-empty>
-          <div class="tree-tip">💡 把自己对课程的理解搭成树：章节 → 概念 → 例题，再关联教材章节，右侧即可查看原文。</div>
-        </div>
-        <el-tree
-          v-else
-          :data="tree"
-          :props="{ label: 'title', children: 'children' }"
-          node-key="id"
-          draggable
-          default-expand-all
-          :allow-drop="allowDrop"
-          highlight-current
-          :expand-on-click-node="false"
-          @node-click="selectNode"
-          @node-drop="handleDrop"
-        >
-          <template #default="{ node, data }">
-            <span class="tree-node">
-              <span class="tree-label">{{ data.title }}</span>
-              <span class="tree-actions" @click.stop>
-                <el-button link size="small" type="primary" @click="addChild(data)">＋</el-button>
-                <el-button link size="small" @click="renameNode(data)">改</el-button>
-                <el-button link size="small" type="danger" @click="removeNode(data)">删</el-button>
-              </span>
-            </span>
           </template>
-        </el-tree>
-        <div class="tree-drag-tip" v-if="tree.length">拖拽节点可调整层级 / 移动位置；点击节点查看详情与原文。</div>
-      </el-card>
-    </el-col>
 
-    <!-- 右：节点详情 + 原文展示 -->
-    <el-col :span="15">
-      <el-card v-if="current" shadow="never">
-        <template #header>
-          <div class="card-header">
-            <span>节点详情：{{ current.title }}</span>
-            <el-tag v-if="source.book_title" size="small" type="info">《{{ source.book_title }}》{{ source.chapter_title || '' }}</el-tag>
+          <div class="gen-buttons">
+            <el-button size="small" type="success" plain @click="showImport = true">📚 从章节导入</el-button>
+            <el-button size="small" type="warning" plain @click="showAi = true">🤖 AI 生成框架</el-button>
           </div>
-        </template>
 
-        <el-form label-width="90px">
-          <el-form-item label="节点标题">
-            <el-input v-model="edit.title" style="max-width: 420px" />
-          </el-form-item>
-          <el-form-item label="关联章节">
-            <el-select v-model="edit.book_id" placeholder="选择书籍" clearable style="width: 200px; margin-right: 8px" @change="onBookChange">
-              <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
-            </el-select>
-            <el-select v-model="edit.chapter_id" placeholder="选择章节" clearable style="width: 240px">
-              <el-option v-for="c in chapterOptions" :key="c.id" :label="c.title" :value="c.id" />
-            </el-select>
-            <div class="form-tip">关联后，右侧即可展示该章节的教材原文（本地解析，不联网）</div>
-          </el-form-item>
-          <el-form-item label="我的笔记">
-            <el-input v-model="edit.note" type="textarea" :rows="4" placeholder="记录自己对知识点的理解 / 总结" />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" @click="saveNode">保存</el-button>
-            <el-button @click="loadSource">加载原文</el-button>
-          </el-form-item>
-        </el-form>
-
-        <!-- 右侧原文展示 -->
-        <el-divider content-position="left">📖 资料原文</el-divider>
-        <div v-if="sourceLoading" v-loading="true" style="height: 120px" />
-        <template v-else-if="source.text">
-          <div class="source-meta">
-            <el-tag size="small" type="info">《{{ source.book_title }}》</el-tag>
-            <el-tag size="small" type="warning">{{ source.chapter_title }}</el-tag>
-            <el-tag size="small" type="success">第 {{ source.page_start }} - {{ source.page_end }} 页</el-tag>
-            <el-radio-group v-model="sourceView" size="small" style="margin-left: auto">
-              <el-radio-button value="text">文本</el-radio-button>
-              <el-radio-button value="pdf" v-if="source.book_id && pdfBookType === 'pdf'">PDF 原文</el-radio-button>
-            </el-radio-group>
+          <!-- 大纲视图 -->
+          <div v-if="viewMode === 'outline'">
+            <div v-if="!tree.length" class="tree-empty">
+              <el-empty description="还没有知识树" :image-size="80">
+                <el-button type="primary" @click="addRoot">创建第一棵知识树</el-button>
+              </el-empty>
+              <div class="tree-tip">💡 搭建方式：① 手动新建节点；② 选一本书「从章节导入」；③ 让 AI 分析教材生成课程框架。</div>
+            </div>
+            <el-tree
+              v-else
+              :data="tree"
+              :props="{ label: 'title', children: 'children' }"
+              node-key="id"
+              draggable
+              default-expand-all
+              :allow-drop="allowDrop"
+              highlight-current
+              :expand-on-click-node="false"
+              @node-click="selectNode"
+              @node-drop="handleDrop"
+            >
+              <template #default="{ node, data }">
+                <span class="tree-node">
+                  <span class="tree-label">{{ data.title }}</span>
+                  <span class="tree-actions" @click.stop>
+                    <el-button link size="small" type="primary" @click="addChild(data)">＋</el-button>
+                    <el-button link size="small" @click="renameNode(data)">改</el-button>
+                    <el-button link size="small" type="danger" @click="removeNode(data)">删</el-button>
+                  </span>
+                </span>
+              </template>
+            </el-tree>
+            <div class="tree-drag-tip" v-if="tree.length">拖拽节点调整层级；点击节点查看详情与原文</div>
           </div>
-          <div v-if="sourceView === 'text'" class="source-text">{{ source.text }}</div>
-          <iframe v-else-if="sourceView === 'pdf'" :src="pdfUrl" class="pdf-frame" frameborder="0" />
-        </template>
-        <el-empty v-else description="该节点尚未关联书籍章节，或该章节暂无内容" :image-size="80" />
-      </el-card>
-      <el-empty v-else description="点击左侧节点查看详情" style="margin-top: 80px" />
-    </el-col>
-  </el-row>
+
+          <!-- 导图视图 -->
+          <div v-else class="mindmap-wrap">
+            <el-empty v-if="!tree.length" description="先创建或导入知识树" :image-size="80" />
+            <MindMap v-else :data="tree" :selected-id="current?.id ?? null" @select="selectNode" />
+          </div>
+        </el-card>
+      </el-col>
+
+      <!-- 右：节点详情 + 原文（pdf.js 阅读器） -->
+      <el-col :span="15">
+        <el-card v-if="current" shadow="never">
+          <template #header>
+            <div class="card-header">
+              <span>节点详情：{{ current.title }}</span>
+              <el-tag v-if="source.book_title" size="small" type="info">《{{ source.book_title }}》{{ source.chapter_title || '' }}</el-tag>
+            </div>
+          </template>
+
+          <el-form label-width="90px">
+            <el-form-item label="节点标题">
+              <el-input v-model="edit.title" style="max-width: 420px" />
+            </el-form-item>
+            <el-form-item label="我的内容">
+              <el-input v-model="edit.note" type="textarea" :rows="5"
+                placeholder="在这里自由记录：知识点的理解、总结、易错点、例题…（纯文本）" />
+            </el-form-item>
+            <el-form-item label="关联章节">
+              <el-select v-model="edit.book_id" placeholder="选择书籍（可跨书）" clearable style="width: 190px; margin-right: 8px" @change="onBookChange">
+                <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
+              </el-select>
+              <el-select v-model="edit.chapter_id" placeholder="选择章节" clearable style="width: 230px">
+                <el-option v-for="c in chapterOptions" :key="c.id" :label="c.title" :value="c.id" />
+              </el-select>
+              <div class="form-tip">关联后，下方用内置 PDF 阅读器直接展示该章教材原文（无需下载）</div>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" @click="saveNode">保存</el-button>
+              <el-button @click="loadSource">加载原文</el-button>
+            </el-form-item>
+          </el-form>
+
+          <el-divider content-position="left">📖 资料原文</el-divider>
+          <div v-if="sourceLoading" v-loading="true" style="height: 120px" />
+          <template v-else-if="source.text">
+            <div class="source-meta">
+              <el-tag size="small" type="info">《{{ source.book_title }}》</el-tag>
+              <el-tag size="small" type="warning">{{ source.chapter_title }}</el-tag>
+              <el-tag size="small" type="success">第 {{ source.page_start }} - {{ source.page_end }} 页</el-tag>
+              <el-radio-group v-model="sourceView" size="small" style="margin-left: auto">
+                <el-radio-button value="text">文本</el-radio-button>
+                <el-radio-button value="pdf" v-if="source.book_id && pdfBookType === 'pdf'">📄 PDF 原文</el-radio-button>
+              </el-radio-group>
+            </div>
+            <div v-if="sourceView === 'text'" class="source-text">{{ source.text }}</div>
+            <div v-else-if="sourceView === 'pdf'" class="pdf-box">
+              <PdfReader :src="pdfUrl" :initial-page="source.page_start || 1" />
+            </div>
+          </template>
+          <el-empty v-else description="该节点尚未关联书籍章节，或该章节暂无内容" :image-size="80" />
+        </el-card>
+        <el-empty v-else description="点击左侧节点查看详情" style="margin-top: 80px" />
+      </el-col>
+    </el-row>
+
+    <!-- 从章节导入 对话框 -->
+    <el-dialog v-model="showImport" title="从书籍章节导入知识树骨架" width="480px">
+      <el-form label-width="90px">
+        <el-form-item label="选择书籍">
+          <el-select v-model="importBook" placeholder="选择已解析完成的书籍" style="width: 100%">
+            <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="导入位置">
+          <el-radio-group v-model="importMode">
+            <el-radio value="new">新建《书名》章节骨架树</el-radio>
+            <el-radio value="current">作为当前选中节点的子节点</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showImport = false">取消</el-button>
+        <el-button type="primary" :loading="importing" @click="doImport">导入</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- AI 生成框架 对话框 -->
+    <el-dialog v-model="showAi" title="AI 生成课程知识框架" width="480px">
+      <el-form label-width="90px">
+        <el-form-item label="选择书籍">
+          <el-select v-model="aiBook" placeholder="选择已解析完成的书籍" style="width: 100%">
+            <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="生成位置">
+          <el-radio-group v-model="aiMode">
+            <el-radio value="new">新建《书名》AI 框架树</el-radio>
+            <el-radio value="current">作为当前选中节点的子节点</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <div class="form-tip" v-if="aiRunning">🤖 DeepSeek 正在分析教材章节与关键词… {{ aiStage }}</div>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAi = false" :disabled="aiRunning">取消</el-button>
+        <el-button type="warning" :loading="aiRunning" @click="doAiGenerate">生成</el-button>
+      </template>
+    </el-dialog>
+  </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import MindMap from '../components/MindMap.vue'
+import PdfReader from '../components/PdfReader.vue'
 import {
   getKnowledgeTree, createKnowledgeNode, updateKnowledgeNode,
   deleteKnowledgeNode, moveKnowledgeNode, getKnowledgeSource,
-  listBooks, getBook, bookFileUrl,
+  importKnowledgeChapters, aiGenerateKnowledge,
+  listBooks, getBook, getTask, bookFileUrl,
 } from '../api'
 
 const tree = ref([])
 const books = ref([])
+const viewMode = ref('outline')
 const current = ref(null)
 const edit = ref({ title: '', book_id: null, chapter_id: null, note: '' })
 const chapterOptions = ref([])
@@ -119,6 +189,15 @@ const source = ref({})
 const sourceLoading = ref(false)
 const sourceView = ref('text')
 const pdfBookType = ref('')
+const showImport = ref(false)
+const importBook = ref(null)
+const importMode = ref('new')
+const importing = ref(false)
+const showAi = ref(false)
+const aiBook = ref(null)
+const aiMode = ref('new')
+const aiRunning = ref(false)
+const aiStage = ref('')
 
 const pdfUrl = computed(() => {
   if (!source.value.book_id || !source.value.page_start) return ''
@@ -161,7 +240,6 @@ const loadChapters = async (bookId) => {
   }
   try {
     const detail = await getBook(bookId)
-    // 展平章节树为下拉选项
     const flat = []
     const walk = (nodes, depth) => {
       for (const n of nodes) {
@@ -274,7 +352,6 @@ const loadSource = async () => {
 const allowDrop = () => true
 
 const handleDrop = async (draggingNode, dropNode, dropType) => {
-  // 计算新的父节点：inner=成为 dropNode 的子节点；before/after=与 dropNode 同级（父=dropNode.parent_id）
   const newParentId = dropType === 'inner' ? dropNode.data.id : (dropNode.data.parent_id ?? null)
   if (newParentId === draggingNode.data.id) return
   try {
@@ -287,6 +364,65 @@ const handleDrop = async (draggingNode, dropNode, dropType) => {
   }
 }
 
+const doImport = async () => {
+  if (!importBook.value) {
+    ElMessage.warning('请选择书籍')
+    return
+  }
+  importing.value = true
+  try {
+    await importKnowledgeChapters({
+      book_id: importBook.value,
+      parent_node_id: importMode.value === 'current' ? (current.value?.id ?? null) : null,
+    })
+    ElMessage.success('章节骨架已导入')
+    showImport.value = false
+    loadTree()
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    importing.value = false
+  }
+}
+
+const doAiGenerate = async () => {
+  if (!aiBook.value) {
+    ElMessage.warning('请选择书籍')
+    return
+  }
+  aiRunning.value = true
+  try {
+    const resp = await aiGenerateKnowledge({
+      book_id: aiBook.value,
+      parent_node_id: aiMode.value === 'current' ? (current.value?.id ?? null) : null,
+    })
+    ElMessage.success('AI 正在分析教材结构…')
+    // 轮询任务
+    for (let i = 0; i < 120; i++) {
+      await new Promise((r) => setTimeout(r, 1500))
+      const t = await getTask(resp.task_id)
+      aiStage.value = t.stage === 'ai' ? (t.message || '分析中…') : t.stage
+      if (t.status === 'done') {
+        ElMessage.success(`AI 知识框架已生成（${t.result?.created || 0} 个节点）`)
+        aiRunning.value = false
+        showAi.value = false
+        loadTree()
+        return
+      }
+      if (t.status === 'failed') {
+        ElMessage.error('生成失败：' + (t.message || t.error || ''))
+        aiRunning.value = false
+        return
+      }
+    }
+    ElMessage.warning('生成超时，请稍后刷新查看')
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    aiRunning.value = false
+  }
+}
+
 onMounted(async () => {
   loadTree()
   await loadBooks()
@@ -295,13 +431,17 @@ onMounted(async () => {
 
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.header-actions { display: flex; align-items: center; gap: 6px; }
+.gen-buttons { display: flex; gap: 8px; margin-bottom: 10px; }
+.kt-card :deep(.el-card__body) { display: flex; flex-direction: column; }
 .tree-empty { padding: 8px 0; }
 .tree-tip { margin-top: 12px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.8; }
 .tree-node { display: flex; align-items: center; justify-content: space-between; flex: 1; padding-right: 8px; }
 .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-actions { display: none; gap: 2px; flex-shrink: 0; }
-.el-tree-node__content:hover .tree-actions { display: inline-flex; }
+:deep(.el-tree-node__content:hover) .tree-actions { display: inline-flex; }
 .tree-drag-tip { margin-top: 10px; font-size: 12px; color: var(--el-text-color-placeholder); }
+.mindmap-wrap { min-height: 480px; }
 .form-tip { color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px; }
 .source-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .source-text {
@@ -310,5 +450,5 @@ onMounted(async () => {
   max-height: 480px; overflow-y: auto; white-space: pre-wrap;
   border: 1px solid var(--el-border-color-extra-light);
 }
-.pdf-frame { width: 100%; height: 560px; border-radius: 8px; border: 1px solid var(--el-border-color); }
+.pdf-box { border-radius: 8px; overflow: hidden; height: 560px; }
 </style>

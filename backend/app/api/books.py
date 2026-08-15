@@ -176,7 +176,9 @@ def get_book_file(book_id: int, db: Session = Depends(get_db)):
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }.get(book.file_type, "application/octet-stream")
-    return FileResponse(path, media_type=media, filename=book.file_path)
+    # content_disposition_type=inline：浏览器内嵌展示（pdf.js / iframe 均可用），不触发下载
+    return FileResponse(path, media_type=media, filename=book.file_path,
+                        content_disposition_type="inline")
 
 
 @router.get("/books/{book_id}/chunk/{chunk_id}")
@@ -291,7 +293,8 @@ def get_task_status(task_id: str):
         raise HTTPException(404, "任务不存在")
     return TaskResp(
         task_id=record.id, status=record.status, progress=record.progress,
-        stage=record.stage, message=record.message, result=record.result,
+        stage=record.stage, message=record.message, error=record.error,
+        result=record.result,
     )
 
 

@@ -80,7 +80,9 @@
               </el-radio-group>
             </div>
             <div v-if="sourceView === 'text'" class="source-text">{{ source.text }}</div>
-            <iframe v-else-if="sourceView === 'pdf'" :src="pdfUrl" class="pdf-frame" frameborder="0" />
+            <div v-else-if="sourceView === 'pdf'" class="pdf-box">
+              <PdfReader :src="pdfUrl" :initial-page="source.page_start || 1" />
+            </div>
           </template>
           <el-empty v-else description="提问后，答案引用的原文会自动显示在这里" :image-size="80" />
         </el-card>
@@ -93,6 +95,7 @@
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listBooks, chatStream, chatHistory, getChunkOriginal, getBook, bookFileUrl } from '../api'
+import PdfReader from '../components/PdfReader.vue'
 
 const books = ref([])
 const bookId = ref(null)
@@ -110,8 +113,8 @@ const sourceView = ref('text')
 const sourceBookType = ref('')
 
 const pdfUrl = computed(() => {
-  if (!source.value.book_id || !source.value.page_start) return ''
-  return `${bookFileUrl(source.value.book_id)}#page=${source.value.page_start}`
+  if (!source.value.book_id) return ''
+  return bookFileUrl(source.value.book_id)
 })
 const activeSourceIndex = ref(null)
 const activeSourceIdx = ref(null)
@@ -283,5 +286,5 @@ onMounted(async () => {
   max-height: 400px; overflow-y: auto; white-space: pre-wrap;
   border: 1px solid var(--el-border-color-extra-light);
 }
-.pdf-frame { width: 100%; height: 480px; border-radius: 8px; border: 1px solid var(--el-border-color); }
+.pdf-box { height: 480px; border-radius: 8px; overflow: hidden; border: 1px solid var(--el-border-color-extra-light); }
 </style>

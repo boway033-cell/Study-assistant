@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from backend.app.core.database import get_db
 from backend.app.models import Book, Chapter, Chunk, KnowledgeNode
 from backend.app.schemas import (
+    KnowledgeAiGenerateReq,
+    KnowledgeImportReq,
     KnowledgeMoveReq,
     KnowledgeNodeCreateReq,
     KnowledgeNodeResp,
@@ -157,3 +159,148 @@ def node_source(node_id: int, db: Session = Depends(get_db)):
         page_start=chapter.start_page, page_end=chapter.end_page,
         text=text,
     )
+
+
+@router.post("/import-chapters", response_model=KnowledgeNodeResp, status_code=201)
+def import_chapters(req: KnowledgeImportReq, db: Session = Depends(get_db)):
+    """从书籍章节树一键导入知识树骨架（本地数据，无需 AI）。"""
+    book = db.get(Book, req.book_id)
+    if not book:
+        raise HTTPException(404, "书籍不存在")
+
+    # 确定父节点：指定了就用它，否则新建《书名》根节点
+    if req.parent_node_id is not None:
+        parent = _get_node(db, req.parent_node_id)
+        parent_id = parent.id
+        root_created = None
+    else:
+        root = KnowledgeNode(parent_id=None, title=f"《{book.title}》章节骨架", order_index=0)
+        db.add(root)
+        db.flush()
+        parent_id = root.id
+        root_created = root
+
+    chapters = db.scalars(
+        select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.order_index)
+    ).all()
+    # 按 parent_id 组装层级
+    by_parent: dict[int | None, list[Chapter]] = {}
+    for ch in chapters:
+        by_parent.setdefault(ch.parent_id, []).append(ch)
+
+    def build(parent_db_id: int, children: list[Chapter]) -> None:
+        for ch in children:
+            node = KnowledgeNode(
+                parent_id=parent_db_id, title=ch.title, book_id=book.id,
+                chapter_id=ch.id, order_index=ch.order_index,
+            )
+            db.add(node)
+            db.flush()
+            if ch.id in by_parent:
+                build(node.id, by_parent[ch.id])
+
+    build(parent_id, by_parent.get(None, []))
+    db.commit()
+    if root_created is not None:
+        db.refresh(root_created)
+        return _to_resp(root_created, db)
+    parent = _get_node(db, parent_id)
+    return _to_resp(parent, db)
+
+
+@router.post("/ai-generate", status_code=202)
+def ai_generate(req: KnowledgeAiGenerateReq, db: Session = Depends(get_db)):
+    """AI（DeepSeek）分析教材章节与关键词，生成课程知识框架树（后台任务）。"""
+    from backend.app.services.llm import LLMRouter, load_llm_config
+    from backend.app.worker.tasks import submit
+
+    book = db.get(Book, req.book_id)
+    if not book:
+        raise HTTPException(404, "书籍不存在")
+    if book.status != "ready":
+        raise HTTPException(409, "书籍尚未解析完成")
+    if req.parent_node_id is not None:
+        _get_node(db, req.parent_node_id)
+
+    chapters = db.scalars(
+        select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.order_index)
+    ).all()
+    if not chapters:
+        raise HTTPException(400, "书籍没有章节")
+
+    from backend.app.models import BookAnalysis
+    import json as _json
+
+    analysis = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book.id))
+    keywords = []
+    if analysis and analysis.keywords_json:
+        try:
+            keywords = _json.loads(analysis.keywords_json)[:40]
+        except (ValueError, TypeError):
+            keywords = []
+    chapter_titles = [f"{ch.order_index}. {ch.title}" for ch in chapters][:60]
+    material = {
+        "book_title": book.title,
+        "chapters": chapter_titles,
+        "keywords": keywords,
+    }
+
+    async def run(record):
+        from backend.app.worker.tasks import update_progress
+        update_progress(record, 0.1, "ai", "正在分析教材章节结构...")
+        cfg = load_llm_config(db)
+        cfg = {**cfg, "deepseek_model": "flash"}  # 批量生成固定用 flash
+        provider = LLMRouter.get("auto", cfg)
+        prompt = [
+            {"role": "system", "content": (
+                "你是课程知识结构化助手。根据教材的章节目录和关键词，生成一份课程知识框架树"
+                "（帮助复习用的顶层结构，3 层以内）。只输出 JSON 数组，格式："
+                '[{"title":"一级主题","children":[{"title":"二级主题","children":[{"title":"三级主题","children":[]}]}]}]。',
+                "要求：1) 一级 3-8 个；2) 主题用概括性术语（可不同于原章节名）；"
+                "3) 覆盖全部关键词；4) 不要输出解释文字。"
+            )},
+            {"role": "user", "content": _json.dumps(material, ensure_ascii=False)},
+        ]
+        answer = ""
+        try:
+            async for delta in provider.stream_chat(prompt):
+                answer += delta
+            from backend.app.services.llm import parse_json_response
+            data = parse_json_response(answer)
+            if not isinstance(data, list):
+                raise ValueError("非数组")
+        except Exception:  # noqa: BLE001
+            raise RuntimeError("AI 生成失败，请重试或改用手动/章节导入")
+
+        update_progress(record, 0.6, "ai", "正在写入知识树...")
+        total = _create_ai_tree(db, req, data)
+        update_progress(record, 1.0, "ai", "完成")
+        return {"created": total}
+
+    record = submit("knowledge-ai", run)
+    return {"task_id": record.id, "status": "running", "stage": "ai"}
+
+
+def _create_ai_tree(db: Session, req: KnowledgeAiGenerateReq, data: list[dict]) -> int:
+    """把 AI 返回的 JSON 树写入 knowledge_nodes，返回创建数。"""
+    total = 0
+
+    def walk(items: list[dict], parent_id: int | None, depth: int) -> None:
+        nonlocal total
+        if depth > 3:
+            return
+        for i, item in enumerate(items[:12]):
+            title = str(item.get("title", "")).strip()
+            if not title:
+                continue
+            node = KnowledgeNode(parent_id=parent_id, title=title, order_index=i)
+            db.add(node)
+            db.flush()
+            total += 1
+            children = item.get("children") or []
+            if isinstance(children, list) and children:
+                walk(children, node.id, depth + 1)
+
+    walk(data, req.parent_node_id, 0)
+    db.commit()
+    return total
