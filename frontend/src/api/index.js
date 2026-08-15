@@ -1,0 +1,90 @@
+import axios from 'axios'
+
+const http = axios.create({ baseURL: '/api', timeout: 60000 })
+
+// 统一错误提示
+http.interceptors.response.use(
+  (res) => res.data,
+  (err) => {
+    const msg = err.response?.data?.detail || err.message || '请求失败'
+    return Promise.reject(new Error(msg))
+  }
+)
+
+export default http
+
+// ===== 书籍 =====
+export const listBooks = (params) => http.get('/books', { params })
+export const getBook = (id) => http.get(`/books/${id}`)
+export const uploadBook = (file) => {
+  const form = new FormData()
+  form.append('file', file)
+  return http.post('/books/upload', form, { timeout: 120000 })
+}
+export const deleteBook = (id) => http.delete(`/books/${id}`)
+export const renameBook = (id, title) => http.patch(`/books/${id}`, { title })
+export const searchBooks = (params) => http.get('/search', { params })
+export const getTask = (id) => http.get(`/tasks/${id}`)
+
+// ===== 问答 =====
+export const chatStream = async (body, onEvent) => {
+  const resp = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!resp.ok) throw new Error('请求失败')
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    // SSE 事件以空行分隔
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop()
+    for (const block of blocks) {
+      const lines = block.split('\n')
+      let event = 'message'
+      const dataLines = []
+      for (const line of lines) {
+        if (line.startsWith('event:')) event = line.slice(6).trim()
+        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+      }
+      if (dataLines.length) {
+        try { onEvent(event, JSON.parse(dataLines.join('\n'))) } catch { /* ignore */ }
+      }
+    }
+  }
+}
+export const chatHistory = (params) => http.get('/chat/history', { params })
+export const deleteChat = (id) => http.delete(`/chat/${id}`)
+
+// ===== 卡片 =====
+export const reviewQueue = () => http.get('/cards/review-queue')
+export const reviewCard = (id, rating) => http.post(`/cards/${id}/review`, { rating })
+export const listCards = (params) => http.get('/cards', { params })
+export const createCard = (data) => http.post('/cards', data)
+export const updateCard = (id, data) => http.patch(`/cards/${id}`, data)
+export const deleteCard = (id) => http.delete(`/cards/${id}`)
+export const generateCards = (bookId) => http.post(`/books/${bookId}/generate-cards`)
+
+// ===== 题目 =====
+export const listQuizzes = (params) => http.get('/quizzes', { params })
+export const attemptQuiz = (id, answer) => http.post(`/quizzes/${id}/attempt`, { user_answer: answer })
+export const selfGrade = (id, correct) => http.post(`/quizzes/${id}/self-grade`, { is_correct: correct })
+export const wrongQuizzes = (params) => http.get('/quizzes/wrong', { params })
+export const importQuizzes = (data) => http.post('/quizzes/batch-import', data)
+export const generateQuizzes = (bookId) => http.post(`/books/${bookId}/generate-quizzes`)
+
+// ===== 统计 =====
+export const getOverview = () => http.get('/stats/overview')
+export const getMastery = (bookId) => http.get('/stats/mastery', { params: { book_id: bookId } })
+export const getReviewHistory = (days) => http.get('/stats/review-history', { params: { days } })
+export const getWeakness = () => http.get('/stats/weakness')
+
+// ===== 设置 =====
+export const getSettings = () => http.get('/settings')
+export const updateSettings = (data) => http.put('/settings', data)
+export const probeSettings = () => http.get('/settings/probe')

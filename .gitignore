@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 数据（用户资料，不纳入版本控制）
+backend/data/
+backend/data/*
+!backend/data/.gitkeep
+
+# 环境配置
+.env
+
+# Node
+node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 系统文件
+Thumbs.db
+.DS_Store
