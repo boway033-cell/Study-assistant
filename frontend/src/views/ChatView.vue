@@ -156,29 +156,29 @@ onMounted(async () => {
 .chat-page { height: calc(100vh - 120px); }
 .chat-card { height: 100%; display: flex; flex-direction: column; }
 .msg-box { flex: 1; overflow-y: auto; padding: 8px; }
-.empty-tip { color: #909399; text-align: center; margin-top: 60px; line-height: 2; }
+.empty-tip { color: var(--el-text-color-secondary); text-align: center; margin-top: 60px; line-height: 2; }
 .msg { margin-bottom: 16px; display: flex; gap: 10px; }
 .msg.user { flex-direction: row-reverse; }
 .msg-label {
   width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
-  font-size: 13px; color: #fff; background: #409eff;
+  font-size: 13px; color: #fff; background: var(--el-color-primary);
 }
-.msg.user .msg-label { background: #67c23a; }
+.msg.user .msg-label { background: var(--el-color-success); }
 .msg-content {
   max-width: 70%; padding: 10px 14px; border-radius: 8px;
-  background: #f5f7fa; font-size: 14px; line-height: 1.7; white-space: pre-wrap;
+  background: var(--el-fill-color-lighter); font-size: 14px; line-height: 1.7; white-space: pre-wrap;
 }
-.msg.user .msg-content { background: #ecf5ff; }
+.msg.user .msg-content { background: var(--el-color-primary-light-9); }
 .streaming::after { content: '▌'; animation: blink 1s infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .sources { margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap; }
 .input-row { display: flex; align-items: flex-end; margin-top: 12px; }
-.history-title { font-weight: 600; margin-bottom: 8px; color: #303133; }
+.history-title { font-weight: 600; margin-bottom: 8px; color: var(--el-text-color-primary); }
 .history-item { padding: 8px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; }
-.history-item:hover { background: #f5f7fa; }
+.history-item:hover { background: var(--el-fill-color-lighter); }
 .history-q { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.history-time { font-size: 11px; color: #c0c4cc; }
+.history-time { font-size: 11px; color: var(--el-text-color-placeholder); }
 .source-tag { cursor: pointer; }
 .source-tag:hover { opacity: 0.8; }
 </style>

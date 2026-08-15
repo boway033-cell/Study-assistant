@@ -80,13 +80,13 @@ defineExpose({ open })
 <style scoped>
 .loc-meta { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .orig-text {
-  background: #f8f9fa; border-radius: 8px; padding: 14px;
-  font-size: 14px; line-height: 1.9; color: #303133;
+  background: var(--el-fill-color-lighter); border-radius: 8px; padding: 14px;
+  font-size: 14px; line-height: 1.9; color: var(--el-text-color-primary);
   max-height: 320px; overflow-y: auto; white-space: pre-wrap;
-  border: 1px solid #ebeef5; margin-bottom: 16px;
+  border: 1px solid var(--el-border-color-extra-light); margin-bottom: 16px;
 }
-.pdf-view { border-top: 1px solid #e4e7ed; padding-top: 12px; }
-.pdf-tip { color: #909399; font-size: 13px; margin-bottom: 8px; }
-.pdf-frame { width: 100%; height: 460px; border-radius: 8px; border: 1px solid #dcdfe6; }
+.pdf-view { border-top: 1px solid var(--el-border-color-light); padding-top: 12px; }
+.pdf-tip { color: var(--el-text-color-secondary); font-size: 13px; margin-bottom: 8px; }
+.pdf-frame { width: 100%; height: 460px; border-radius: 8px; border: 1px solid var(--el-border-color); }
 .pdf-actions { margin-top: 8px; display: flex; gap: 8px; }
 </style>

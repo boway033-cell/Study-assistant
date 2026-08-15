@@ -249,19 +249,20 @@ onMounted(loadBooks)
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .result-item { margin-top: 8px; }
 .result-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
-.result-chapter { color: #909399; font-size: 12px; }
-.result-page { color: #909399; font-size: 12px; }
-.result-snippet { font-size: 14px; line-height: 1.6; color: #303133; }
-.result-count { color: #909399; font-size: 12px; margin-bottom: 8px; }
+.result-chapter { color: var(--el-text-color-secondary); font-size: 12px; }
+.result-page { color: var(--el-text-color-secondary); font-size: 12px; }
+.result-snippet { font-size: 14px; line-height: 1.6; color: var(--el-text-color-primary); }
+.result-count { color: var(--el-text-color-secondary); font-size: 12px; margin-bottom: 8px; }
 .analysis-section { margin-bottom: 12px; }
-.analysis-title { font-size: 13px; font-weight: 600; color: #606266; margin-bottom: 6px; }
+.analysis-title { font-size: 13px; font-weight: 600; color: var(--el-text-color-regular); margin-bottom: 6px; }
 .analysis-tag { margin: 2px 4px 2px 0; cursor: pointer; }
 .keyword-chip {
   display: inline-block; padding: 2px 10px; margin: 2px 4px 2px 0;
-  background: #f4f4f5; border-radius: 4px; font-size: 12px; color: #606266;
-  cursor: pointer; user-select: none;
+  background: var(--el-fill-color-lighter); border-radius: 4px; font-size: 12px;
+  color: var(--el-text-color-regular); cursor: pointer; user-select: none;
+  border: 1px solid var(--el-border-color-extra-light);
 }
-.keyword-chip:hover { background: #ecf5ff; color: #409eff; }
-.analysis-item { font-size: 13px; line-height: 1.6; margin-bottom: 4px; color: #303133; }
-.analysis-meta { font-size: 12px; color: #909399; }
+.keyword-chip:hover { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
+.analysis-item { font-size: 13px; line-height: 1.6; margin-bottom: 4px; color: var(--el-text-color-primary); }
+.analysis-meta { font-size: 12px; color: var(--el-text-color-secondary); }
 </style>

@@ -198,19 +198,19 @@ onMounted(async () => {
 .queue-info { min-height: 200px; display: flex; align-items: center; justify-content: center; }
 .queue-stats { text-align: center; }
 .card-deck { display: flex; flex-direction: column; align-items: center; gap: 16px; }
-.deck-count { color: #909399; font-size: 13px; }
+.deck-count { color: var(--el-text-color-secondary); font-size: 13px; }
 .flashcard { width: 100%; height: 300px; perspective: 1000px; cursor: pointer; }
 .flashcard-inner { position: relative; width: 100%; height: 100%; transition: transform 0.5s; transform-style: preserve-3d; }
 .flashcard.flipped .flashcard-inner { transform: rotateY(180deg); }
 .flashcard-face {
   position: absolute; width: 100%; height: 100%; backface-visibility: hidden;
   border-radius: 12px; padding: 24px; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; border: 1px solid #e4e7ed;
+  align-items: center; justify-content: center; border: 1px solid var(--el-border-color-light);
 }
-.front { background: #ecf5ff; }
-.back { background: #f0f9eb; transform: rotateY(180deg); }
-.face-label { font-size: 12px; color: #909399; margin-bottom: 12px; }
+.front { background: linear-gradient(160deg, var(--el-color-primary-light-9) 0%, #ffffff 100%); }
+.back { background: linear-gradient(160deg, var(--el-color-success-light-9) 0%, #ffffff 100%); transform: rotateY(180deg); }
+.face-label { font-size: 12px; color: var(--el-text-color-secondary); margin-bottom: 12px; }
 .face-text { font-size: 18px; line-height: 1.8; text-align: center; }
-.flip-hint { position: absolute; bottom: 16px; font-size: 12px; color: #c0c4cc; }
+.flip-hint { position: absolute; bottom: 16px; font-size: 12px; color: var(--el-text-color-placeholder); }
 .rating-row { display: flex; gap: 12px; }
 </style>

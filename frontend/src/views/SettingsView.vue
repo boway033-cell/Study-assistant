@@ -142,8 +142,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.form-tip { color: #909399; font-size: 12px; margin-top: 4px; }
+.form-tip { color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .help-list { line-height: 2; padding-left: 20px; }
-.help-list code { background: #f5f7fa; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+.help-list code { background: var(--el-fill-color-lighter); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
 </style>

@@ -177,20 +177,20 @@ onMounted(async () => {
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .quiz-playing { padding: 8px 0; }
 .quiz-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
-.quiz-source { color: #909399; font-size: 13px; }
+.quiz-source { color: var(--el-text-color-secondary); font-size: 13px; }
 .quiz-question { font-size: 17px; font-weight: 600; margin-bottom: 20px; line-height: 1.7; }
 .choice-item {
-  padding: 12px 16px; border: 1px solid #e4e7ed; border-radius: 8px;
+  padding: 12px 16px; border: 1px solid var(--el-border-color-light); border-radius: 8px;
   margin-bottom: 8px; cursor: pointer; transition: all 0.2s;
 }
-.choice-item:hover { border-color: #409eff; }
-.choice-item.selected { border-color: #409eff; background: #ecf5ff; }
-.choice-item.correct { border-color: #67c23a; background: #f0f9eb; }
-.choice-item.wrong { border-color: #f56c6c; background: #fef0f0; }
+.choice-item:hover { border-color: var(--el-color-primary); }
+.choice-item.selected { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.choice-item.correct { border-color: var(--el-color-success); background: var(--el-color-success-light-9); }
+.choice-item.wrong { border-color: var(--el-color-danger); background: var(--el-color-danger-light-9); }
 .quiz-actions { margin-top: 20px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .result-box { padding: 12px 16px; border-radius: 8px; margin-right: 8px; }
-.result-box.ok { background: #f0f9eb; color: #67c23a; }
-.result-box.no { background: #fef0f0; color: #f56c6c; }
+.result-box.ok { background: var(--el-color-success-light-9); color: var(--el-color-success); }
+.result-box.no { background: var(--el-color-danger-light-9); color: var(--el-color-danger); }
 .result-answer { font-size: 14px; margin-top: 4px; }
-.result-explanation { font-size: 13px; color: #606266; margin-top: 4px; }
+.result-explanation { font-size: 13px; color: var(--el-text-color-regular); margin-top: 4px; }
 </style>

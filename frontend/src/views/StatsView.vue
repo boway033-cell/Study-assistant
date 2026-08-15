@@ -119,7 +119,7 @@ const renderMastery = () => {
       {
         name: '掌握度', type: 'bar', barWidth: '50%',
         itemStyle: {
-          color: (p) => (p.value >= 0.7 ? '#67c23a' : p.value >= 0.4 ? '#e6a23c' : '#f56c6c'),
+          color: (p) => (p.value >= 0.7 ? '#5f9b8f' : p.value >= 0.4 ? '#c99a5b' : '#c45656'),
         },
         data: masteryData.value.map((c) => c.mastery),
       },
