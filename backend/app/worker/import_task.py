@@ -93,10 +93,23 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         from backend.app.services.analyzer.keyinfo import analyze_book_text
         keyinfo = analyze_book_text(cleaned_pages)
 
-        # 5. 章节树（目录书签优先；无目录时 LLM 辅助提取）
+        # 5. 章节树（目录书签优先；无目录时启发式提取，再 LLM 兜底）
         update_progress(record, 0.5, "chapters", "正在构建章节树...")
         if not result.toc:
-            update_progress(record, 0.5, "chapters", "未检测到目录，尝试 LLM 提取章节...")
+            # 5a. 启发式：扫描「第X章/第X节」标题（零成本）
+            update_progress(record, 0.5, "chapters", "未检测到目录，正在启发式提取章节...")
+            try:
+                from backend.app.services.rag.toc_heuristic import extract_toc_heuristic
+                heu_toc = extract_toc_heuristic(cleaned_pages)
+                if heu_toc:
+                    from backend.app.services.parser import TocItem
+                    result.toc = [TocItem(title=t["title"], level=t["level"], page=t["page"])
+                                  for t in heu_toc]
+            except Exception:  # noqa: BLE001
+                pass
+        if not result.toc:
+            # 5b. LLM 提取（需配置 LLM）
+            update_progress(record, 0.5, "chapters", "启发式提取失败，尝试 LLM 提取章节...")
             try:
                 from backend.app.services.llm import LLMRouter, load_llm_config
                 from backend.app.services.rag.toc_llm import extract_toc_with_llm
