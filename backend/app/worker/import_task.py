@@ -93,8 +93,22 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         from backend.app.services.analyzer.keyinfo import analyze_book_text
         keyinfo = analyze_book_text(cleaned_pages)
 
-        # 5. 章节树（用清洗后的文本 + 原目录）
+        # 5. 章节树（目录书签优先；无目录时 LLM 辅助提取）
         update_progress(record, 0.5, "chapters", "正在构建章节树...")
+        if not result.toc:
+            update_progress(record, 0.5, "chapters", "未检测到目录，尝试 LLM 提取章节...")
+            try:
+                from backend.app.services.llm import LLMRouter, load_llm_config
+                from backend.app.services.rag.toc_llm import extract_toc_with_llm
+                provider = LLMRouter.get("auto", load_llm_config(db))
+                llm_toc = await extract_toc_with_llm(provider, cleaned_pages)
+                if llm_toc:
+                    from backend.app.services.parser import TocItem
+                    result.toc = [TocItem(title=t["title"], level=t["level"], page=t["page"])
+                                  for t in llm_toc]
+            except Exception:  # noqa: BLE001
+                pass
+
         chapter_defs = build_chapters(result.toc, result.total_pages)
         id_map: dict[int, int] = {}
         for ch_def in chapter_defs:
@@ -123,9 +137,14 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
             for i, s, e in chapter_pages
         ]
 
-        # 6. 切片（清洗后的文本）
-        update_progress(record, 0.6, "chunking", "正在切片...")
-        chunks = split_pages_into_chunks(cleaned_pages, chapter_pages_db)
+        # 6. 切片（语义切块：段落边界 + 页码映射；字符窗口为兜底）
+        update_progress(record, 0.6, "chunking", "正在语义切片...")
+        try:
+            from backend.app.services.rag.semantic_chunker import split_semantic_chunks
+            chunks = split_semantic_chunks(cleaned_pages, chapter_pages_db)
+        except Exception:  # noqa: BLE001
+            from backend.app.services.rag.chunker import split_pages_into_chunks
+            chunks = split_pages_into_chunks(cleaned_pages, chapter_pages_db)
 
         # 7. 写 chunks + FTS 索引
         delete_book_index(book.id)
@@ -148,8 +167,19 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         for i, ch in enumerate(chunk_rows):
             index_chunk(book.id, ch.chapter_id, ch.page_start, ch.id, ch.content)
             if i % 20 == 0:
-                update_progress(record, 0.75 + 0.2 * (i + 1) / total, "indexing",
+                update_progress(record, 0.75 + 0.15 * (i + 1) / total, "indexing",
                                 f"索引中 {i + 1}/{total}")
+
+        # 7b. 向量化（可选，settings.vector_search 开启时）
+        from backend.app.services.rag import vector
+        if vector.is_enabled():
+            update_progress(record, 0.9, "vectorizing", "正在向量化（首次需下载嵌入模型）...")
+            vector.delete_book_vectors(book.id)
+            vector.upsert_chunks(book.id, [
+                {"id": ch.id, "content": ch.content, "chapter_id": ch.chapter_id,
+                 "page_start": ch.page_start, "page_end": ch.page_end}
+                for ch in chunk_rows
+            ])
 
         # 8. 写分析结果
         update_progress(record, 0.95, "analysis", "正在保存分析结果...")

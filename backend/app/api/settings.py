@@ -79,6 +79,12 @@ def update_settings(req: SettingsUpdateReq, db: Session = Depends(get_db)):
         _set_setting(db, "rag_top_k", str(req.rag_top_k))
     if req.vector_search is not None:
         _set_setting(db, "vector_search", "true" if req.vector_search else "false")
+        # 同步到内存 settings，使向量模块开关即时生效
+        import backend.app.core.config as _cfg
+        _cfg.settings.vector_search = req.vector_search
+        if req.vector_search:
+            from backend.app.services.rag import vector
+            vector.ensure_model_ready()
     if req.ollama_model is not None:
         _set_setting(db, "ollama_model", req.ollama_model.strip())
     db.commit()

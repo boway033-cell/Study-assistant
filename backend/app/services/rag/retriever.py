@@ -1,59 +1,96 @@
-"""RAG 服务：宽定位检索 + prompt 组装（docs/01-architecture.md §4.2）
+"""RAG 服务：宽定位检索 + 混合向量检索 + prompt 组装
 
-宽定位策略（杜绝「概念无法 fetch」）：
-1. 主检索：FTS5 关键词（BM25 风格）
-2. 降级检索：命中不足时，用 LIKE 子串匹配兜底（任何含该词的 chunk 都能命中）
-3. 章节级上下文：命中 chunk 后，拉取同章节相邻 chunk 拼接，保证完整输出文献内容
-4. 全文兜底：仍无命中时，返回书籍目录 + 各章节关键词，让 LLM 基于全书结构回答
+检索策略（杜绝「概念无法 fetch」）：
+1. 向量检索（开启时优先）：语义召回
+2. FTS5 关键词检索：BM25 风格
+3. LIKE 子串兜底：命中不足时，任何含词的 chunk 都能命中
+4. 章节级上下文：命中 chunk 拉取同章节相邻 chunk
+5. 全文兜底：目录结构（is_outline）
 """
 from __future__ import annotations
 
 from backend.app.core.config import settings
-from backend.app.services.rag import fts
+from backend.app.services.rag import fts, vector
 from backend.app.services.rag.fts import fallback_search, get_chapter_neighbors, get_book_outline
 
-# 主检索命中不足时触发降级检索的阈值
 MIN_PRIMARY_HITS = 3
 
 
 def retrieve(question: str, book_id: int | None = None, top_k: int | None = None) -> list[dict]:
-    """宽定位检索。返回 items（含 snippet / page / book_title / full_context 等）。"""
+    """宽定位 + 混合检索。返回 items（含 page_start/page_end/context 等）。"""
     k = top_k or settings.rag_top_k
+    seen: set[int] = set()
+    items: list[dict] = []
 
-    # 1. 主检索：FTS5
-    items = fts.search(question, book_id=book_id, top_k=k)["items"]
+    # 1. 向量检索（可选，语义精准）
+    if vector.is_enabled():
+        for it in vector.vector_search(question, book_id=book_id, top_k=k):
+            cid = it["chunk_id"]
+            if cid in seen:
+                continue
+            seen.add(cid)
+            # 补充书籍/章节标题信息
+            items.append(_enrich_vector_item(it, book_id))
 
-    # 2. 降级检索：命中不足 → LIKE 子串匹配
+    # 2. FTS5 关键词
+    for it in fts.search(question, book_id=book_id, top_k=k)["items"]:
+        cid = it["chunk_id"]
+        if cid in seen:
+            continue
+        seen.add(cid)
+        items.append(it)
+
+    # 3. LIKE 兜底（命中仍不足）
     if len(items) < MIN_PRIMARY_HITS:
-        fallback = fallback_search(question, book_id=book_id, limit=k)
-        # 合并去重（fallback 在前，主检索结果补后）
-        seen = {it["chunk_id"] for it in items}
-        for it in fallback:
-            if it["chunk_id"] not in seen:
-                items.append(it)
-                seen.add(it["chunk_id"])
+        for it in fallback_search(question, book_id=book_id, limit=k):
+            cid = it["chunk_id"]
+            if cid in seen:
+                continue
+            seen.add(cid)
+            items.append(it)
 
-    # 3. 章节级上下文：为每个命中 chunk 附加同章节上下文
+    # 4. 章节级上下文
     enriched = []
     for it in items[:k]:
-        context = get_chapter_neighbors(it["chunk_id"], radius=1)
         it = dict(it)
-        it["context"] = context  # 供 prompt 组装使用完整章节内容
+        it["context"] = get_chapter_neighbors(it["chunk_id"], radius=1)
         enriched.append(it)
 
-    # 4. 全文兜底：完全无命中 → 返回目录结构
+    # 5. 目录兜底
     if not enriched:
         enriched = [get_book_outline(book_id)]
 
     return enriched
 
 
-def build_prompt(question: str, sources: list[dict]) -> list[dict]:
-    """组装 LLM messages：系统提示 + 检索内容 + 问题。
+def _enrich_vector_item(it: dict, book_id: int | None) -> dict:
+    """向量结果补充书籍/章节标题。"""
+    from backend.app.core.database import engine
+    from sqlalchemy import text as sql_text
 
-    sources 中每个 item 可含 context（章节级完整上下文），优先用 context，
-    保证 LLM 在理解全文的基础上完整输出。
-    """
+    chunk_id = it["chunk_id"]
+    with engine.connect() as conn:
+        row = conn.execute(sql_text(
+            "SELECT c.book_id, b.title AS book_title, ch.title AS chapter_title, c.page_start AS page "
+            "FROM chunks c LEFT JOIN books b ON b.id=c.book_id "
+            "LEFT JOIN chapters ch ON ch.id=c.chapter_id WHERE c.id=:id"
+        ), {"id": chunk_id}).mappings().first()
+    if row:
+        it["book_id"] = row["book_id"]
+        it["book_title"] = row["book_title"] or ""
+        it["chapter_title"] = row["chapter_title"] or None
+        it["page"] = row["page"]
+    else:
+        it["book_id"] = book_id
+        it["book_title"] = ""
+        it["chapter_title"] = None
+        it["page"] = it.get("page_start")
+    it["snippet"] = (it.get("content") or "")[:400]
+    return it
+
+
+def build_prompt(question: str, sources: list[dict]) -> list[dict]:
+    """组装 LLM messages：系统提示 + 检索内容 + 问题。"""
     if not sources:
         system = (
             "你是一个专业课学习助手。用户正在复习专业书籍。"
@@ -64,7 +101,6 @@ def build_prompt(question: str, sources: list[dict]) -> list[dict]:
             {"role": "user", "content": question},
         ]
 
-    # 目录兜底（无正文命中）
     if sources and sources[0].get("is_outline"):
         outline = sources[0]
         system = (
@@ -88,12 +124,10 @@ def build_prompt(question: str, sources: list[dict]) -> list[dict]:
             loc += f" {chap}"
         if page:
             loc += f" 第{page}页"
-        # 优先使用章节级完整上下文，否则用 snippet
         content = s.get("context") or s.get("snippet", "")
         ctx_parts.append(f"[资料{i}]（{loc}）\n{content}")
 
     context = "\n\n".join(ctx_parts)
-    # 控制总上下文长度（避免超 LLM 上下文窗口，约 12000 字符）
     if len(context) > 12000:
         context = context[:12000] + "\n…（内容过长已截断）"
 

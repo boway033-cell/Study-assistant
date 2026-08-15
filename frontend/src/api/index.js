@@ -26,6 +26,11 @@ export const renameBook = (id, title) => http.patch(`/books/${id}`, { title })
 export const searchBooks = (params) => http.get('/search', { params })
 export const getTask = (id) => http.get(`/tasks/${id}`)
 
+// ===== 原文定位 =====
+export const getChunkOriginal = (bookId, chunkId) => http.get(`/books/${bookId}/chunk/${chunkId}`)
+export const getPageText = (bookId, pageNo) => http.get(`/books/${bookId}/page/${pageNo}`)
+export const bookFileUrl = (bookId) => `/api/books/${bookId}/file`
+
 // ===== 问答 =====
 export const chatStream = async (body, onEvent) => {
   const resp = await fetch('/api/chat', {

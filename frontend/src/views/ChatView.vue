@@ -28,8 +28,9 @@
                 <div v-if="m.streaming" class="streaming" v-html="m.content" />
                 <div v-else>{{ m.content }}</div>
                 <div v-if="m.sources?.length" class="sources">
-                  <el-tag v-for="(s, j) in m.sources" :key="j" size="small" type="info">
-                    第 {{ s.page || '?' }} 页
+                  <el-tag v-for="(s, j) in m.sources" :key="j" size="small" type="info"
+                    class="source-tag" @click="viewSource(m, s)">
+                    第 {{ s.page || '?' }} 页 📄
                   </el-tag>
                 </div>
               </div>
@@ -50,6 +51,9 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- 原文定位面板 -->
+    <OriginalViewer ref="originalViewer" />
   </div>
 </template>
 
@@ -57,6 +61,7 @@
 import { ref, onMounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listBooks, chatStream, chatHistory } from '../api'
+import OriginalViewer from '../components/OriginalViewer.vue'
 
 const books = ref([])
 const bookId = ref(null)
@@ -65,6 +70,7 @@ const messages = ref([])
 const sending = ref(false)
 const history = ref([])
 const msgBox = ref(null)
+const originalViewer = ref(null)
 
 const scrollBottom = () => {
   nextTick(() => {
@@ -76,7 +82,7 @@ const send = async () => {
   const q = question.value.trim()
   if (!q || sending.value) return
   messages.value.push({ role: 'user', content: q })
-  const aiMsg = ref({ role: 'assistant', content: '', streaming: true, sources: [] })
+  const aiMsg = ref({ role: 'assistant', content: '', streaming: true, sources: [], bookId: bookId.value })
   messages.value.push(aiMsg.value)
   question.value = ''
   sending.value = true
@@ -117,6 +123,24 @@ const viewHistory = (h) => {
   scrollBottom()
 }
 
+const viewSource = (m, s) => {
+  // 需要 book_id（消息可能来自多本书，sources 未携带 book_id 时用当前选中书）
+  const bid = m.bookId || bookId.value
+  if (!bid) {
+    ElMessage.warning('请先选择提问的书籍')
+    return
+  }
+  const book = books.value.find((b) => b.id === bid)
+  originalViewer.value?.open({
+    bookId: bid,
+    chunkId: s.chunk_id,
+    chapter: m.chapterTitle || '',
+    pageStart: s.page || null,
+    pageEnd: s.page || null,
+    bookType: book?.file_type || 'pdf',
+  })
+}
+
 const formatTime = (t) => (t || '').replace('T', ' ').slice(5, 16)
 
 onMounted(async () => {
@@ -155,4 +179,6 @@ onMounted(async () => {
 .history-item:hover { background: #f5f7fa; }
 .history-q { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-time { font-size: 11px; color: #c0c4cc; }
+.source-tag { cursor: pointer; }
+.source-tag:hover { opacity: 0.8; }
 </style>

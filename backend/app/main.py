@@ -20,6 +20,17 @@ async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
     # FTS5 虚拟表
     fts.init_fts()
+    # 从 DB 读取向量检索开关（用户设置持久化）
+    try:
+        from backend.app.core.database import SessionLocal
+        from backend.app.models import Setting
+        db = SessionLocal()
+        s = db.get(Setting, "vector_search")
+        if s is not None:
+            app_settings.vector_search = s.value.lower() == "true"
+        db.close()
+    except Exception:  # noqa: BLE001
+        pass
     yield
 
 

@@ -162,6 +162,61 @@ def rename_book(book_id: int, req: BookRenameReq, db: Session = Depends(get_db))
     return {"id": book.id, "title": book.title}
 
 
+@router.get("/books/{book_id}/file")
+def get_book_file(book_id: int, db: Session = Depends(get_db)):
+    """返回原始文件（浏览器可直接打开/渲染，支持 #page=N 定位）。"""
+    from fastapi.responses import FileResponse
+    from backend.app.core.config import settings as _settings
+
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(404, "书籍不存在")
+    path = _settings.uploads_dir / book.file_path
+    if not path.exists():
+        raise HTTPException(404, "文件不存在")
+    media = {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }.get(book.file_type, "application/octet-stream")
+    return FileResponse(path, media_type=media, filename=book.file_path)
+
+
+@router.get("/books/{book_id}/chunk/{chunk_id}")
+def get_chunk_original(chunk_id: int, book_id: int, db: Session = Depends(get_db)):
+    """返回 chunk 全文 + 页码区间（供右侧原文定位面板）。"""
+    from backend.app.models import Chunk as ChunkModel
+
+    ch = db.get(ChunkModel, chunk_id)
+    if not ch or ch.book_id != book_id:
+        raise HTTPException(404, "内容不存在")
+    return {
+        "chunk_id": ch.id,
+        "book_id": ch.book_id,
+        "chapter_id": ch.chapter_id,
+        "content": ch.content,
+        "page_start": ch.page_start,
+        "page_end": ch.page_end,
+    }
+
+
+@router.get("/books/{book_id}/page/{page_no}")
+def get_page_original(book_id: int, page_no: int, db: Session = Depends(get_db)):
+    """返回指定页原文文本（PDF 页文本；docx/pptx 无页码概念则返回空）。"""
+    from backend.app.core.config import settings as _settings
+    from backend.app.services.parser import parse_document
+
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(404, "书籍不存在")
+    if book.file_type != "pdf":
+        return {"page": page_no, "text": "", "note": "该格式不支持按页查看"}
+    result = parse_document(_settings.uploads_dir / book.file_path)
+    if 1 <= page_no <= len(result.pages):
+        return {"page": page_no, "text": result.pages[page_no - 1]}
+    raise HTTPException(404, "页码超出范围")
+
+
 @router.delete("/books/{book_id}", status_code=204)
 def delete_book(book_id: int, db: Session = Depends(get_db)):
     book = db.get(Book, book_id)

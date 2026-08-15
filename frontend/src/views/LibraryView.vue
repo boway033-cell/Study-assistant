@@ -71,6 +71,8 @@
                 <el-tag size="small" type="info">《{{ r.book_title }}》</el-tag>
                 <span v-if="r.chapter_title" class="result-chapter">{{ r.chapter_title }}</span>
                 <span v-if="r.page" class="result-page">第 {{ r.page }} 页</span>
+                <el-button link type="primary" size="small" style="margin-left: auto"
+                  @click="viewOriginal(r)">📄 查看原文</el-button>
               </div>
               <div class="result-snippet" v-html="r.snippet" />
             </el-card>
@@ -124,6 +126,9 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- 原文定位面板 -->
+    <OriginalViewer ref="originalViewer" />
   </div>
 </template>
 
@@ -131,6 +136,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listBooks, uploadBook, deleteBook, getBook, searchBooks, getTask } from '../api'
+import OriginalViewer from '../components/OriginalViewer.vue'
 
 const books = ref([])
 const loading = ref(false)
@@ -140,6 +146,7 @@ const results = ref(null)
 const searching = ref(false)
 const currentBook = ref(null)
 const chapterTree = ref([])
+const originalViewer = ref(null)
 
 const loadBooks = async () => {
   loading.value = true
@@ -221,6 +228,18 @@ const searchKeyword = (kw) => {
   // 关键词芯片点击：赋值后立即搜索（不用事件对象，避免被当作 kw 传入）
   searchQ.value = kw
   doSearch()
+}
+
+const viewOriginal = (item) => {
+  const book = books.value.find((b) => b.id === item.book_id)
+  originalViewer.value?.open({
+    bookId: item.book_id,
+    chunkId: item.chunk_id,
+    chapter: item.chapter_title || '',
+    pageStart: item.page || null,
+    pageEnd: item.page || null,
+    bookType: book?.file_type || 'pdf',
+  })
 }
 
 onMounted(loadBooks)
