@@ -10,6 +10,9 @@ backend/data/
 backend/data/*
 !backend/data/.gitkeep
 
+# 旧版误入库的数据库目录（勿跟踪）
+backend/app/data/
+
 # 环境配置
 .env
 
