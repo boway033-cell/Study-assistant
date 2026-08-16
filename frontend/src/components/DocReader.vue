@@ -41,8 +41,16 @@
 
     <!-- 选中文字浮动工具条 -->
     <div v-if="selToolbar" class="dr-sel-bar" :style="{ top: selY + 'px', left: selX + 'px' }">
+      <el-button size="small" type="primary" @click="aiAsk('explain')">💡 询问 AI</el-button>
+      <el-button size="small" type="success" @click="aiAsk('translate')">🌐 翻译</el-button>
       <el-button size="small" type="warning" @click="addAnnotation">🖍 标注</el-button>
     </div>
+
+    <!-- AI 结果抽屉 -->
+    <el-drawer v-model="aiPanel" :title="aiTitle" size="42%">
+      <div v-if="aiLoading" v-loading="true" style="height: 160px" />
+      <div v-else class="ai-result markdown-body" v-html="renderMarkdown(aiResult)"></div>
+    </el-drawer>
 
     <!-- 批注管理抽屉 -->
     <el-drawer v-model="showAnnPanel" title="我的批注" size="38%">
@@ -62,7 +70,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getBookDocument, listAnnotations, createAnnotation, deleteAnnotation, renameChapter } from '../api'
+import { getBookDocument, listAnnotations, createAnnotation, deleteAnnotation, renameChapter, aiExplain } from '../api'
+import { renderMarkdown } from '../utils/markdown'
 
 const props = defineProps({ bookId: { type: Number, required: true } })
 
@@ -84,6 +93,10 @@ const selX = ref(0)
 const selY = ref(0)
 let selText = ''
 let selChapterId = null
+const aiPanel = ref(false)
+const aiTitle = ref('AI 解读')
+const aiLoading = ref(false)
+const aiResult = ref('')
 
 function setSecRef(id, el) { if (el) secRefs[id] = el }
 
@@ -173,6 +186,24 @@ const onMouseUp = () => {
   }, 0)
 }
 
+const aiAsk = async (action) => {
+  if (!selText) return
+  selToolbar.value = false
+  aiTitle.value = action === 'translate' ? '翻译' : 'AI 解读'
+  aiPanel.value = true
+  aiLoading.value = true
+  aiResult.value = ''
+  try {
+    const resp = await aiExplain({ text: selText, action, book_title: doc.value?.title || '', chapter_title: '' })
+    if (!resp.ok) throw new Error(resp.error || 'AI 调用失败')
+    aiResult.value = resp.result
+  } catch (e) {
+    aiResult.value = '⚠️ ' + e.message
+  } finally {
+    aiLoading.value = false
+  }
+}
+
 const addAnnotation = async () => {
   if (!selText) return
   selToolbar.value = false
@@ -236,6 +267,7 @@ onMounted(async () => {
 .dr-dark .dr-chapter-title, .dr-dark .dr-title { color: #a8c3d1; }
 .dr-dark .dr-chapter-text { color: #ccc; }
 .dr-sel-bar { position: fixed; z-index: 50; display: flex; gap: 4px; padding: 4px; background: #fff; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25); border: 1px solid var(--el-border-color-light); }
+.ai-result { font-size: 14px; line-height: 1.9; color: #333333; }
 .ann-item { padding: 10px; border: 1px solid var(--el-border-color-extra-light); border-radius: 8px; margin-bottom: 8px; }
 .ann-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .ann-text { font-size: 13px; color: var(--el-text-color-regular); margin-bottom: 4px; }

@@ -22,8 +22,8 @@ def _migrate():
             cols = [r[1] for r in conn.execute(text("PRAGMA table_info(books)")).fetchall()]
             if "category" not in cols:
                 conn.execute(text("ALTER TABLE books ADD COLUMN category VARCHAR(50)"))
-            # 知识树节点新列（类型/掌握度）
-            for col, ddl in (("node_type", "VARCHAR(20) DEFAULT 'concept'"), ("mastery", "VARCHAR(10) DEFAULT 'unknown'")):
+            # 知识树节点新列（类型/掌握度/跨树引用）
+            for col, ddl in (("node_type", "VARCHAR(20) DEFAULT 'concept'"), ("mastery", "VARCHAR(10) DEFAULT 'unknown'"), ("ref_node_id", "INTEGER")):
                 try:
                     kcols = [r[1] for r in conn.execute(text("PRAGMA table_info(knowledge_nodes)")).fetchall()]
                     if col not in kcols:

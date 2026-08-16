@@ -99,6 +99,8 @@ export const getNodeAnnotations = (id) => http.get(`/knowledge/nodes/${id}/annot
 export const importKnowledgeChapters = (data) => http.post('/knowledge/import-chapters', data)
 export const aiGenerateKnowledge = (data) => http.post('/knowledge/ai-generate', data)
 export const expandKnowledgeNode = (nodeId) => http.post('/knowledge/nodes/expand', { node_id: nodeId })
+export const batchDeleteKnowledge = (nodeIds) => http.post('/knowledge/batch-delete', { node_ids: nodeIds })
+export const reviewKnowledgeNote = (nodeId) => http.post(`/knowledge/nodes/${nodeId}/review-note`)
 
 // ===== PDF 标注 =====
 export const listAnnotations = (bookId, params) => http.get(`/books/${bookId}/annotations`, { params })

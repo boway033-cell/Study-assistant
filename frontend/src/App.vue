@@ -5,7 +5,7 @@
         <span class="logo-dew">💧</span>
         <div class="logo-text">
           <span class="logo-title">Study assistant</span>
-          <span class="logo-sub">Learning · 学习助手</span>
+          <span class="logo-sub">{{ term.name }} · {{ term.poem.slice(0, 8) }}</span>
         </div>
       </div>
       <el-menu :default-active="$route.path" router class="menu">
@@ -19,13 +19,13 @@
       </el-menu>
       <div class="aside-footer">
         <div class="dew-dot" v-for="i in 3" :key="i" :style="{ left: 24 + i * 44 + 'px', animationDelay: i * 0.6 + 's' }"></div>
-        <span class="aside-poem">蒹葭苍苍 · 白露为霜</span>
+        <span class="aside-poem">{{ term.poem }}</span>
       </div>
     </el-aside>
     <el-container>
       <el-header class="header">
         <span class="page-title">{{ $route.meta.title || '' }}</span>
-        <span class="header-slogan">白露三候 · 鸿雁来 · 玄鸟归 · 群鸟养羞</span>
+        <span class="header-slogan">{{ term.name }}三候 · {{ term.hou.join(' · ') }}</span>
       </el-header>
       <el-main class="main">
         <router-view />
@@ -57,9 +57,11 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Folder, ChatDotRound, Share, EditPen, DataAnalysis, Setting, MagicStick } from '@element-plus/icons-vue'
 import { getSettings } from './api'
+import { getSolarTerm } from './utils/solarTerm'
 
 const router = useRouter()
 const showKeyGuide = ref(false)
+const term = getSolarTerm()
 
 const goSettings = () => {
   showKeyGuide.value = false
@@ -183,21 +185,34 @@ html, body, #app { height: 100%; }
 
 .main { background: var(--el-bg-color-page); overflow: auto; padding: 12px; }
 
-/* —— Markdown 渲染样式 —— */
-.markdown-body h1 { font-size: 1.6em; margin: 0.6em 0 0.4em; }
-.markdown-body h2 { font-size: 1.35em; margin: 0.8em 0 0.4em; border-bottom: 1px solid var(--el-border-color-lighter); padding-bottom: 0.2em; }
-.markdown-body h3 { font-size: 1.15em; margin: 0.6em 0 0.3em; }
-.markdown-body h4, .markdown-body h5 { margin: 0.5em 0 0.2em; }
-.markdown-body p { margin: 0.4em 0; line-height: 1.8; }
-.markdown-body ul, .markdown-body ol { padding-left: 1.6em; margin: 0.4em 0; }
-.markdown-body li { margin: 0.2em 0; line-height: 1.7; }
-.markdown-body code { background: var(--el-fill-color-light); padding: 2px 5px; border-radius: 4px; font-size: 0.9em; }
-.markdown-body pre { background: var(--el-fill-color-light); padding: 10px; border-radius: 6px; overflow-x: auto; }
-.markdown-body pre code { background: none; padding: 0; }
-.markdown-body blockquote { border-left: 4px solid var(--el-color-primary-light-5); padding-left: 12px; color: var(--el-text-color-secondary); margin: 0.5em 0; }
-.markdown-body strong { font-weight: 700; }
-.markdown-body table { border-collapse: collapse; margin: 0.6em 0; }
-.markdown-body th, .markdown-body td { border: 1px solid var(--el-border-color); padding: 5px 10px; }
+/* —— Markdown 排版层级（H1 醒目 / 层级分明 / 行高舒适） —— */
+.markdown-body { color: #333333; line-height: 1.9; }
+.markdown-body h1 {
+  font-size: 1.75em; font-weight: 800; color: #8B5A2B;
+  margin: 0.9em 0 0.5em; padding-bottom: 0.35em;
+  border-bottom: 3px solid #C2A285;
+  letter-spacing: 0.01em;
+}
+.markdown-body h2 {
+  font-size: 1.4em; font-weight: 700; color: #5b4a35;
+  margin: 0.9em 0 0.45em; padding-bottom: 0.25em;
+  border-bottom: 2px solid var(--el-border-color);
+}
+.markdown-body h3 { font-size: 1.2em; font-weight: 700; color: #44473F; margin: 0.7em 0 0.35em; }
+.markdown-body h4 { font-size: 1.05em; font-weight: 700; color: #55564b; margin: 0.6em 0 0.3em; }
+.markdown-body h5 { font-size: 1em; font-weight: 600; color: #66685c; margin: 0.5em 0 0.25em; }
+.markdown-body p { margin: 0.45em 0; line-height: 1.9; color: #333333; }
+.markdown-body ul, .markdown-body ol { padding-left: 1.7em; margin: 0.45em 0; }
+.markdown-body li { margin: 0.25em 0; line-height: 1.85; color: #333333; }
+.markdown-body li::marker { color: #8B5A2B; }
+.markdown-body code { background: #ede5d8; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; color: #6F4721; }
+.markdown-body pre { background: #f1ebe0; padding: 12px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--el-border-color-lighter); }
+.markdown-body pre code { background: none; padding: 0; color: #333; }
+.markdown-body blockquote { border-left: 4px solid #C2A285; padding-left: 14px; color: #6e6e60; margin: 0.6em 0; background: #f7f2e9; padding: 8px 14px; border-radius: 0 6px 6px 0; }
+.markdown-body strong { font-weight: 700; color: #4a3a28; }
+.markdown-body table { border-collapse: collapse; margin: 0.7em 0; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--el-border-color); padding: 6px 12px; }
+.markdown-body th { background: #ede5d8; font-weight: 700; }
 
 /* —— 首次使用引导弹窗 —— */
 .guide-body { line-height: 1.9; font-size: 14px; color: var(--el-text-color-primary); }

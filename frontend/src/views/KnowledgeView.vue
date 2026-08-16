@@ -14,6 +14,7 @@
                 </el-radio-group>
                 <el-button size="small" type="primary" plain @click="addRoot">＋ 新建</el-button>
                 <el-button size="small" @click="loadTree">刷新</el-button>
+                <el-button size="small" :type="multiSelect ? 'warning' : ''" @click="toggleMulti">☑ 多选</el-button>
               </div>
             </div>
           </template>
@@ -40,9 +41,11 @@
             </div>
             <el-tree
               v-else
+              ref="treeRef"
               :data="filteredTree"
               :props="{ label: 'title', children: 'children' }"
               node-key="id"
+              :show-checkbox="multiSelect"
               draggable
               default-expand-all
               :allow-drop="allowDrop"
@@ -62,6 +65,9 @@
                 </span>
               </template>
             </el-tree>
+            <div v-if="multiSelect" class="batch-bar">
+              <el-button size="small" type="danger" @click="batchDelete">🗑 删除所选</el-button>
+            </div>
             <div class="tree-drag-tip" v-if="tree.length">拖拽节点调整层级；点击节点查看详情与原文</div>
           </div>
 
@@ -104,6 +110,11 @@
                 <el-radio-button value="miss">🔴 未掌握</el-radio-button>
               </el-radio-group>
             </el-form-item>
+            <el-form-item label="跨树引用">
+              <el-select v-model="edit.ref_node_id" placeholder="引用另一个节点（跨树关联）" clearable filterable style="width: 320px">
+                <el-option v-for="n in allNodeOptions" :key="n.id" :label="n.label" :value="n.id" />
+              </el-select>
+            </el-form-item>
             <el-form-item label="我的内容">
               <el-input v-model="edit.note" type="textarea" :rows="5"
                 placeholder="记录知识点的理解、总结、易错点、例题…（支持 Markdown）" />
@@ -122,6 +133,7 @@
               <el-button type="primary" @click="saveNode">保存</el-button>
               <el-button @click="loadSource">加载原文</el-button>
               <el-button type="warning" plain :loading="expanding" @click="expandNode">🤖 AI 展开子节点</el-button>
+              <el-button type="info" plain :loading="reviewing" @click="reviewNote">📝 AI 批改笔记</el-button>
             </el-form-item>
           </el-form>
 
@@ -157,6 +169,14 @@
         <el-empty v-else description="点击左侧节点查看详情" style="margin-top: 80px" />
       </el-col>
     </el-row>
+
+    <!-- AI 批改笔记弹窗 -->
+    <el-dialog v-model="reviewDialog" title="AI 批改笔记" width="560px">
+      <div class="markdown-body" v-html="renderMarkdown(reviewText)"></div>
+      <template #footer>
+        <el-button type="primary" @click="reviewDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 从章节导入 对话框 -->
     <el-dialog v-model="showImport" title="从书籍章节导入知识树骨架" width="480px">
@@ -214,17 +234,24 @@ import {
   getKnowledgeTree, createKnowledgeNode, updateKnowledgeNode,
   deleteKnowledgeNode, moveKnowledgeNode, getKnowledgeSource,
   importKnowledgeChapters, aiGenerateKnowledge, expandKnowledgeNode,
+  batchDeleteKnowledge, reviewKnowledgeNote,
   listBooks, getBook, getTask, bookFileUrl, getNodeAnnotations,
 } from '../api'
 
 const router = useRouter()
 const treeFilter = ref('')
+const multiSelect = ref(false)
+const treeRef = ref(null)
+const reviewing = ref(false)
+const allNodeOptions = ref([])
+const reviewDialog = ref(false)
+const reviewText = ref('')
 const tree = ref([])
 const books = ref([])
 const nodeAnns = ref([])
 const viewMode = ref('outline')
 const current = ref(null)
-const edit = ref({ title: '', book_id: null, chapter_id: null, note: '', node_type: 'concept', mastery: 'unknown' })
+const edit = ref({ title: '', book_id: null, chapter_id: null, note: '', node_type: 'concept', mastery: 'unknown', ref_node_id: null })
 const expanding = ref(false)
 const chapterOptions = ref([])
 const source = ref({})
@@ -271,9 +298,11 @@ const loadTree = async () => {
 
 const updateStats = () => {
   let total = 0, known = 0, fuzzy = 0, miss = 0
-  const walk = (nodes) => { for (const n of nodes) { total++; if (n.mastery === 'known') known++; else if (n.mastery === 'fuzzy') fuzzy++; else if (n.mastery === 'miss') miss++; if (n.children?.length) walk(n.children) } }
-  walk(tree.value)
+  const opts = []
+  const walk = (nodes, depth) => { for (const n of nodes) { total++; if (n.mastery === 'known') known++; else if (n.mastery === 'fuzzy') fuzzy++; else if (n.mastery === 'miss') miss++; opts.push({ id: n.id, label: '　'.repeat(depth) + n.title }); if (n.children?.length) walk(n.children, depth + 1) } }
+  walk(tree.value, 0)
   statTotal.value = total; statKnown.value = known; statFuzzy.value = fuzzy; statMiss.value = miss
+  allNodeOptions.value = opts
 }
 
 const loadBooks = async () => {
@@ -285,7 +314,7 @@ const loadBooks = async () => {
 
 const selectNode = async (data) => {
   current.value = data
-  edit.value = { title: data.title, book_id: data.book_id, chapter_id: data.chapter_id, note: data.note || '', node_type: data.node_type || 'concept', mastery: data.mastery || 'unknown' }
+  edit.value = { title: data.title, book_id: data.book_id, chapter_id: data.chapter_id, note: data.note || '', node_type: data.node_type || 'concept', mastery: data.mastery || 'unknown', ref_node_id: data.ref_node_id || null }
   source.value = {}
   sourceView.value = 'text'
   if (data.book_id) {
@@ -417,12 +446,44 @@ const saveNode = async () => {
       chapter_id: edit.value.chapter_id || null,
       node_type: edit.value.node_type,
       mastery: edit.value.mastery,
+      ref_node_id: edit.value.ref_node_id || null,
     })
     ElMessage.success('已保存')
     loadTree()
     loadSource()
   } catch (e) {
     ElMessage.error(e.message)
+  }
+}
+
+const toggleMulti = () => {
+  multiSelect.value = !multiSelect.value
+  if (!multiSelect.value && treeRef.value) treeRef.value.setCheckedKeys([])
+}
+
+const batchDelete = async () => {
+  const keys = treeRef.value?.getCheckedKeys?.() || []
+  if (!keys.length) { ElMessage.warning('请先勾选节点'); return }
+  try {
+    await ElMessageBox.confirm('确定删除所选 ' + keys.length + ' 个节点（含子节点）？', '批量删除', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' })
+    await batchDeleteKnowledge(keys)
+    ElMessage.success('已删除')
+    multiSelect.value = false
+    loadTree()
+  } catch { /* 取消 */ }
+}
+
+const reviewNote = async () => {
+  if (!current.value?.id) return
+  reviewing.value = true
+  try {
+    const resp = await reviewKnowledgeNote(current.value.id)
+    reviewText.value = resp.review
+    reviewDialog.value = true
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    reviewing.value = false
   }
 }
 

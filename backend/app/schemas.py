@@ -239,6 +239,7 @@ class KnowledgeNodeResp(BaseModel):
     note: str | None = None
     node_type: str = "concept"
     mastery: str = "unknown"
+    ref_node_id: int | None = None
     order_index: int = 0
     children: list["KnowledgeNodeResp"] = []
 
@@ -260,6 +261,11 @@ class KnowledgeNodeUpdateReq(BaseModel):
     chapter_id: int | None = None
     node_type: str | None = None
     mastery: str | None = None
+    ref_node_id: int | None = None
+
+
+class KnowledgeBatchDeleteReq(BaseModel):
+    node_ids: list[int]
 
 
 class KnowledgeNodeExpandReq(BaseModel):

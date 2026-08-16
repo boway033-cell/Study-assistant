@@ -78,12 +78,16 @@ body {
   font-family: "Microsoft YaHei", "PingFang SC", "STSong", "SimSun", serif;
 }
 
-/* —— 纸质感卡片 —— */
+/* —— 纸质感卡片（极细微边框 + 柔和阴影） —— */
 .el-card {
   border-radius: 12px;
-  border: 1px solid var(--el-border-color);
+  border: 1px solid #e5e0d8;
   background: var(--el-bg-color);
-  box-shadow: var(--bailu-card-shadow);
+  box-shadow: 0 1px 3px rgba(20, 30, 31, 0.08), 0 1px 2px rgba(20, 30, 31, 0.04);
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+.el-card.is-hover-shadow:hover, .el-card:hover {
+  box-shadow: 0 4px 16px rgba(20, 30, 31, 0.12);
 }
 .el-card__header {
   border-bottom: 1px solid var(--el-border-color-lighter);
@@ -130,10 +134,22 @@ body {
 }
 .el-menu-item:hover { background: rgba(245, 240, 232, 0.1); color: #F5F0E8; }
 
-/* —— 按钮 —— */
-.el-button { border-radius: 10px; }
+/* —— 按钮（hover 反馈动画） —— */
+.el-button {
+  border-radius: 10px;
+  transition: all 0.2s ease;
+}
+.el-button:hover {
+  transform: translateY(-1px);
+}
+.el-button:active {
+  transform: translateY(0) scale(0.97);
+}
 .el-button--primary {
   box-shadow: 0 3px 12px rgba(139, 90, 43, 0.3);
+}
+.el-button--primary:hover {
+  box-shadow: 0 6px 18px rgba(139, 90, 43, 0.4);
 }
 .el-radio-button__inner,
 .el-input__wrapper,

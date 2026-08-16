@@ -11,6 +11,7 @@ from backend.app.core.database import get_db
 from backend.app.models import Book, Chapter, Chunk, KnowledgeNode
 from backend.app.schemas import (
     KnowledgeAiGenerateReq,
+    KnowledgeBatchDeleteReq,
     KnowledgeImportReq,
     KnowledgeNodeExpandReq,
     KnowledgeMoveReq,
@@ -33,7 +34,7 @@ def _to_resp(node: KnowledgeNode, db: Session) -> KnowledgeNodeResp:
         id=node.id, parent_id=node.parent_id, title=node.title,
         book_id=node.book_id, chapter_id=node.chapter_id, note=node.note,
         node_type=node.node_type or "concept", mastery=node.mastery or "unknown",
-        order_index=node.order_index,
+        ref_node_id=node.ref_node_id, order_index=node.order_index,
         children=[_to_resp(c, db) for c in children],
     )
 
@@ -94,6 +95,11 @@ def update_node(node_id: int, req: KnowledgeNodeUpdateReq, db: Session = Depends
         node.node_type = req.node_type
     if req.mastery is not None:
         node.mastery = req.mastery
+    if req.ref_node_id is not None:
+        if req.ref_node_id == node.id:
+            raise HTTPException(400, "不能引用自身")
+        _get_node(db, req.ref_node_id)  # 校验存在
+        node.ref_node_id = req.ref_node_id
     if req.chapter_id is not None:
         ch = db.get(Chapter, req.chapter_id)
         if not ch:
@@ -415,3 +421,50 @@ def expand_node(req: KnowledgeNodeExpandReq, db: Session = Depends(get_db)):
 
     record = submit("knowledge-expand", run)
     return {"task_id": record.id, "status": "running"}
+
+
+@router.post("/batch-delete", status_code=204)
+def batch_delete(req: KnowledgeBatchDeleteReq, db: Session = Depends(get_db)):
+    """批量删除节点（含子树）。"""
+    ids = set(req.node_ids)
+    all_ids: set[int] = set()
+    for nid in list(ids):
+        node = db.get(KnowledgeNode, nid)
+        if node:
+            all_ids.update(_collect_ids(node, db))
+    if all_ids:
+        db.query(KnowledgeNode).filter(KnowledgeNode.id.in_(all_ids)).delete(synchronize_session=False)
+        db.commit()
+
+
+@router.post("/nodes/{node_id}/review-note")
+async def review_note(node_id: int, db: Session = Depends(get_db)):
+    """AI 批改节点笔记：评价 + 补充建议（基于节点标题与关联章节）。"""
+    from backend.app.services.llm import LLMRouter, load_llm_config
+
+    node = _get_node(db, node_id)
+    cfg = load_llm_config(db)
+    if not cfg.get("deepseek_api_key"):
+        raise HTTPException(400, "未配置 DeepSeek API Key")
+    provider = LLMRouter.get("auto", cfg)
+    # 关联章节上下文（用于核对笔记准确性）
+    ctx = ""
+    if node.chapter_id:
+        chunks = db.scalars(select(Chunk).where(Chunk.chapter_id == node.chapter_id).order_by(Chunk.chunk_index).limit(8)).all()
+        ctx = "\n".join(c.content[:400] for c in chunks)[:4000]
+
+    prompt = [
+        {"role": "system", "content": (
+            "你是学习笔记批改助手。用户为一个知识点写了笔记，请批改并给出建议："
+            "1) 准确性：笔记是否准确（对照关联章节内容）2) 完整性：是否遗漏关键点 "
+            "3) 表达：是否清晰。最后给一段优化后的笔记（Markdown）。用中文，分三段：【评价】【建议】【优化笔记】。"
+        )},
+        {"role": "user", "content": f"知识点：{node.title}\n用户笔记：{node.note or '（空）'}\n关联章节：{ctx[:3000] or '无'}"},
+    ]
+    answer = ""
+    try:
+        async for delta in provider.stream_chat(prompt):
+            answer += delta
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"AI 批改失败: {e}")
+    return {"review": answer}

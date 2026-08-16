@@ -140,13 +140,21 @@ class KnowledgeNode(Base):
     book_id: Mapped[int | None] = mapped_column(ForeignKey("books.id"))
     chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id"))
     note: Mapped[str | None] = mapped_column(Text)  # 用户笔记/总结（Markdown）
+    ref_node_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_nodes.id"))  # 跨树引用
     node_type: Mapped[str] = mapped_column(String(20), default="concept")  # concept/theorem/point/example/question
     mastery: Mapped[str] = mapped_column(String(10), default="unknown")  # unknown/known/fuzzy/unknown 掌握度
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
-    parent: Mapped["KnowledgeNode | None"] = relationship(remote_side="KnowledgeNode.id", back_populates="children")
-    children: Mapped[list["KnowledgeNode"]] = relationship(back_populates="parent")
+    parent: Mapped["KnowledgeNode | None"] = relationship(
+        foreign_keys="KnowledgeNode.parent_id",
+        remote_side="KnowledgeNode.id",
+        back_populates="children",
+    )
+    children: Mapped[list["KnowledgeNode"]] = relationship(
+        foreign_keys="KnowledgeNode.parent_id",
+        back_populates="parent",
+    )
 
 
 class Annotation(Base):

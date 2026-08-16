@@ -6,6 +6,7 @@
         <span class="mm-zoom">{{ Math.round(scale * 100) }}%</span>
         <el-button size="small" @click="zoomBy(0.15)">＋</el-button>
         <el-button size="small" @click="fitAll">适应</el-button>
+        <el-button size="small" type="primary" plain @click="exportPng">⬇ 导出图片</el-button>
       </el-button-group>
       <span class="mm-tip">点击节点查看详情 · 滚轮缩放 · 拖动空白平移</span>
     </div>
@@ -144,6 +145,30 @@ const onPanMove = (e) => {
   scroller.value.scrollTop = panStart.st - (e.clientY - panStart.y)
 }
 const onPanEnd = () => { panning = false }
+
+const exportPng = () => {
+  const svg = document.querySelector('.mm-svg')
+  if (!svg) return
+  const xml = new XMLSerializer().serializeToString(svg)
+  const svgBlob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' })
+  const url = URL.createObjectURL(svgBlob)
+  const img = new Image()
+  img.onload = () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = svg.clientWidth * 2
+    canvas.height = svg.clientHeight * 2
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#F5F0E8'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    URL.revokeObjectURL(url)
+    const a = document.createElement('a')
+    a.href = canvas.toDataURL('image/png')
+    a.download = '知识导图.png'
+    a.click()
+  }
+  img.src = url
+}
 </script>
 
 <style scoped>
