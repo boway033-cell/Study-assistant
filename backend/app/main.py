@@ -4,8 +4,9 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.app.api import ai, annotations, books, chat, deep, knowledge, quizzes, settings, stats, study
@@ -63,12 +64,31 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Study assistant", version="0.1.0", lifespan=lifespan)
 
+# 本地访问控制：只允许本服务与本地开发源，拒绝任意来源跨域（防恶意网页调用本地 API）
+_ALLOWED_ORIGINS = [
+    f"http://127.0.0.1:{app_settings.port}",
+    f"http://localhost:{app_settings.port}",
+    "http://127.0.0.1:5173",  # vite dev server
+    "http://localhost:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 仅本地使用
+    allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=False,
 )
+
+
+@app.middleware("http")
+async def _guard_local_api(request: Request, call_next):
+    """拒绝带非本地 Origin 的 API 请求（防恶意网页跨源调用本地服务）。"""
+    if request.url.path.startswith("/api/"):
+        origin = (request.headers.get("origin") or "").rstrip("/")
+        if origin and origin not in _ALLOWED_ORIGINS:
+            return JSONResponse(status_code=403, content={"detail": "跨源请求被拒绝"})
+    return await call_next(request)
 
 app.include_router(books.router)
 app.include_router(chat.router)

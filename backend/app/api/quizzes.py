@@ -55,53 +55,60 @@ def generate_quizzes(book_id: int, req: QuizGenReq | None = None, db: Session = 
         raise HTTPException(400, "书籍没有章节")
 
     async def run(record):
+        from backend.app.core.database import SessionLocal
         from backend.app.models import Chunk
-        # 从数据库读取 LLM 配置；批量生成固定用 flash（速度快、省 token）
-        cfg = load_llm_config(db)
-        cfg = {**cfg, "deepseek_model": "flash"}
-        provider = LLMRouter.get("auto", cfg)
-        created = 0
-        for i, ch in enumerate(chapters):
-            record.progress = i / len(chapters)
-            record.stage = f"生成题目: {ch.title}"
-            chunks = db.scalars(
-                select(Chunk).where(Chunk.chapter_id == ch.id).order_by(Chunk.chunk_index).limit(6)
-            ).all()
-            if not chunks:
-                continue
-            material = "\n\n".join(c.content[:600] for c in chunks)[:4000]
-            prompt = [
-                {"role": "system", "content": (
-                    "你是专业课出题老师。根据教材片段，生成 5 道单项选择题和 5 道简答题。"
-                    "只输出 JSON 数组，格式："
-                    '[{"type":"choice","question":"题干","options":["A.…","B.…","C.…","D.…"],'
-                    '"answer":"A","explanation":"解析"},'
-                    '{"type":"short","question":"题干","answer":"参考答案","explanation":"要点"}]'
-                )},
-                {"role": "user", "content": material},
-            ]
-            answer = ""
-            try:
-                async for delta in provider.stream_chat(prompt):
-                    answer += delta
-                from backend.app.services.llm import parse_json_response
-                data = parse_json_response(answer)
-                for item in data[:10]:
-                    q_type = "choice" if item.get("type") == "choice" else "short"
-                    opts = item.get("options")
-                    db.add(Quiz(
-                        book_id=book_id, chapter_id=ch.id, q_type=q_type,
-                        question=str(item.get("question", "")),
-                        options_json=json.dumps(opts, ensure_ascii=False) if opts else None,
-                        answer=str(item.get("answer", "")),
-                        explanation=item.get("explanation"),
-                        source="auto",
-                    ))
-                    created += 1
-                db.commit()
-            except Exception:  # noqa: BLE001
-                continue
-        return {"generated": created}
+        # 后台线程独立 Session（不共享请求级 Session，避免生命周期/线程安全问题）
+        db2 = SessionLocal()
+        try:
+            chs = db2.scalars(select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.order_index)).all()
+            # 从数据库读取 LLM 配置；批量生成固定用 flash（速度快、省 token）
+            cfg = load_llm_config(db2)
+            cfg = {**cfg, "deepseek_model": "flash"}
+            provider = LLMRouter.get("auto", cfg)
+            created = 0
+            for i, ch in enumerate(chs):
+                record.progress = i / len(chs) if chs else 0
+                record.stage = f"生成题目: {ch.title}"
+                chunks = db2.scalars(
+                    select(Chunk).where(Chunk.chapter_id == ch.id).order_by(Chunk.chunk_index).limit(6)
+                ).all()
+                if not chunks:
+                    continue
+                material = "\n\n".join(c.content[:600] for c in chunks)[:4000]
+                prompt = [
+                    {"role": "system", "content": (
+                        "你是专业课出题老师。根据教材片段，生成 5 道单项选择题和 5 道简答题。"
+                        "只输出 JSON 数组，格式："
+                        '[{"type":"choice","question":"题干","options":["A.…","B.…","C.…","D.…"],'
+                        '"answer":"A","explanation":"解析"},'
+                        '{"type":"short","question":"题干","answer":"参考答案","explanation":"要点"}]'
+                    )},
+                    {"role": "user", "content": material},
+                ]
+                answer = ""
+                try:
+                    async for delta in provider.stream_chat(prompt):
+                        answer += delta
+                    from backend.app.services.llm import parse_json_response
+                    data = parse_json_response(answer)
+                    for item in data[:10]:
+                        q_type = "choice" if item.get("type") == "choice" else "short"
+                        opts = item.get("options")
+                        db2.add(Quiz(
+                            book_id=book_id, chapter_id=ch.id, q_type=q_type,
+                            question=str(item.get("question", "")),
+                            options_json=json.dumps(opts, ensure_ascii=False) if opts else None,
+                            answer=str(item.get("answer", "")),
+                            explanation=item.get("explanation"),
+                            source="auto",
+                        ))
+                        created += 1
+                    db2.commit()
+                except Exception:  # noqa: BLE001
+                    continue
+            return {"generated": created}
+        finally:
+            db2.close()
 
     record = submit("quizzes", run)
     return {"task_id": record.id, "estimated": len(chapters) * 10}

@@ -64,6 +64,11 @@ def main() -> int:
     print(f"[launcher] 启动服务: {url}")
     with open(ROOT / "server.log", "a", encoding="utf-8") as log:
         proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT)
+    # 写 PID 文件，供 stop.bat 精确停止本服务（避免误杀占用同端口的其他程序）
+    try:
+        (ROOT / "server.pid").write_text(str(proc.pid), encoding="utf-8")
+    except OSError:
+        pass
 
     # 3. 等待就绪（最长 60s），就绪后自动打开浏览器
     ready = False
@@ -95,6 +100,12 @@ def main() -> int:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+    finally:
+        # 清理 PID 文件
+        try:
+            (ROOT / "server.pid").unlink(missing_ok=True)
+        except (OSError, AttributeError):
+            pass
     return 0
 
 

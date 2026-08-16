@@ -37,7 +37,7 @@
             <div v-for="(m, i) in messages" :key="i" :class="['msg', m.role]">
               <div class="msg-label">{{ m.role === 'user' ? '我' : 'AI' }}</div>
               <div class="msg-content">
-                <div v-if="m.streaming" class="streaming" v-html="m.content" />
+                <div v-if="m.streaming" class="streaming" v-html="sanitizeHtml(m.content)" />
                 <div v-else>{{ m.content }}</div>
                 <div v-if="m.sources?.length" class="sources">
                   <el-tag v-for="(s, j) in m.sources" :key="j" size="small" type="info"
@@ -96,6 +96,7 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { listBooks, chatStream, chatHistory, getChunkOriginal, getBook, bookFileUrl } from '../api'
 import PdfReader from '../components/PdfReader.vue'
+import { sanitizeHtml } from '../utils/markdown'
 
 const books = ref([])
 const bookId = ref(null)

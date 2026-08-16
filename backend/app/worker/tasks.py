@@ -28,7 +28,7 @@ class TaskRecord:
     message: str = ""
     result: dict | None = None
     error: str | None = None
-    _future: "asyncio.Future | None" = field(default=None, repr=False)
+    _coro: "Callable[[TaskRecord], Awaitable[Any]] | None" = field(default=None, repr=False)
 
 
 def _ensure_backend() -> asyncio.AbstractEventLoop:
@@ -56,13 +56,13 @@ def _ensure_backend() -> asyncio.AbstractEventLoop:
 
 
 async def _worker() -> None:
+    """单协程 FIFO：一次只执行一个任务，await 完成后再取下一个（真正串行）。"""
     while True:
         record: TaskRecord = await _queue.get()
         try:
             record.status = "running"
-            if record._future is not None:
-                # run_coroutine_threadsafe 返回 concurrent.futures.Future，需 wrap 成 asyncio Future
-                await asyncio.wrap_future(record._future)
+            if record._coro is not None:
+                record.result = await record._coro(record)
             record.status = "done"
         except Exception as e:  # noqa: BLE001
             record.status = "failed"
@@ -72,18 +72,11 @@ async def _worker() -> None:
 
 
 def submit(name: str, coro_factory: Callable[[TaskRecord], Awaitable[Any]]) -> TaskRecord:
-    """提交任务（线程安全）。coro_factory 接收 TaskRecord 用于更新进度。"""
+    """提交任务（线程安全）。任务入队后由后台 worker 串行执行（FIFO），不并发。"""
     loop = _ensure_backend()
-    record = TaskRecord(id=f"{name}-{uuid.uuid4().hex[:8]}")
-
-    async def run():
-        result = await coro_factory(record)
-        record.result = result
-        return result
-
-    record._future = asyncio.run_coroutine_threadsafe(run(), loop)
+    record = TaskRecord(id=f"{name}-{uuid.uuid4().hex[:8]}", _coro=coro_factory)
     _task_registry[record.id] = record
-    # 提交到后台队列（后台 loop 上执行；不阻塞等待，避免竞态超时）
+    # 入队后由 _worker 串行 await，避免多任务并发解析/并发 AI 请求
     asyncio.run_coroutine_threadsafe(_queue.put(record), loop)
     return record
 

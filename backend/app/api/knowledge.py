@@ -260,44 +260,50 @@ def ai_generate(req: KnowledgeAiGenerateReq, db: Session = Depends(get_db)):
     }
 
     async def run(record):
+        from backend.app.core.database import SessionLocal
         from backend.app.worker.tasks import update_progress
         update_progress(record, 0.1, "ai", "正在分析教材章节结构...")
-        cfg = load_llm_config(db)
-        cfg = {**cfg, "deepseek_model": "flash"}  # 批量生成固定用 flash
-        provider = LLMRouter.get("auto", cfg)
-        prompt = [
-            {"role": "system", "content": (
-                "你是课程知识结构化助手。根据教材的章节目录和关键词，生成一份课程知识框架树"
-                "（帮助复习用的顶层结构，3 层以内）。只输出 JSON 数组，格式："
-                '[{"title":"一级主题","children":[{"title":"二级主题","children":[{"title":"三级主题","children":[]}]}]}]。'
-                "要求：1) 一级 3-8 个；2) 主题用概括性术语（可不同于原章节名）；"
-                "3) 覆盖全部关键词；4) 不要输出解释文字。"
-            )},
-            {"role": "user", "content": _json.dumps(material, ensure_ascii=False)},
-        ]
-        answer = ""
-        data = None
-        last_err = ""
-        for attempt in range(3):  # 限流/网络抖动自动重试
-            try:
-                answer = ""
-                async for delta in provider.stream_chat(prompt):
-                    answer += delta
-                from backend.app.services.llm import parse_json_response
-                data = parse_json_response(answer)
-                if isinstance(data, list) and data:
-                    break
-                last_err = "AI 返回内容无法解析为 JSON 数组"
-            except Exception as e:  # noqa: BLE001
-                last_err = str(e)
-            await asyncio.sleep(2 * (attempt + 1))
-        if not isinstance(data, list) or not data:
-            raise RuntimeError("AI 生成失败：" + last_err + "，请稍后重试或改用手动/章节导入")
+        # 后台线程独立 Session（不共享请求级 Session）
+        db2 = SessionLocal()
+        try:
+            cfg = load_llm_config(db2)
+            cfg = {**cfg, "deepseek_model": "flash"}  # 批量生成固定用 flash
+            provider = LLMRouter.get("auto", cfg)
+            prompt = [
+                {"role": "system", "content": (
+                    "你是课程知识结构化助手。根据教材的章节目录和关键词，生成一份课程知识框架树"
+                    "（帮助复习用的顶层结构，3 层以内）。只输出 JSON 数组，格式："
+                    '[{"title":"一级主题","children":[{"title":"二级主题","children":[{"title":"三级主题","children":[]}]}]}]。'
+                    "要求：1) 一级 3-8 个；2) 主题用概括性术语（可不同于原章节名）；"
+                    "3) 覆盖全部关键词；4) 不要输出解释文字。"
+                )},
+                {"role": "user", "content": _json.dumps(material, ensure_ascii=False)},
+            ]
+            answer = ""
+            data = None
+            last_err = ""
+            for attempt in range(3):  # 限流/网络抖动自动重试
+                try:
+                    answer = ""
+                    async for delta in provider.stream_chat(prompt):
+                        answer += delta
+                    from backend.app.services.llm import parse_json_response
+                    data = parse_json_response(answer)
+                    if isinstance(data, list) and data:
+                        break
+                    last_err = "AI 返回内容无法解析为 JSON 数组"
+                except Exception as e:  # noqa: BLE001
+                    last_err = str(e)
+                await asyncio.sleep(2 * (attempt + 1))
+            if not isinstance(data, list) or not data:
+                raise RuntimeError("AI 生成失败：" + last_err + "，请稍后重试或改用手动/章节导入")
 
-        update_progress(record, 0.6, "ai", "正在写入知识树...")
-        total = _create_ai_tree(db, req, data)
-        update_progress(record, 1.0, "ai", "完成")
-        return {"created": total}
+            update_progress(record, 0.6, "ai", "正在写入知识树...")
+            total = _create_ai_tree(db2, req, data)
+            update_progress(record, 1.0, "ai", "完成")
+            return {"created": total}
+        finally:
+            db2.close()
 
     record = submit("knowledge-ai", run)
     return {"task_id": record.id, "status": "running", "stage": "ai"}
@@ -370,54 +376,63 @@ def expand_node(req: KnowledgeNodeExpandReq, db: Session = Depends(get_db)):
         context += f"\n关联章节内容：\n{body}"
 
     async def run(record):
+        from backend.app.core.database import SessionLocal
         from backend.app.worker.tasks import update_progress
         update_progress(record, 0.2, "expand", "AI 正在展开知识点…")
-        provider = LLMRouter.get("auto", cfg)
-        prompt = [
-            {"role": "system", "content": (
-                "你是知识结构化助手。给定一个知识点和（可选的）关联章节内容，"
-                "把它展开成 3-8 个下级知识点。只输出 JSON 数组："
-                '[{"title":"下级知识点","node_type":"concept|theorem|point|example|question"}]。'
-                "要求：下级知识点具体、可学习；类型合理（概念/定理/考点/例题/疑问）。"
-            )},
-            {"role": "user", "content": context},
-        ]
-        answer = ""
-        for attempt in range(3):
-            try:
-                answer = ""
-                async for delta in provider.stream_chat(prompt):
-                    answer += delta
-                from backend.app.services.llm import parse_json_response
-                data = parse_json_response(answer)
-                if isinstance(data, list) and data:
-                    break
-            except Exception:  # noqa: BLE001
-                data = None
-            import asyncio
-            await asyncio.sleep(2)
-        if not isinstance(data, list) or not data:
-            raise RuntimeError("AI 展开失败，请稍后重试")
+        # 后台线程独立 Session（不共享请求级 Session）
+        db2 = SessionLocal()
+        try:
+            provider = LLMRouter.get("auto", cfg)
+            prompt = [
+                {"role": "system", "content": (
+                    "你是知识结构化助手。给定一个知识点和（可选的）关联章节内容，"
+                    "把它展开成 3-8 个下级知识点。只输出 JSON 数组："
+                    '[{"title":"下级知识点","node_type":"concept|theorem|point|example|question"}]。'
+                    "要求：下级知识点具体、可学习；类型合理（概念/定理/考点/例题/疑问）。"
+                )},
+                {"role": "user", "content": context},
+            ]
+            answer = ""
+            for attempt in range(3):
+                try:
+                    answer = ""
+                    async for delta in provider.stream_chat(prompt):
+                        answer += delta
+                    from backend.app.services.llm import parse_json_response
+                    data = parse_json_response(answer)
+                    if isinstance(data, list) and data:
+                        break
+                except Exception:  # noqa: BLE001
+                    data = None
+                import asyncio
+                await asyncio.sleep(2)
+            if not isinstance(data, list) or not data:
+                raise RuntimeError("AI 展开失败，请稍后重试")
 
-        update_progress(record, 0.7, "expand", "正在写入子节点…")
-        siblings = db.scalars(
-            select(KnowledgeNode).where(KnowledgeNode.parent_id == node.id)
-        ).all()
-        base = max((s.order_index for s in siblings), default=-1)
-        created = 0
-        for i, item in enumerate(data[:8]):
-            title = str(item.get("title", "")).strip()
-            if not title:
-                continue
-            db.add(KnowledgeNode(
-                parent_id=node.id, title=title,
-                node_type=str(item.get("node_type", "concept"))[:20],
-                order_index=base + 1 + i,
-            ))
-            created += 1
-        db.commit()
-        update_progress(record, 1.0, "expand", "完成")
-        return {"created": created}
+            update_progress(record, 0.7, "expand", "正在写入子节点…")
+            node2 = db2.get(KnowledgeNode, req.node_id)
+            if node2 is None:
+                raise RuntimeError("知识点不存在或已删除")
+            siblings = db2.scalars(
+                select(KnowledgeNode).where(KnowledgeNode.parent_id == node2.id)
+            ).all()
+            base = max((s.order_index for s in siblings), default=-1)
+            created = 0
+            for i, item in enumerate(data[:8]):
+                title = str(item.get("title", "")).strip()
+                if not title:
+                    continue
+                db2.add(KnowledgeNode(
+                    parent_id=node2.id, title=title,
+                    node_type=str(item.get("node_type", "concept"))[:20],
+                    order_index=base + 1 + i,
+                ))
+                created += 1
+            db2.commit()
+            update_progress(record, 1.0, "expand", "完成")
+            return {"created": created}
+        finally:
+            db2.close()
 
     record = submit("knowledge-expand", run)
     return {"task_id": record.id, "status": "running"}

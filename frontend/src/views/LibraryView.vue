@@ -88,7 +88,7 @@
                 <el-button link type="primary" size="small" style="margin-left: auto"
                   @click="viewOriginal(r)">📄 查看原文</el-button>
               </div>
-              <div class="result-snippet" v-html="r.snippet" />
+              <div class="result-snippet" v-html="sanitizeHtml(r.snippet)" />
             </el-card>
           </div>
         </el-card>
@@ -151,6 +151,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listBooks, uploadBook, deleteBook, getBook, searchBooks, getTask, classifyAllBooks, setBookCategory, deepAnalyze } from '../api'
+import { sanitizeHtml } from '../utils/markdown'
 import OriginalViewer from '../components/OriginalViewer.vue'
 
 const router = useRouter()

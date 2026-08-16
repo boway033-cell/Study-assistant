@@ -1,0 +1,6 @@
+# 学习助手（Study assistant）测试依赖（可选，运行应用不需要）
+# 安装：pip install -r requirements-dev.txt
+
+pytest==9.1.1
+pytest-asyncio==1.4.0
+playwright==1.62.0
