@@ -30,6 +30,7 @@ export const getTask = (id) => http.get(`/tasks/${id}`)
 export const getChunkOriginal = (bookId, chunkId) => http.get(`/books/${bookId}/chunk/${chunkId}`)
 export const getPageText = (bookId, pageNo) => http.get(`/books/${bookId}/page/${pageNo}`)
 export const bookFileUrl = (bookId) => `/api/books/${bookId}/file`
+export const getBookDocument = (bookId) => http.get(`/books/${bookId}/document`)
 
 // ===== 问答 =====
 export const chatStream = async (body, onEvent) => {

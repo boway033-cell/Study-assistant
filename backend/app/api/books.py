@@ -227,8 +227,18 @@ def delete_book(book_id: int, db: Session = Depends(get_db)):
     if not book:
         raise HTTPException(404, "书籍不存在")
     file_path = book.file_path
-    # 先删智能分析记录（BookAnalysis 外键）
-    from backend.app.models import BookAnalysis
+    # 级联清理所有外键关联（Book 模型未挂级联的表需显式删除）
+    from backend.app.models import (
+        Annotation,
+        BookAnalysis,
+        BookDeep,
+        ChatLog,
+        KnowledgeNode,
+        Note,
+    )
+    for model in (Annotation, BookDeep, ChatLog, Note):
+        db.query(model).filter(model.book_id == book_id).delete(synchronize_session=False)
+    db.query(KnowledgeNode).filter(KnowledgeNode.book_id == book_id).delete(synchronize_session=False)
     ba = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book_id))
     if ba:
         db.delete(ba)
@@ -260,11 +270,14 @@ def reparse_book(book_id: int, db: Session = Depends(get_db)):
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
-    # 清空旧章节/chunks/分析/向量
-    from backend.app.models import BookAnalysis
+    # 清空旧章节/chunks/分析/向量/深度分析
+    from backend.app.models import BookAnalysis, BookDeep
     ba = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book_id))
     if ba:
         db.delete(ba)
+    bd = db.scalar(select(BookDeep).where(BookDeep.book_id == book_id))
+    if bd:
+        db.delete(bd)
     db.query(Chunk).filter(Chunk.book_id == book_id).delete()
     db.query(Chapter).filter(Chapter.book_id == book_id).delete()
     try:
@@ -301,6 +314,40 @@ def get_task_status(task_id: str):
         stage=record.stage, message=record.message, error=record.error,
         result=record.result,
     )
+
+
+@router.get("/books/{book_id}/document")
+def get_document(book_id: int, db: Session = Depends(get_db)):
+    """返回结构化文档（章节树 + 每章正文），供 docx/pptx 文本阅读器使用。"""
+    from backend.app.models import Chunk as _Chunk
+    from backend.app.models import Chapter as _Chapter
+
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(404, "书籍不存在")
+    chapters = db.scalars(
+        select(_Chapter).where(_Chapter.book_id == book_id).order_by(_Chapter.order_index)
+    ).all()
+    chunks = db.scalars(
+        select(_Chunk).where(_Chunk.book_id == book_id).order_by(_Chunk.chunk_index)
+    ).all()
+    by_chapter: dict[int | None, list[str]] = {}
+    for c in chunks:
+        by_chapter.setdefault(c.chapter_id, []).append(c.content)
+    return {
+        "book_id": book.id,
+        "title": book.title,
+        "file_type": book.file_type,
+        "chapters": [
+            {"id": ch.id, "title": ch.title, "level": ch.level or 1, "order_index": ch.order_index,
+             "parent_id": ch.parent_id}
+            for ch in chapters
+        ],
+        "sections": [
+            {"chapter_id": ch.id, "title": ch.title, "text": "\n\n".join(by_chapter.get(ch.id, []))}
+            for ch in chapters
+        ],
+    }
 
 
 @router.get("/books/{book_id}/notes", response_model=list[NoteResp])

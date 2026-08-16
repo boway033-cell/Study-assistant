@@ -4,11 +4,12 @@
       <el-button size="small" @click="$router.push('/library')">← 返回资料库</el-button>
       <span class="reader-title">📖 {{ book?.title || 'PDF 阅读器' }}</span>
       <el-tag v-if="currentChapter" size="small" type="warning">{{ currentChapter }}</el-tag>
-      <el-button size="small" type="primary" plain @click="toggleMd">📝 Markdown 精读版</el-button>
+      <el-button v-if="book && book.file_type === 'pdf'" size="small" type="primary" plain @click="toggleMd">📝 Markdown 精读版</el-button>
       <span class="reader-tip">本地渲染 · 选中文字可 AI 解释/翻译/高亮 · 深色模式 · 目录跳转 · 阅读位置自动记忆</span>
     </div>
     <div class="reader-body">
-      <div v-if="showMd" class="md-view">
+      <DocReader v-if="book && book.file_type !== 'pdf'" :book-id="book.id" />
+      <div v-else-if="showMd" class="md-view">
         <div class="md-toolbar">
           <el-button size="small" @click="showMd = false">← 返回 PDF</el-button>
           <span class="reader-title">📝 Markdown 精读版</span>
@@ -25,9 +26,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import PdfReader from '../components/PdfReader.vue'
+import DocReader from '../components/DocReader.vue'
 import { getBook, bookFileUrl, getBookDeep, deepAnalyze, getTask } from '../api'
 import { ElMessage } from 'element-plus'
 
@@ -89,8 +91,10 @@ const onPageChange = ({ page, chapter }) => {
   document.title = (chapter ? chapter + ' · ' : '') + (book.value?.title || 'PDF 阅读器')
 }
 
-onMounted(async () => {
-  const bookId = Number(route.params.bookId)
+const loadBook = async (bookId) => {
+  book.value = null
+  mdText.value = ''
+  tocFlat.value = []
   try {
     book.value = await getBook(bookId)
     const flat = []
@@ -105,6 +109,15 @@ onMounted(async () => {
   } catch (e) {
     book.value = null
   }
+}
+
+// 路由参数变化时重新加载（docx ⇄ pdf 等切换）
+watch(() => route.params.bookId, (id) => {
+  if (id) loadBook(Number(id))
+})
+
+onMounted(() => {
+  loadBook(Number(route.params.bookId))
 })
 </script>
 

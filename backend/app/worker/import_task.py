@@ -53,14 +53,11 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         file_path = settings.uploads_dir / book.file_path
         result = parse_document(file_path)
 
-        # 1b. OCR：扫描版检测
-        if result.pages and detect_scanned(result.pages):
+        # 1b. OCR：扫描版检测（仅 PDF；docx/pptx 必有文本层，跳过避免误判）
+        if book.file_type == "pdf" and result.pages and detect_scanned(result.pages):
             update_progress(record, 0.15, "ocr", "检测到扫描版，正在 OCR 识别...")
-            if book.file_type == "pdf":
-                result.pages = ocr_pdf(file_path)
-                result.total_pages = len(result.pages)
-            else:
-                raise ParseError("该文档无文本层，OCR 仅支持 PDF")
+            result.pages = ocr_pdf(file_path)
+            result.total_pages = len(result.pages)
 
         if not result.pages or all(not p.strip() for p in result.pages):
             raise ParseError("未能从文档中提取到文本（可能是扫描版 PDF）")

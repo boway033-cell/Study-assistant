@@ -80,11 +80,21 @@ async def run_overview(record, book_ids: list[int] | None) -> dict:
             {"role": "user", "content": context},
         ]
         answer = ""
-        try:
-            async for delta in provider.stream_chat(prompt):
-                answer += delta
-        except Exception as e:  # noqa: BLE001
-            raise RuntimeError(f"综合阅读失败: {e}")
+        last_err = ""
+        for attempt in range(3):  # 限流/网络抖动自动重试
+            try:
+                answer = ""
+                async for delta in provider.stream_chat(prompt):
+                    answer += delta
+                if answer.strip():
+                    break
+                last_err = "AI 返回为空"
+            except Exception as e:  # noqa: BLE001
+                last_err = str(e)
+            import asyncio
+            await asyncio.sleep(2 * (attempt + 1))
+        if not answer.strip():
+            raise RuntimeError("综合阅读失败：" + last_err)
 
         # 持久化报告
         from backend.app.models import StudyReport

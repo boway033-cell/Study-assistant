@@ -740,16 +740,28 @@ const analyzePage = async () => {
 }
 
 // ===== 生命周期 =====
+const onKeydown = (e) => {
+  // 输入框内不拦截
+  const tag = e.target?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+  if (e.key === 'ArrowLeft') { e.preventDefault(); goPage(-1) }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); goPage(1) }
+  else if (e.key === 'PageDown') { e.preventDefault(); goPage(1) }
+  else if (e.key === 'PageUp') { e.preventDefault(); goPage(-1) }
+}
+
 onMounted(async () => {
   try {
     const resp = await listBooks({ page_size: 100 })
     const b = resp.items.find(x => x.id === props.bookId)
     bookTitle = b?.title || ''
   } catch {}
+  window.addEventListener('keydown', onKeydown)
   loadPdf()
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
   savePos()
   if (pdfDoc) { try { pdfDoc.destroy() } catch {} }
 })

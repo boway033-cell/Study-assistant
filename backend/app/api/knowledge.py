@@ -1,6 +1,8 @@
 """知识树 API — 用户自主搭建知识结构，可关联书籍章节展示原文"""
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -255,22 +257,30 @@ def ai_generate(req: KnowledgeAiGenerateReq, db: Session = Depends(get_db)):
             {"role": "system", "content": (
                 "你是课程知识结构化助手。根据教材的章节目录和关键词，生成一份课程知识框架树"
                 "（帮助复习用的顶层结构，3 层以内）。只输出 JSON 数组，格式："
-                '[{"title":"一级主题","children":[{"title":"二级主题","children":[{"title":"三级主题","children":[]}]}]}]。',
+                '[{"title":"一级主题","children":[{"title":"二级主题","children":[{"title":"三级主题","children":[]}]}]}]。'
                 "要求：1) 一级 3-8 个；2) 主题用概括性术语（可不同于原章节名）；"
                 "3) 覆盖全部关键词；4) 不要输出解释文字。"
             )},
             {"role": "user", "content": _json.dumps(material, ensure_ascii=False)},
         ]
         answer = ""
-        try:
-            async for delta in provider.stream_chat(prompt):
-                answer += delta
-            from backend.app.services.llm import parse_json_response
-            data = parse_json_response(answer)
-            if not isinstance(data, list):
-                raise ValueError("非数组")
-        except Exception:  # noqa: BLE001
-            raise RuntimeError("AI 生成失败，请重试或改用手动/章节导入")
+        data = None
+        last_err = ""
+        for attempt in range(3):  # 限流/网络抖动自动重试
+            try:
+                answer = ""
+                async for delta in provider.stream_chat(prompt):
+                    answer += delta
+                from backend.app.services.llm import parse_json_response
+                data = parse_json_response(answer)
+                if isinstance(data, list) and data:
+                    break
+                last_err = "AI 返回内容无法解析为 JSON 数组"
+            except Exception as e:  # noqa: BLE001
+                last_err = str(e)
+            await asyncio.sleep(2 * (attempt + 1))
+        if not isinstance(data, list) or not data:
+            raise RuntimeError("AI 生成失败：" + last_err + "，请稍后重试或改用手动/章节导入")
 
         update_progress(record, 0.6, "ai", "正在写入知识树...")
         total = _create_ai_tree(db, req, data)
