@@ -5,7 +5,7 @@
         <span class="logo-dew">💧</span>
         <div class="logo-text">
           <span class="logo-title">Study assistant</span>
-          <span class="logo-sub">{{ term.name }} · {{ term.poem.slice(0, 8) }}</span>
+          <span class="logo-sub">{{ term.name }} · {{ dateStr }}</span>
         </div>
       </div>
       <el-menu :default-active="$route.path" router class="menu">
@@ -19,7 +19,7 @@
       </el-menu>
       <div class="aside-footer">
         <div class="dew-dot" v-for="i in 3" :key="i" :style="{ left: 24 + i * 44 + 'px', animationDelay: i * 0.6 + 's' }"></div>
-        <span class="aside-poem">{{ term.poem }}</span>
+        <span class="aside-poem">{{ term.name }} · {{ dateStr }}</span>
       </div>
     </el-aside>
     <el-container>
@@ -62,6 +62,10 @@ import { getSolarTerm } from './utils/solarTerm'
 const router = useRouter()
 const showKeyGuide = ref(false)
 const term = getSolarTerm()
+const dateStr = (() => {
+  const d = new Date()
+  return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日'
+})()
 
 const goSettings = () => {
   showKeyGuide.value = false
