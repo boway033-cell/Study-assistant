@@ -34,3 +34,6 @@ backend/tests/ui_*.png
 
 # runtime log
 server.log
+
+# 备份产物
+backup-*.zip

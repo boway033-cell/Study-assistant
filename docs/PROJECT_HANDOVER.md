@@ -8,7 +8,7 @@
 ## 1. 项目一句话
 
 本地部署的个人学习辅助软件：把 PDF/Word/PPT 教材转化为「AI 问答 + 知识树 + 自测刷题 + 深度分析 + AI 研读」的完整学习闭环。
-**文本解析/切块/检索 100% 本地完成；仅「提问 + 检索片段」发送到 DeepSeek/Qwen 云端生成回答。**
+**原始文件本地保存；启用 AI 功能时，问答/深度分析/出题/研读/知识树/视觉分析会向 DeepSeek / Qwen-VL 发送相关片段或图像（详见 PRIVACY.md）。**
 
 ## 2. 位置与环境
 
@@ -53,7 +53,7 @@
 
 ### 3.5 AI 研读（综合阅读 + 思维训练）
 - **综合阅读报告**：通读所选文献 → 主题脉络/文献定位/交叉知识点/思维题/学习路径（Markdown 渲染，可存档/删除）
-- **思维训练**：出题训练（苏格拉底式批改+追问）或自由陪练，6 轮后总结
+- **思维训练**：出题训练（苏格拉底式批改+追问）或自由陪练（轮数不限，用户主动结束）
 
 ### 3.6 PDF 阅读器（本地渲染 + AI 可选）
 - 连续/单页/双页三模式、自动适应宽度、目录跳转、深色、位置记忆、键盘翻页
@@ -85,7 +85,7 @@
   │   ├─ llm/          DeepSeekProvider(flash/pro) + parse_json_response
   │   ├─ vision.py     QwenVLProvider(视觉分析)
   │   └─ deep_analysis.py  三级标题/核对/补全/逐章总结/Markdown
-  ├─ worker/           tasks.py + import_task.py(导入流水线,自动触发深度分析)
+  ├─ worker/           tasks.py(后台队列 FIFO 串行) + import_task.py(导入流水线；深度分析由用户手动触发)
   └─ models/           books/chapters/chunks/quizzes/annotations/knowledge_nodes/book_deep/study_reports/...
 ```
 

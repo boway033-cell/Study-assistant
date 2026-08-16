@@ -1,7 +1,11 @@
-# 保研复习助手（Study Assistant）
+# 学习助手（Study assistant）
 
-一个本地部署的**个人学习辅助软件**，帮助保研学生把大量专业课 PDF/Word 资料转化为
-「AI 问答 + 自测刷题 + 知识树 + 掌握度统计」的完整学习闭环。
+![Python](https://img.shields.io/badge/Python-3.12%2B-blue)
+![Vue](https://img.shields.io/badge/Vue-3-42b883)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
+一个本地部署的**个人学习辅助软件**，把 PDF / Word / PPT 教材转化为
+「AI 问答 + 知识树 + 自测刷题 + 深度分析 + AI 研读」的完整学习闭环。
 
 > 核心思路：把「读资料」变成「主动回忆 + 自测 + 查漏补缺」。
 >
@@ -69,6 +73,10 @@ npm run build      # 构建产物由后端自动托管
 | [docs/04-roadmap.md](docs/04-roadmap.md) | 开发路线图 |
 | [docs/PROJECT_HANDOVER.md](docs/PROJECT_HANDOVER.md) | 项目交接（含踩坑记录） |
 | [docs/experience-pdf-analysis.md](docs/experience-pdf-analysis.md) | 教材 PDF 分析方法论 |
+| [PRIVACY.md](PRIVACY.md) | 隐私说明（数据流向） |
+| [SECURITY.md](SECURITY.md) | 安全策略 |
+| [CHANGELOG.md](CHANGELOG.md) | 变更日志 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
 
 ## 🔒 隐私与数据
 
@@ -97,5 +105,10 @@ npm run build      # 构建产物由后端自动托管
 .venv/Scripts/python backend/tests/ui_test.py
 ```
 
+## 📦 备份与卸载
+
+- **备份**：复制 `backend/data/` 目录，或运行 `backup.bat` 一键打包为 zip。
+- **卸载**：停止服务后直接删除项目目录即可（应用数据只写在项目目录内，不修改系统其它文件）。
+
 ---
-*版本 v0.4（DeepSeek 云端化 + 知识树，卡片学习已移除）*
+*版本 v1.0.0（见 CHANGELOG.md）*

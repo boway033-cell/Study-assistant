@@ -1,0 +1,16 @@
+# 统一换行符，避免 Windows/Linux 混用污染 diff
+* text=auto
+
+# 二进制文件不转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.db binary
+*.db-wal binary
+*.db-shm binary
+
+# 批处理脚本必须 CRLF（Windows）
+*.bat text eol=crlf
