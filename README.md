@@ -3,6 +3,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12%2B-blue)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+[![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions)
 
 一个本地部署的**个人学习辅助软件**，把 PDF / Word / PPT 教材转化为
 「AI 问答 + 知识树 + 自测刷题 + 深度分析 + AI 研读」的完整学习闭环。

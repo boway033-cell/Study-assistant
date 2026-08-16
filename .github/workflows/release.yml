@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package
+        run: |
+          mkdir -p _pkg/study-assistant
+          rsync -a \
+            --exclude '.git' \
+            --exclude '.venv' \
+            --exclude 'node_modules' \
+            --exclude 'backend/data' \
+            --exclude '__pycache__' \
+            --exclude '.pytest_cache' \
+            --exclude '.env' \
+            --exclude 'server.log' \
+            --exclude '*.pyc' \
+            --exclude 'backup-*.zip' \
+            --exclude '_pkg' \
+            ./ _pkg/study-assistant/
+          cd _pkg
+          zip -r -q ../study-assistant-${{ github.ref_name }}.zip study-assistant
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: study-assistant-${{ github.ref_name }}.zip
