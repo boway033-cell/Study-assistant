@@ -29,7 +29,7 @@ with sync_playwright() as p:
 
     print("=== 1. 首页/资料库 ===")
     page.goto(BASE, wait_until="networkidle", timeout=15000)
-    check("页面标题", "保研复习助手" in page.title())
+    check("页面标题", "Study assistant" in page.title())
     check("侧边栏菜单", page.locator(".el-menu-item").count() >= 5,
           f"count={page.locator('.el-menu-item').count()}")
     page.wait_for_selector("text=sample_math", timeout=10000)

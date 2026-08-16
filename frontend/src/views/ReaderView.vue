@@ -2,7 +2,7 @@
   <div class="reader-page">
     <div class="reader-top">
       <el-button size="small" @click="$router.push('/library')">← 返回资料库</el-button>
-      <span class="reader-title">📖 {{ book?.title || 'PDF 阅读器' }}</span>
+      <span class="reader-title">📖 {{ book?.title || '阅读器' }}</span>
       <el-tag v-if="currentChapter" size="small" type="warning">{{ currentChapter }}</el-tag>
       <el-button v-if="book && book.file_type === 'pdf'" size="small" type="primary" plain @click="toggleMd">📝 Markdown 精读版</el-button>
       <span class="reader-tip">本地渲染 · 选中文字可 AI 解释/翻译/高亮 · 深色模式 · 目录跳转 · 阅读位置自动记忆</span>

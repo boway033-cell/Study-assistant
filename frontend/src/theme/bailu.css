@@ -1,130 +1,96 @@
 /* ============================================
-   Glassmorphism 玻璃拟态主题
-   磨砂玻璃卡片 + 渐变背景 + 圆角 + 柔和阴影
-   参考配色：靛蓝 → 紫 → 青 渐变
+   古籍学术风 · 东方文人美学
+   深青灰绿底 + 米褐纸卡 + 棕褐强调
+   参考图：古籍做旧纹理
    ============================================ */
 
 :root {
-  /* —— 主色：靛蓝紫（玻璃渐变） —— */
-  --el-color-primary: #5b6ee8;
-  --el-color-primary-light-3: #8493ee;
-  --el-color-primary-light-5: #adb8f4;
-  --el-color-primary-light-7: #cfd6f9;
-  --el-color-primary-light-8: #e0e5fb;
-  --el-color-primary-light-9: #eff2fd;
-  --el-color-primary-dark-2: #4a58c2;
+  /* —— 主色：棕褐（老木/古纸） —— */
+  --el-color-primary: #8B5A2B;
+  --el-color-primary-light-3: #A67C52;
+  --el-color-primary-light-5: #C2A285;
+  --el-color-primary-light-7: #DCC9B5;
+  --el-color-primary-light-8: #E7D8C8;
+  --el-color-primary-light-9: #F2EAE0;
+  --el-color-primary-dark-2: #6F4721;
 
-  /* —— 功能色（柔和玻璃系） —— */
-  --el-color-success: #34c39b;
-  --el-color-success-light-3: #6dd6b8;
-  --el-color-success-light-5: #a2e5d1;
-  --el-color-success-light-7: #ccf0e5;
-  --el-color-success-light-8: #dff6ee;
-  --el-color-success-light-9: #effbf7;
-  --el-color-success-dark-2: #279f7d;
-  --el-color-warning: #f6a94a;
-  --el-color-warning-light-3: #f8bf7c;
-  --el-color-warning-light-5: #fbd5aa;
-  --el-color-warning-light-7: #fde7cd;
-  --el-color-warning-light-8: #fef0df;
-  --el-color-warning-light-9: #fff7ef;
-  --el-color-warning-dark-2: #d78d33;
-  --el-color-danger: #f06565;
-  --el-color-danger-light-3: #f59393;
-  --el-color-danger-light-5: #f8bcbc;
-  --el-color-danger-light-7: #fcdada;
-  --el-color-danger-light-8: #fde8e8;
-  --el-color-danger-light-9: #fef3f3;
-  --el-color-danger-dark-2: #d64d4d;
-  --el-color-info: #8896b8;
-  --el-color-info-light-3: #abb5cf;
-  --el-color-info-light-5: #c9d0e2;
-  --el-color-info-light-7: #e0e4ef;
-  --el-color-info-light-8: #eceef6;
-  --el-color-info-light-9: #f5f6fb;
-  --el-color-info-dark-2: #6b789a;
+  /* —— 功能色（低饱和沉稳） —— */
+  --el-color-success: #5F8D5F;
+  --el-color-success-light-3: #8BB08B;
+  --el-color-success-light-5: #B4CEB4;
+  --el-color-success-light-7: #D5E3D5;
+  --el-color-success-light-8: #E3EDE3;
+  --el-color-success-light-9: #F0F6F0;
+  --el-color-success-dark-2: #4A704A;
+  --el-color-warning: #C08A3E;
+  --el-color-warning-light-3: #D0A86C;
+  --el-color-warning-light-5: #E0C69B;
+  --el-color-warning-light-7: #EDDCC0;
+  --el-color-warning-light-8: #F3E7D2;
+  --el-color-warning-light-9: #F9F2E8;
+  --el-color-warning-dark-2: #9C6E2E;
+  --el-color-danger: #B05545;
+  --el-color-danger-light-3: #C87F74;
+  --el-color-danger-light-5: #DFABA4;
+  --el-color-danger-light-7: #EED0CC;
+  --el-color-danger-light-8: #F3DFDC;
+  --el-color-danger-light-9: #F9EFED;
+  --el-color-danger-dark-2: #8C4235;
+  --el-color-info: #7A8478;
+  --el-color-info-light-3: #A3ABA1;
+  --el-color-info-light-5: #C6CCC4;
+  --el-color-info-light-7: #DFE2DD;
+  --el-color-info-light-8: #EAEDE9;
+  --el-color-info-light-9: #F4F6F4;
+  --el-color-info-dark-2: #5F6A5E;
 
-  /* —— 玻璃质感 —— */
-  --el-bg-color: rgba(255, 255, 255, 0.75);
+  /* —— 纸色卡片 / 文字 —— */
+  --el-bg-color: #F5F0E8;
   --el-bg-color-page: transparent;
-  --el-bg-color-overlay: rgba(255, 255, 255, 0.92);
-  --el-text-color-primary: #2b3355;
-  --el-text-color-regular: #3d4769;
-  --el-text-color-secondary: #6c7696;
-  --el-text-color-placeholder: #9aa3bf;
-  --el-border-color: rgba(255, 255, 255, 0.6);
-  --el-border-color-light: rgba(255, 255, 255, 0.5);
-  --el-border-color-lighter: rgba(255, 255, 255, 0.4);
-  --el-border-color-extra-light: rgba(255, 255, 255, 0.35);
-  --el-fill-color: rgba(255, 255, 255, 0.4);
-  --el-fill-color-light: rgba(255, 255, 255, 0.55);
-  --el-fill-color-lighter: rgba(255, 255, 255, 0.7);
-  --el-fill-color-extra-light: rgba(255, 255, 255, 0.82);
+  --el-bg-color-overlay: #F8F3EB;
+  --el-text-color-primary: #333333;
+  --el-text-color-regular: #44473F;
+  --el-text-color-secondary: #6E6E60;
+  --el-text-color-placeholder: #9A988A;
+  --el-border-color: #D4C9B8;
+  --el-border-color-light: #DDD3C4;
+  --el-border-color-lighter: #E6DECF;
+  --el-border-color-extra-light: #EEE7DA;
+  --el-fill-color: #EDE5D8;
+  --el-fill-color-light: #F1EBDF;
+  --el-fill-color-lighter: #F5F0E8;
+  --el-fill-color-extra-light: #FAF6EF;
 
-  /* —— 玻璃拟态专属变量 —— */
-  --glass-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #5b6ee8 100%);
-  --glass-bg: linear-gradient(160deg, #eaf0ff 0%, #f3edff 35%, #e8f6ff 70%, #eefbf5 100%);
-  --glass-card: rgba(255, 255, 255, 0.62);
-  --glass-card-hover: rgba(255, 255, 255, 0.78);
-  --glass-border: rgba(255, 255, 255, 0.65);
-  --glass-shadow: 0 8px 32px rgba(91, 110, 232, 0.12);
-  --glass-blur: blur(18px) saturate(160%);
-  --bailu-bg-gradient: linear-gradient(180deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.35) 100%);
-  --bailu-header-bg: rgba(255, 255, 255, 0.5);
-  --bailu-card-shadow: var(--glass-shadow);
-  --bailu-text-deep: #2b3355;
-  --bailu-accent: #5b6ee8;
+  /* —— 古籍学术风专属变量 —— */
+  --glass-bg: linear-gradient(160deg, #2A3B3D 0%, #33484A 55%, #2E4042 100%);
+  --bailu-bg-gradient: linear-gradient(180deg, rgba(46,64,66,0.92) 0%, rgba(42,59,61,0.9) 100%);
+  --bailu-header-bg: rgba(46, 64, 66, 0.85);
+  --bailu-card-shadow: 0 6px 24px rgba(20, 30, 31, 0.35);
+  --bailu-text-deep: #F5F0E8;      /* 侧边栏/页头浅色标题 */
+  --bailu-accent: #C2A285;          /* 侧边栏强调（暖赭） */
+  --bailu-main-text: #333333;       /* 主内容深色文字 */
 }
 
-/* —— 全局渐变背景 —— */
+/* —— 全局背景：参考图纹理 + 深青绿底 —— */
 body {
-  background: var(--glass-bg);
-  background-attachment: fixed;
+  background: linear-gradient(rgba(38, 52, 54, 0.9), rgba(42, 59, 61, 0.92)), url('../assets/bg.jpg') no-repeat center / cover fixed;
   color: var(--el-text-color-primary);
-  font-family: "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+  font-family: "Microsoft YaHei", "PingFang SC", "STSong", "SimSun", serif;
 }
 
-/* 磨砂装饰光斑 */
-#app::before {
-  content: '';
-  position: fixed;
-  top: -15%;
-  left: -10%;
-  width: 50vw;
-  height: 50vw;
-  background: radial-gradient(circle, rgba(102, 126, 234, 0.35) 0%, transparent 60%);
-  filter: blur(30px);
-  pointer-events: none;
-  z-index: 0;
-}
-#app::after {
-  content: '';
-  position: fixed;
-  bottom: -20%;
-  right: -10%;
-  width: 55vw;
-  height: 55vw;
-  background: radial-gradient(circle, rgba(118, 75, 162, 0.3) 0%, transparent 60%);
-  filter: blur(40px);
-  pointer-events: none;
-  z-index: 0;
-}
-
-/* —— 玻璃卡片 —— */
+/* —— 纸质感卡片 —— */
 .el-card {
-  border-radius: 18px;
-  border: 1px solid var(--glass-border);
-  background: var(--glass-card);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  box-shadow: var(--glass-shadow);
+  border-radius: 12px;
+  border: 1px solid var(--el-border-color);
+  background: var(--el-bg-color);
+  box-shadow: var(--bailu-card-shadow);
 }
-.el-card.is-always-shadow,
-.el-card.is-hover-shadow:hover {
-  box-shadow: var(--glass-shadow);
+.el-card__header {
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  color: var(--bailu-main-text);
 }
 
-/* 玻璃弹窗/抽屉/下拉 */
+/* —— 弹窗/抽屉/下拉（纸色） —— */
 .el-dialog,
 .el-drawer,
 .el-message-box,
@@ -132,100 +98,82 @@ body {
 .el-select-dropdown,
 .el-dropdown-menu {
   background: var(--el-bg-color-overlay) !important;
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--glass-border) !important;
-  border-radius: 18px !important;
-  box-shadow: var(--glass-shadow);
+  border: 1px solid var(--el-border-color) !important;
+  border-radius: 12px !important;
+  box-shadow: var(--bailu-card-shadow);
 }
 
-/* —— 侧边栏 / 页头玻璃 —— */
+/* —— 侧边栏 / 页头（深青绿） —— */
 .layout .aside {
-  background: linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0.25) 100%);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border-right: 1px solid var(--glass-border);
+  background: var(--bailu-bg-gradient);
+  border-right: 1px solid rgba(212, 201, 184, 0.2);
 }
 .layout .header {
   background: var(--bailu-header-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border-bottom: 1px solid var(--glass-border);
+  border-bottom: 1px solid rgba(212, 201, 184, 0.2);
 }
 
-/* —— 菜单玻璃 —— */
+/* —— 菜单（深底浅字） —— */
 .el-menu { background: transparent; border-right: none; }
 .el-menu-item,
 .el-sub-menu__title {
-  border-radius: 12px;
-  margin: 2px 10px;
+  border-radius: 10px;
+  margin: 3px 10px;
+  color: rgba(245, 240, 232, 0.75);
   transition: all 0.2s ease;
 }
 .el-menu-item.is-active {
-  background: rgba(255, 255, 255, 0.65);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  color: var(--bailu-accent);
+  background: rgba(245, 240, 232, 0.14);
+  color: #F5F0E8;
   border-right: none;
   font-weight: 600;
-  box-shadow: 0 4px 14px rgba(91, 110, 232, 0.15);
 }
-.el-menu-item:hover { background: rgba(255, 255, 255, 0.45); }
+.el-menu-item:hover { background: rgba(245, 240, 232, 0.1); color: #F5F0E8; }
 
-/* —— 按钮圆角 —— */
-.el-button { border-radius: 12px; }
+/* —— 按钮 —— */
+.el-button { border-radius: 10px; }
 .el-button--primary {
-  box-shadow: 0 4px 14px rgba(91, 110, 232, 0.3);
+  box-shadow: 0 3px 12px rgba(139, 90, 43, 0.3);
 }
 .el-radio-button__inner,
 .el-input__wrapper,
-.el-textarea__inner,
-.el-input-number {
-  border-radius: 12px !important;
+.el-textarea__inner {
+  border-radius: 10px !important;
 }
 
-/* —— 输入框玻璃 —— */
+/* —— 输入框 —— */
 .el-input__wrapper {
-  background: rgba(255, 255, 255, 0.5);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: #FAF6EF;
   box-shadow: none !important;
-  border: 1px solid var(--glass-border);
-}
-.el-input__wrapper.is-focus {
-  border-color: var(--el-color-primary);
-  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--el-border-color);
 }
 
-/* —— 表格玻璃 —— */
+/* —— 表格 —— */
 .el-table { background: transparent; }
 .el-table th.el-table__cell {
-  background: rgba(255, 255, 255, 0.45);
-  color: var(--bailu-text-deep);
+  background: #EDE5D8;
+  color: var(--bailu-main-text);
+  font-weight: 700;
 }
 .el-table tr,
-.el-table td.el-table__cell {
-  background: transparent;
-}
+.el-table td.el-table__cell { background: transparent; }
 .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
-  background: rgba(255, 255, 255, 0.3);
+  background: #F1EBDF;
 }
-
-/* —— 标签页玻璃 —— */
-.el-tabs__nav-wrap::after { background: transparent; }
-.el-tabs__item {
-  border-radius: 10px;
-}
-.el-tabs__item.is-active { color: var(--bailu-accent); }
 
 /* —— 滚动条 —— */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: rgba(91, 110, 232, 0.35); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(91, 110, 232, 0.55); }
+::-webkit-scrollbar-thumb { background: #C2A285; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #A67C52; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-/* —— 链接色 —— */
-a { color: var(--bailu-accent); }
+/* —— 链接 —— */
+a { color: #8B5A2B; }
 
-/* —— 主内容区透明（让渐变背景透出） —— */
+/* —— 主内容透明（让深底透出） —— */
 .el-main { background: transparent !important; }
+
+/* —— 全局字号微调（更舒适） —— */
+body { font-size: 14px; }
+.el-card__header { font-size: 15px; }
+.el-table { font-size: 14px; }

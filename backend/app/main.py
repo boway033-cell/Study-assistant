@@ -61,7 +61,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="保研复习助手", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Study assistant", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

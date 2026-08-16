@@ -18,6 +18,13 @@
             </div>
           </template>
 
+          <div class="kt-stats">
+            <el-tag size="small" type="info">节点 {{ statTotal }}</el-tag>
+            <el-tag size="small" type="success">🟢 已掌握 {{ statKnown }}</el-tag>
+            <el-tag size="small" type="warning">🟡 模糊 {{ statFuzzy }}</el-tag>
+            <el-tag size="small" type="danger">🔴 未掌握 {{ statMiss }}</el-tag>
+          </div>
+          <el-input v-model="treeFilter" size="small" placeholder="搜索节点…" clearable style="margin-bottom: 8px" prefix-icon="Search" />
           <div class="gen-buttons">
             <el-button size="small" type="success" plain @click="showImport = true">📚 从章节导入</el-button>
             <el-button size="small" type="warning" plain @click="showAi = true">🤖 AI 生成框架</el-button>
@@ -33,7 +40,7 @@
             </div>
             <el-tree
               v-else
-              :data="tree"
+              :data="filteredTree"
               :props="{ label: 'title', children: 'children' }"
               node-key="id"
               draggable
@@ -211,6 +218,7 @@ import {
 } from '../api'
 
 const router = useRouter()
+const treeFilter = ref('')
 const tree = ref([])
 const books = ref([])
 const nodeAnns = ref([])
@@ -234,18 +242,38 @@ const aiRunning = ref(false)
 const aiStage = ref('')
 
 const tocFlat = ref([])
+const statTotal = ref(0)
+const statKnown = ref(0)
+const statFuzzy = ref(0)
+const statMiss = ref(0)
 const pdfUrl = computed(() => {
   if (!source.value.book_id || !source.value.page_start) return ''
   return bookFileUrl(source.value.book_id)
+})
+
+const filteredTree = computed(() => {
+  const q = treeFilter.value.trim().toLowerCase()
+  if (!q) return tree.value
+  const filterNodes = (nodes) => nodes.map(n => ({ ...n, children: n.children?.length ? filterNodes(n.children) : [] }))
+    .filter(n => (n.title + (n.note || '')).toLowerCase().includes(q) || n.children?.length)
+  return filterNodes(tree.value)
 })
 
 const loadTree = async () => {
   try {
     const resp = await getKnowledgeTree()
     tree.value = resp.items
+    updateStats()
   } catch (e) {
     ElMessage.error(e.message)
   }
+}
+
+const updateStats = () => {
+  let total = 0, known = 0, fuzzy = 0, miss = 0
+  const walk = (nodes) => { for (const n of nodes) { total++; if (n.mastery === 'known') known++; else if (n.mastery === 'fuzzy') fuzzy++; else if (n.mastery === 'miss') miss++; if (n.children?.length) walk(n.children) } }
+  walk(tree.value)
+  statTotal.value = total; statKnown.value = known; statFuzzy.value = fuzzy; statMiss.value = miss
 }
 
 const loadBooks = async () => {

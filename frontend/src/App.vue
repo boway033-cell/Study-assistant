@@ -4,8 +4,8 @@
       <div class="logo">
         <span class="logo-dew">💧</span>
         <div class="logo-text">
-          <span class="logo-title">保研复习助手</span>
-          <span class="logo-sub">白露 · 凝学</span>
+          <span class="logo-title">Study assistant</span>
+          <span class="logo-sub">Learning · 学习助手</span>
         </div>
       </div>
       <el-menu :default-active="$route.path" router class="menu">
@@ -33,7 +33,7 @@
     </el-container>
 
     <!-- 首次使用引导：未配置 API Key 时提示 -->
-    <el-dialog v-model="showKeyGuide" title="欢迎使用保研复习助手 👋" width="520px" :close-on-click-modal="false" append-to-body>
+    <el-dialog v-model="showKeyGuide" title="欢迎使用 Study assistant 👋" width="520px" :close-on-click-modal="false" append-to-body>
       <div class="guide-body">
         <p>本应用的 <b>AI 问答与分析</b> 基于 <b>DeepSeek 云端</b> 大模型；<b>文本解析 / 切块 / 检索等分析全部在本地完成</b>，仅将「提问 + 检索片段」发送到云端。</p>
         <p>使用前需要配置一个 <b>DeepSeek API Key</b>：</p>
@@ -132,20 +132,17 @@ html, body, #app { height: 100%; }
   padding-top: 4px;
 }
 .menu .el-menu-item {
-  color: var(--el-text-color-regular);
-  margin: 2px 8px;
-  border-radius: 8px;
+  color: rgba(245, 240, 232, 0.75);
+  margin: 3px 10px;
+  border-radius: 10px;
 }
 .menu .el-menu-item.is-active {
-  background: rgba(255, 255, 255, 0.65);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  color: var(--bailu-accent);
+  background: rgba(245, 240, 232, 0.14);
+  color: #F5F0E8;
   border-right: none;
   font-weight: 600;
-  box-shadow: 0 4px 14px rgba(91, 110, 232, 0.15);
 }
-.menu .el-menu-item:hover { background: rgba(255, 255, 255, 0.45); }
+.menu .el-menu-item:hover { background: rgba(245, 240, 232, 0.1); color: #F5F0E8; }
 
 /* —— 侧边栏底部：露珠 + 诗句 —— */
 .aside-footer {
@@ -158,7 +155,7 @@ html, body, #app { height: 100%; }
   position: absolute; bottom: 22px;
   width: 6px; height: 6px;
   border-radius: 50%;
-  background: rgba(91, 110, 232, 0.4);
+  background: rgba(194, 162, 133, 0.5);
   animation: dewDrop 2.4s ease-in-out infinite;
 }
 @keyframes dewDrop {
@@ -166,7 +163,7 @@ html, body, #app { height: 100%; }
   50% { transform: translateY(-6px); opacity: 1; }
 }
 .aside-poem {
-  font-size: 11px; color: #9db0ba;
+  font-size: 11px; color: rgba(245, 240, 232, 0.5);
   letter-spacing: 2px;
   font-style: italic;
 }
@@ -180,7 +177,7 @@ html, body, #app { height: 100%; }
 }
 .page-title { font-size: 17px; font-weight: 600; color: var(--bailu-text-deep); letter-spacing: 1px; }
 .header-slogan {
-  font-size: 11px; color: #a4b6bf;
+  font-size: 11px; color: rgba(245, 240, 232, 0.55);
   letter-spacing: 2px;
 }
 
