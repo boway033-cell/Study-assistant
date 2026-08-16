@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from backend.app.core import crypto
 from backend.app.core.config import DEEPSEEK_MODELS, settings as app_settings
 from backend.app.core.database import get_db
 from backend.app.models import Setting
@@ -66,13 +67,13 @@ def get_settings(db: Session = Depends(get_db)):
 @router.put("/settings")
 def update_settings(req: SettingsUpdateReq, db: Session = Depends(get_db)):
     if req.deepseek_api_key is not None:
-        _set_setting(db, "deepseek_api_key", req.deepseek_api_key.strip())
+        _set_setting(db, "deepseek_api_key", crypto.encrypt(req.deepseek_api_key.strip()))
     if req.deepseek_model is not None:
         if req.deepseek_model not in DEEPSEEK_MODELS:
             raise HTTPException(400, f"deepseek_model 只能是 {list(DEEPSEEK_MODELS)} 之一")
         _set_setting(db, "deepseek_model", req.deepseek_model)
     if req.vision_api_key is not None:
-        _set_setting(db, "vision_api_key", req.vision_api_key.strip())
+        _set_setting(db, "vision_api_key", crypto.encrypt(req.vision_api_key.strip()))
     if req.vision_model is not None:
         _set_setting(db, "vision_model", req.vision_model.strip())
     if req.rag_top_k is not None:

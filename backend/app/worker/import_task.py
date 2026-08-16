@@ -104,20 +104,8 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                                   for t in heu_toc]
             except Exception:  # noqa: BLE001
                 pass
-        if not result.toc:
-            # 5b. LLM 提取（需配置 LLM）
-            update_progress(record, 0.5, "chapters", "启发式提取失败，尝试 LLM 提取章节...")
-            try:
-                from backend.app.services.llm import LLMRouter, load_llm_config
-                from backend.app.services.rag.toc_llm import extract_toc_with_llm
-                provider = LLMRouter.get("auto", load_llm_config(db))
-                llm_toc = await extract_toc_with_llm(provider, cleaned_pages)
-                if llm_toc:
-                    from backend.app.services.parser import TocItem
-                    result.toc = [TocItem(title=t["title"], level=t["level"], page=t["page"])
-                                  for t in llm_toc]
-            except Exception:  # noqa: BLE001
-                pass
+        # 注：目录提取不再在导入时自动调用云端 LLM（隐私：教材正文不静默上传）。
+        # 启发式未识别出目录时，用户可在「深度分析」中手动触发 LLM 补全。
 
         chapter_defs = build_chapters(result.toc, result.total_pages)
         id_map: dict[int, int] = {}

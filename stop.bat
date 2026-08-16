@@ -11,13 +11,7 @@ if not exist "server.pid" (
     exit /b 0
 )
 
-set /p PID=<server.pid
-echo 正在停止学习助手（PID: %PID%）...
-taskkill /PID %PID% /T /F >nul 2>&1
-if errorlevel 1 (
-    echo 进程 %PID% 可能已退出。
-) else (
-    echo 已停止服务。
-)
-del server.pid >nul 2>&1
+REM 核对 PID 是否仍属于本项目服务（命令行含 uvicorn 且属本目录），再安全停止
+powershell -NoProfile -Command "$pidVal = (Get-Content 'server.pid' -Raw).Trim(); $p = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $pidVal) -ErrorAction SilentlyContinue; if (-not $p) { Write-Host ('PID ' + $pidVal + ' 已不存在，清理陈旧 PID 文件'); Remove-Item 'server.pid' -Force } elseif ($p.CommandLine -notmatch 'uvicorn|study-assistant') { Write-Host ('PID ' + $pidVal + ' 已不属于本项目（进程: ' + $p.Name + '），拒绝结束以保护其他程序'); } else { Stop-Process -Id $p.ProcessId -Force; Write-Host ('已停止学习助手服务 (PID: ' + $p.ProcessId + ')'); Remove-Item 'server.pid' -Force }"
+
 pause

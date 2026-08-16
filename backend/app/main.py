@@ -106,7 +106,7 @@ app.include_router(plan.router)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "db": str(app_settings.db_path)}
+    return {"status": "ok"}
 
 
 # 静态资源（前端构建产物）—— 必须放在所有 API 路由之后

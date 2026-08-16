@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import httpx
 
+from backend.app.core import crypto
 from backend.app.core.config import settings
 
 
@@ -61,7 +62,7 @@ def load_vision_config(db) -> dict[str, str]:
         return s.value if s else default
 
     return {
-        "vision_api_key": _get("vision_api_key", settings.vision_api_key),
+        "vision_api_key": crypto.decrypt(_get("vision_api_key", settings.vision_api_key)),
         "vision_base_url": _get("vision_base_url", settings.vision_base_url),
         "vision_model": _get("vision_model", settings.vision_model),
     }

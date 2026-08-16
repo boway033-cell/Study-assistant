@@ -131,11 +131,40 @@ async def upload_book(file: UploadFile, db: Session = Depends(get_db)):
     if file_type not in ("pdf", "docx", "pptx"):
         raise HTTPException(400, f"不支持的文件类型: {file_type}，仅支持 pdf/docx/pptx")
 
-    content = await file.read()
+    # 流式读取，边读边限制大小（不把最多 200MB 一次性读入内存）
+    MAX_SIZE = 200 * 1024 * 1024
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_SIZE:
+            raise HTTPException(400, "文件超过 200MB 限制")
+        chunks.append(chunk)
+    content = b"".join(chunks)
     if not content:
         raise HTTPException(400, "文件为空")
-    if len(content) > 200 * 1024 * 1024:
-        raise HTTPException(400, "文件超过 200MB 限制")
+
+    # 文件签名校验（防改扩展名伪装）
+    head = content[:16]
+    if file_type == "pdf":
+        if not head.lstrip().startswith(b"%PDF-"):
+            raise HTTPException(400, "文件内容不是有效的 PDF（缺少 PDF 签名）")
+    else:  # docx / pptx 是 ZIP 容器
+        if not (head.startswith(b"PK\x03\x04") or head.startswith(b"PK\x05\x06") or head.startswith(b"PK\x07\x08")):
+            raise HTTPException(400, f"文件内容不是有效的 {file_type.upper()}（缺少 ZIP 结构）")
+        # 压缩炸弹检查：解压后总大小
+        import io as _io
+        import zipfile as _zip
+        try:
+            with _zip.ZipFile(_io.BytesIO(content)) as z:
+                unpacked = sum(i.file_size for i in z.infolist())
+                if unpacked > 500 * 1024 * 1024:
+                    raise HTTPException(400, "文件解压后过大，疑似压缩炸弹")
+        except _zip.BadZipFile:
+            raise HTTPException(400, f"文件内容不是有效的 {file_type.upper()}（ZIP 结构损坏）")
 
     path = save_upload(file.filename, content)
     book = Book(

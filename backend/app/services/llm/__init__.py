@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from backend.app.core import crypto
 from backend.app.core.config import DEEPSEEK_MODELS, settings
 from backend.app.models import Setting
 
@@ -24,7 +25,7 @@ def load_llm_config(db) -> dict[str, str]:
         return s.value if s else default
 
     return {
-        "deepseek_api_key": _get("deepseek_api_key", settings.deepseek_api_key),
+        "deepseek_api_key": crypto.decrypt(_get("deepseek_api_key", settings.deepseek_api_key)),
         "deepseek_base_url": _get("deepseek_base_url", settings.deepseek_base_url),
         "deepseek_model": _get("deepseek_model", settings.deepseek_model),
     }
