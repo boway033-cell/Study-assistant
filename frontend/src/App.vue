@@ -137,13 +137,15 @@ html, body, #app { height: 100%; }
   border-radius: 8px;
 }
 .menu .el-menu-item.is-active {
-  background: #e3eef3;
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   color: var(--bailu-accent);
   border-right: none;
   font-weight: 600;
-  box-shadow: inset 0 0 0 1px rgba(62, 127, 163, 0.12);
+  box-shadow: 0 4px 14px rgba(91, 110, 232, 0.15);
 }
-.menu .el-menu-item:hover { background: #eef5f8; }
+.menu .el-menu-item:hover { background: rgba(255, 255, 255, 0.45); }
 
 /* —— 侧边栏底部：露珠 + 诗句 —— */
 .aside-footer {
@@ -156,7 +158,7 @@ html, body, #app { height: 100%; }
   position: absolute; bottom: 22px;
   width: 6px; height: 6px;
   border-radius: 50%;
-  background: rgba(62, 127, 163, 0.4);
+  background: rgba(91, 110, 232, 0.4);
   animation: dewDrop 2.4s ease-in-out infinite;
 }
 @keyframes dewDrop {

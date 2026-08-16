@@ -1,114 +1,231 @@
 /* ============================================
-   白露节气 · 蓝白主题
-   白露三候：鸿雁来、玄鸟归、群鸟养羞
-   传统色：凝露(青白) / 月白(淡蓝白) / 天青(晴空蓝)
-          / 缥碧(青绿) / 黛蓝(深青蓝)
+   Glassmorphism 玻璃拟态主题
+   磨砂玻璃卡片 + 渐变背景 + 圆角 + 柔和阴影
+   参考配色：靛蓝 → 紫 → 青 渐变
    ============================================ */
 
 :root {
-  /* —— 主色：天青（白露晴空蓝） —— */
-  --el-color-primary: #3e7fa3;
-  --el-color-primary-light-3: #6ba0ba;
-  --el-color-primary-light-5: #9dc0d1;
-  --el-color-primary-light-7: #c4d9e2;
-  --el-color-primary-light-8: #d8e6ec;
-  --el-color-primary-light-9: #ebf2f5;
-  --el-color-primary-dark-2: #2c6584;
+  /* —— 主色：靛蓝紫（玻璃渐变） —— */
+  --el-color-primary: #5b6ee8;
+  --el-color-primary-light-3: #8493ee;
+  --el-color-primary-light-5: #adb8f4;
+  --el-color-primary-light-7: #cfd6f9;
+  --el-color-primary-light-8: #e0e5fb;
+  --el-color-primary-light-9: #eff2fd;
+  --el-color-primary-dark-2: #4a58c2;
 
-  /* —— 功能色（缥碧青绿 / 秋收淡黄 / 淡雅红） —— */
-  --el-color-success: #5f9b8f;
-  --el-color-success-light-3: #8fb8ae;
-  --el-color-success-light-5: #b7d1ca;
-  --el-color-success-light-7: #d5e4df;
-  --el-color-success-light-8: #e4eeeb;
-  --el-color-success-light-9: #f0f6f4;
-  --el-color-success-dark-2: #4a7c72;
-  --el-color-warning: #c99a5b;
-  --el-color-warning-light-3: #dbb888;
-  --el-color-warning-light-5: #e7d0ad;
-  --el-color-warning-light-7: #f1e4d0;
-  --el-color-warning-light-8: #f6eee0;
-  --el-color-warning-light-9: #faf6ee;
-  --el-color-warning-dark-2: #a17a45;
-  --el-color-danger: #c45656;
-  --el-color-danger-light-3: #d88a8a;
-  --el-color-danger-light-5: #e6b3b3;
-  --el-color-danger-light-7: #f0d3d3;
-  --el-color-danger-light-8: #f5e3e3;
-  --el-color-danger-light-9: #faf0f0;
-  --el-color-danger-dark-2: #9c4444;
-  --el-color-info: #7d8f99;
-  --el-color-info-light-3: #a5b2ba;
-  --el-color-info-light-5: #c6cfd4;
-  --el-color-info-light-7: #dfe4e7;
-  --el-color-info-light-8: #eaeef0;
-  --el-color-info-light-9: #f4f6f7;
-  --el-color-info-dark-2: #64737b;
+  /* —— 功能色（柔和玻璃系） —— */
+  --el-color-success: #34c39b;
+  --el-color-success-light-3: #6dd6b8;
+  --el-color-success-light-5: #a2e5d1;
+  --el-color-success-light-7: #ccf0e5;
+  --el-color-success-light-8: #dff6ee;
+  --el-color-success-light-9: #effbf7;
+  --el-color-success-dark-2: #279f7d;
+  --el-color-warning: #f6a94a;
+  --el-color-warning-light-3: #f8bf7c;
+  --el-color-warning-light-5: #fbd5aa;
+  --el-color-warning-light-7: #fde7cd;
+  --el-color-warning-light-8: #fef0df;
+  --el-color-warning-light-9: #fff7ef;
+  --el-color-warning-dark-2: #d78d33;
+  --el-color-danger: #f06565;
+  --el-color-danger-light-3: #f59393;
+  --el-color-danger-light-5: #f8bcbc;
+  --el-color-danger-light-7: #fcdada;
+  --el-color-danger-light-8: #fde8e8;
+  --el-color-danger-light-9: #fef3f3;
+  --el-color-danger-dark-2: #d64d4d;
+  --el-color-info: #8896b8;
+  --el-color-info-light-3: #abb5cf;
+  --el-color-info-light-5: #c9d0e2;
+  --el-color-info-light-7: #e0e4ef;
+  --el-color-info-light-8: #eceef6;
+  --el-color-info-light-9: #f5f6fb;
+  --el-color-info-dark-2: #6b789a;
 
-  /* —— 全局底色（月白·凝露） —— */
-  --el-bg-color: #ffffff;
-  --el-bg-color-page: #f4f8fa;
-  --el-bg-color-overlay: #ffffff;
-  --el-text-color-primary: #2b3a42;
-  --el-text-color-regular: #3d4f59;
-  --el-text-color-secondary: #6b7d87;
-  --el-text-color-placeholder: #9aabb3;
-  --el-border-color: #dce6ea;
-  --el-border-color-light: #e4edf0;
-  --el-border-color-lighter: #ecf2f4;
-  --el-border-color-extra-light: #f2f7f8;
-  --el-fill-color: #f0f5f7;
-  --el-fill-color-light: #f5f9fa;
-  --el-fill-color-lighter: #f8fbfc;
-  --el-fill-color-extra-light: #fbfdfd;
+  /* —— 玻璃质感 —— */
+  --el-bg-color: rgba(255, 255, 255, 0.75);
+  --el-bg-color-page: transparent;
+  --el-bg-color-overlay: rgba(255, 255, 255, 0.92);
+  --el-text-color-primary: #2b3355;
+  --el-text-color-regular: #3d4769;
+  --el-text-color-secondary: #6c7696;
+  --el-text-color-placeholder: #9aa3bf;
+  --el-border-color: rgba(255, 255, 255, 0.6);
+  --el-border-color-light: rgba(255, 255, 255, 0.5);
+  --el-border-color-lighter: rgba(255, 255, 255, 0.4);
+  --el-border-color-extra-light: rgba(255, 255, 255, 0.35);
+  --el-fill-color: rgba(255, 255, 255, 0.4);
+  --el-fill-color-light: rgba(255, 255, 255, 0.55);
+  --el-fill-color-lighter: rgba(255, 255, 255, 0.7);
+  --el-fill-color-extra-light: rgba(255, 255, 255, 0.82);
 
-  /* —— 白露专属变量 —— */
-  --bailu-bg-gradient: linear-gradient(180deg, #e8f1f5 0%, #f2f7f9 60%, #f7fafb 100%);
-  --bailu-header-bg: linear-gradient(90deg, #eef5f8 0%, #f7fafb 100%);
-  --bailu-card-shadow: 0 2px 12px rgba(62, 127, 163, 0.06);
-  --bailu-text-deep: #2b3a42;
-  --bailu-accent: #3e7fa3;
+  /* —— 玻璃拟态专属变量 —— */
+  --glass-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #5b6ee8 100%);
+  --glass-bg: linear-gradient(160deg, #eaf0ff 0%, #f3edff 35%, #e8f6ff 70%, #eefbf5 100%);
+  --glass-card: rgba(255, 255, 255, 0.62);
+  --glass-card-hover: rgba(255, 255, 255, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.65);
+  --glass-shadow: 0 8px 32px rgba(91, 110, 232, 0.12);
+  --glass-blur: blur(18px) saturate(160%);
+  --bailu-bg-gradient: linear-gradient(180deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.35) 100%);
+  --bailu-header-bg: rgba(255, 255, 255, 0.5);
+  --bailu-card-shadow: var(--glass-shadow);
+  --bailu-text-deep: #2b3355;
+  --bailu-accent: #5b6ee8;
 }
 
-/* —— 全局背景（月白基调，带白露晨雾感） —— */
+/* —— 全局渐变背景 —— */
 body {
-  background: var(--el-bg-color-page);
+  background: var(--glass-bg);
+  background-attachment: fixed;
   color: var(--el-text-color-primary);
   font-family: "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
 }
 
-/* —— 卡片：白露晨光质感 —— */
+/* 磨砂装饰光斑 */
+#app::before {
+  content: '';
+  position: fixed;
+  top: -15%;
+  left: -10%;
+  width: 50vw;
+  height: 50vw;
+  background: radial-gradient(circle, rgba(102, 126, 234, 0.35) 0%, transparent 60%);
+  filter: blur(30px);
+  pointer-events: none;
+  z-index: 0;
+}
+#app::after {
+  content: '';
+  position: fixed;
+  bottom: -20%;
+  right: -10%;
+  width: 55vw;
+  height: 55vw;
+  background: radial-gradient(circle, rgba(118, 75, 162, 0.3) 0%, transparent 60%);
+  filter: blur(40px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* —— 玻璃卡片 —— */
 .el-card {
-  border-radius: 10px;
-  border-color: var(--el-border-color-light);
-  box-shadow: var(--bailu-card-shadow);
+  border-radius: 18px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-card);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow);
+}
+.el-card.is-always-shadow,
+.el-card.is-hover-shadow:hover {
+  box-shadow: var(--glass-shadow);
 }
 
-/* —— 表格表头：凝露青 —— */
-.el-table th.el-table__cell {
-  background: #eef5f8;
-  color: var(--bailu-text-deep);
+/* 玻璃弹窗/抽屉/下拉 */
+.el-dialog,
+.el-drawer,
+.el-message-box,
+.el-popper.is-light,
+.el-select-dropdown,
+.el-dropdown-menu {
+  background: var(--el-bg-color-overlay) !important;
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border) !important;
+  border-radius: 18px !important;
+  box-shadow: var(--glass-shadow);
 }
 
-/* —— 菜单项激活态 —— */
-.el-menu {
-  border-right: none;
+/* —— 侧边栏 / 页头玻璃 —— */
+.layout .aside {
+  background: linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0.25) 100%);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-right: 1px solid var(--glass-border);
+}
+.layout .header {
+  background: var(--bailu-header-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+/* —— 菜单玻璃 —— */
+.el-menu { background: transparent; border-right: none; }
+.el-menu-item,
+.el-sub-menu__title {
+  border-radius: 12px;
+  margin: 2px 10px;
+  transition: all 0.2s ease;
 }
 .el-menu-item.is-active {
-  background: #e3eef3;
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   color: var(--bailu-accent);
-  border-right: 3px solid var(--bailu-accent);
+  border-right: none;
   font-weight: 600;
+  box-shadow: 0 4px 14px rgba(91, 110, 232, 0.15);
 }
-.el-menu-item:hover {
-  background: #eef5f8;
+.el-menu-item:hover { background: rgba(255, 255, 255, 0.45); }
+
+/* —— 按钮圆角 —— */
+.el-button { border-radius: 12px; }
+.el-button--primary {
+  box-shadow: 0 4px 14px rgba(91, 110, 232, 0.3);
+}
+.el-radio-button__inner,
+.el-input__wrapper,
+.el-textarea__inner,
+.el-input-number {
+  border-radius: 12px !important;
 }
 
-/* —— 滚动条（青蓝细线） —— */
+/* —— 输入框玻璃 —— */
+.el-input__wrapper {
+  background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: none !important;
+  border: 1px solid var(--glass-border);
+}
+.el-input__wrapper.is-focus {
+  border-color: var(--el-color-primary);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+/* —— 表格玻璃 —— */
+.el-table { background: transparent; }
+.el-table th.el-table__cell {
+  background: rgba(255, 255, 255, 0.45);
+  color: var(--bailu-text-deep);
+}
+.el-table tr,
+.el-table td.el-table__cell {
+  background: transparent;
+}
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* —— 标签页玻璃 —— */
+.el-tabs__nav-wrap::after { background: transparent; }
+.el-tabs__item {
+  border-radius: 10px;
+}
+.el-tabs__item.is-active { color: var(--bailu-accent); }
+
+/* —— 滚动条 —— */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: #c4d9e2; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #9dc0d1; }
+::-webkit-scrollbar-thumb { background: rgba(91, 110, 232, 0.35); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(91, 110, 232, 0.55); }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* —— 链接色 —— */
 a { color: var(--bailu-accent); }
+
+/* —— 主内容区透明（让渐变背景透出） —— */
+.el-main { background: transparent !important; }

@@ -152,7 +152,7 @@ const onPanEnd = () => { panning = false }
 .mm-link { fill: none; stroke: #a8c3d1; stroke-width: 1.5; }
 .mm-rect { stroke: #b9cfda; stroke-width: 1; cursor: pointer; }
 .mm-rect.selected { stroke: #c45656; stroke-width: 2.5; }
-.mm-depth-0 { fill: #3e7fa3; }
+.mm-depth-0 { fill: #5b6ee8; }
 .mm-depth-1 { fill: #5f9b8f; }
 .mm-depth-2 { fill: #e3eef3; }
 .mm-depth-3 { fill: #f4f8fa; }
