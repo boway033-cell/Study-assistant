@@ -30,6 +30,11 @@
             <div v-for="r in reports" :key="r.id" class="report-item" @click="ovContent = r.content">
               <el-tag size="small" type="info">{{ r.created_at?.slice(0, 16) }}</el-tag>
               <span class="report-preview">{{ r.content?.slice(0, 60) }}…</span>
+              <el-popconfirm title="删除这份报告？" @confirm="removeReport(r)" @click.stop>
+                <template #reference>
+                  <el-button link type="danger" size="small" @click.stop>删除</el-button>
+                </template>
+              </el-popconfirm>
             </div>
           </template>
         </el-card>
@@ -94,7 +99,7 @@
 <script setup>
 import { ref, nextTick, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { listBooks, getTask, studyOverview, studyReports, studyTrainStart, studyTrainAsk } from '../api'
+import { listBooks, getTask, studyOverview, studyReports, deleteStudyReport, studyTrainStart, studyTrainAsk } from '../api'
 import { renderMarkdown } from '../utils/markdown'
 
 const tab = ref('overview')
@@ -151,6 +156,17 @@ const genOverview = async () => {
     ElMessage.error(e.message)
   } finally {
     ovLoading.value = false
+  }
+}
+
+const removeReport = async (r) => {
+  try {
+    await deleteStudyReport(r.id)
+    ElMessage.success('已删除')
+    if (ovContent.value === r.content) ovContent.value = ''
+    loadReports()
+  } catch (e) {
+    ElMessage.error(e.message)
   }
 }
 
@@ -222,6 +238,7 @@ onMounted(async () => {
 .report-toolbar { text-align: right; margin-bottom: 8px; }
 .report-text { font-size: 14px; line-height: 1.9; white-space: pre-wrap; }
 .report-item { padding: 8px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; display: flex; gap: 8px; align-items: center; }
+.report-item .el-button { margin-left: auto; }
 .report-item:hover { background: var(--el-fill-color-lighter); }
 .report-preview { font-size: 12px; color: var(--el-text-color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .train-header { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }

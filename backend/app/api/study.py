@@ -131,6 +131,18 @@ def list_reports(limit: int = 5, db: Session = Depends(get_db)):
     } for r in rows]
 
 
+@router.delete("/reports/{report_id}", status_code=204)
+def delete_report(report_id: int, db: Session = Depends(get_db)):
+    """删除一条综合阅读报告。"""
+    from backend.app.models import StudyReport
+
+    r = db.get(StudyReport, report_id)
+    if not r:
+        raise HTTPException(404, "报告不存在")
+    db.delete(r)
+    db.commit()
+
+
 # ---------- 思维训练 ----------
 class TrainStartReq(BaseModel):
     book_ids: list[int] | None = None

@@ -112,6 +112,7 @@ export const aiSummarize = (data) => http.post('/ai/summarize', data)
 export const aiVision = (data) => http.post('/ai/vision', data)
 export const studyOverview = (data) => http.post('/study/overview', data)
 export const studyReports = () => http.get('/study/reports')
+export const deleteStudyReport = (id) => http.delete(`/study/reports/${id}`)
 export const studyTrainStart = (data) => http.post('/study/train/start', data)
 export const studyTrainAsk = (data) => http.post('/study/train/ask', data)
 
