@@ -28,3 +28,6 @@ Thumbs.db
 
 # UI 测试截图
 backend/tests/ui_*.png
+
+# runtime log
+server.log
