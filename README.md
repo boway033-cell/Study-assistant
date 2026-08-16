@@ -11,13 +11,20 @@
 >
 > **AI 策略**：文本解析/切块/检索全部在本地完成（不上传资料）；仅将「提问 + 检索片段」发送到 **DeepSeek 云端**生成回答。
 
-## 🚀 快速启动
+## 🚀 快速启动（从源码）
+
+**前置**：[Python 3.12+](https://www.python.org/downloads/)（安装时勾选 Add to PATH）。
 
 ```bat
-:: 双击 start.bat（首次运行自动装依赖）
+:: ① 首次：构建前端（需 Node.js 18+；已有 dist/ 可跳过）
+cd frontend && npm install && npm run build && cd ..
+
+:: ② 双击 start.bat（首次自动装 Python 依赖并启动）
 ```
 
-然后浏览器访问 `http://127.0.0.1:8000`。
+然后浏览器访问 `http://127.0.0.1:8000`，停止用 `stop.bat`。
+
+> 不想装 Node 的普通用户，可下载 GitHub Release 的预构建包（含前端产物）。
 
 ### 手动启动
 
