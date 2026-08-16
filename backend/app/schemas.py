@@ -286,7 +286,7 @@ class KnowledgeSourceResp(BaseModel):
 
 # ---------- PDF 标注 ----------
 class AnnotationCreateReq(BaseModel):
-    page: int = Field(ge=1)
+    page: int = Field(ge=0)  # 0 = 文本标注（docx/pptx 无页码）
     rect_json: str  # [{x,y,w,h}] 归一化坐标
     text: str | None = None
     color: str = "#f9e572"

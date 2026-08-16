@@ -12,6 +12,7 @@
     "axios": "^1.7.0",
     "echarts": "^5.5.0",
     "element-plus": "^2.8.0",
+    "marked": "^18.0.9",
     "pdfjs-dist": "^6.2.108",
     "vue": "^3.5.0",
     "vue-router": "^4.4.0"

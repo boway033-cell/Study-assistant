@@ -2,22 +2,30 @@
   <div class="doc-reader" :class="{ 'dr-dark': dark }">
     <div class="dr-toolbar">
       <el-button size="small" @click="showToc = !showToc">📑 目录</el-button>
+      <el-button size="small" :type="editingToc ? 'warning' : ''" @click="toggleTocEdit">
+        {{ editingToc ? '完成目录编辑' : '✏️ 编辑目录' }}
+      </el-button>
       <el-button-group>
         <el-button size="small" @click="fontSize--">A−</el-button>
         <span class="dr-font">{{ fontSize }}px</span>
         <el-button size="small" @click="fontSize++">A＋</el-button>
       </el-button-group>
       <el-button size="small" :type="dark ? 'primary' : ''" @click="dark = !dark">{{ dark ? '☀️' : '🌙' }}</el-button>
-      <el-input v-model="searchQ" size="small" placeholder="页内搜索…" style="width: 180px" clearable @keyup.enter="doSearch" />
+      <el-button size="small" @click="showAnnPanel = true">🖍 批注({{ annotations.length }})</el-button>
       <span class="dr-info">{{ doc?.file_type?.toUpperCase() }} · {{ chapters.length }} 章</span>
     </div>
     <div class="dr-body">
       <aside v-if="showToc" class="dr-toc">
         <div class="dr-toc-item" v-for="c in flatChapters" :key="c.id"
-          :style="{ paddingLeft: (c.level - 1) * 16 + 8 + 'px' }"
-          :class="{ active: activeChapter === c.id }" @click="jumpTo(c.id)">{{ c.title }}</div>
+          :style="{ paddingLeft: (c.level - 1) * 14 + 8 + 'px' }"
+          :class="{ active: activeChapter === c.id }" @click="jumpTo(c.id)">
+          <template v-if="editingToc">
+            <el-input v-model="c._title" size="small" @blur="saveChapterTitle(c)" @click.stop />
+          </template>
+          <template v-else>{{ c.title }}</template>
+        </div>
       </aside>
-      <div ref="content" class="dr-content" :style="{ fontSize: fontSize + 'px' }" @scroll="onScroll">
+      <div ref="content" class="dr-content" :style="{ fontSize: fontSize + 'px' }" @scroll="onScroll" @mouseup="onMouseUp">
         <div v-if="loading" v-loading="true" style="height: 200px" />
         <div v-else>
           <div class="dr-title">{{ doc?.title }}</div>
@@ -30,12 +38,31 @@
         </div>
       </div>
     </div>
+
+    <!-- 选中文字浮动工具条 -->
+    <div v-if="selToolbar" class="dr-sel-bar" :style="{ top: selY + 'px', left: selX + 'px' }">
+      <el-button size="small" type="warning" @click="addAnnotation">🖍 标注</el-button>
+    </div>
+
+    <!-- 批注管理抽屉 -->
+    <el-drawer v-model="showAnnPanel" title="我的批注" size="38%">
+      <div v-if="!annotations.length" class="form-tip">选中正文文字 → 点「🖍 标注」即可添加</div>
+      <div v-for="a in annotations" :key="a.id" class="ann-item">
+        <div class="ann-head">
+          <el-tag size="small" type="info">第 {{ a.page || '全文' }}</el-tag>
+          <el-button link size="small" type="danger" @click="removeAnn(a)">删除</el-button>
+        </div>
+        <div class="ann-text">{{ a.text }}</div>
+        <div v-if="a.note" class="ann-note">📝 {{ a.note }}</div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
-import { getBookDocument } from '../api'
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { getBookDocument, listAnnotations, createAnnotation, deleteAnnotation, renameChapter } from '../api'
 
 const props = defineProps({ bookId: { type: Number, required: true } })
 
@@ -44,12 +71,19 @@ const chapters = ref([])
 const sections = ref([])
 const loading = ref(true)
 const showToc = ref(true)
+const editingToc = ref(false)
 const dark = ref(false)
 const fontSize = ref(15)
-const searchQ = ref('')
 const activeChapter = ref(null)
 const content = ref(null)
 const secRefs = {}
+const annotations = ref([])
+const showAnnPanel = ref(false)
+const selToolbar = ref(false)
+const selX = ref(0)
+const selY = ref(0)
+let selText = ''
+let selChapterId = null
 
 function setSecRef(id, el) { if (el) secRefs[id] = el }
 
@@ -78,9 +112,7 @@ const buildTree = (list) => {
 
 const jumpTo = (id) => {
   const el = secRefs[id]
-  if (el && content.value) {
-    content.value.scrollTo({ top: el.offsetTop - 10, behavior: 'smooth' })
-  }
+  if (el && content.value) content.value.scrollTo({ top: el.offsetTop - 10, behavior: 'smooth' })
 }
 
 const onScroll = () => {
@@ -93,19 +125,81 @@ const onScroll = () => {
   activeChapter.value = cur
 }
 
-const doSearch = () => {
-  const q = searchQ.value.trim().toLowerCase()
-  if (!q) return
-  // 简单跳转：找到第一个包含关键词的章节
-  for (const sec of sections.value) {
-    if (sec.text.toLowerCase().includes(q)) {
-      jumpTo(sec.chapter_id)
-      return
-    }
+const toggleTocEdit = () => {
+  editingToc.value = !editingToc.value
+  if (editingToc.value) {
+    for (const c of flatChapters.value) c._title = c.title
   }
 }
 
-onMounted(async () => {
+const saveChapterTitle = async (c) => {
+  const t = (c._title || '').trim()
+  if (!t || t === c.title) return
+  try {
+    await renameChapter(c.id, t)
+    c.title = t
+    ElMessage.success('标题已保存')
+    // 同步 sections 显示
+    const sec = sections.value.find(s => s.chapter_id === c.id)
+    if (sec) sec.title = t
+    // 重新加载目录
+    await loadDoc()
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+const onMouseUp = () => {
+  setTimeout(() => {
+    const sel = window.getSelection()
+    const t = sel?.toString().trim()
+    if (!sel || sel.isCollapsed || !t) { selToolbar.value = false; return }
+    // 选区在正文区内
+    const node = sel.anchorNode
+    const inContent = node?.parentElement?.closest?.('.dr-content')
+    if (!inContent) return
+    selText = t.slice(0, 2000)
+    const rect = sel.getRangeAt(0).getBoundingClientRect()
+    // 找所属章节
+    selChapterId = null
+    let el = node.parentElement
+    while (el) {
+      if (el.classList?.contains('dr-chapter')) { selChapterId = Number(el.dataset.cid); break }
+      el = el.parentElement
+    }
+    selX.value = rect.left
+    selY.value = rect.bottom + 8
+    selToolbar.value = true
+  }, 0)
+}
+
+const addAnnotation = async () => {
+  if (!selText) return
+  selToolbar.value = false
+  try {
+    const { value } = await ElMessageBox.prompt('可选：写批注', '添加批注', {
+      confirmButtonText: '保存', cancelButtonText: '取消', inputPlaceholder: '你的理解…',
+    })
+    await createAnnotation(props.bookId, {
+      page: 0, rect_json: '[]', text: selText, color: '#9be5a0', note: value || '',
+      knowledge_node_id: null,
+    })
+    ElMessage.success('已添加批注')
+    window.getSelection()?.removeAllRanges()
+    loadAnnotations()
+  } catch { /* 取消 */ }
+}
+
+const removeAnn = async (a) => {
+  await deleteAnnotation(a.id)
+  loadAnnotations()
+}
+
+const loadAnnotations = async () => {
+  try { annotations.value = await listAnnotations(props.bookId) } catch {}
+}
+
+const loadDoc = async () => {
   try {
     doc.value = await getBookDocument(props.bookId)
     chapters.value = doc.value.chapters || []
@@ -115,11 +209,16 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+}
+
+onMounted(async () => {
+  await loadDoc()
+  loadAnnotations()
 })
 </script>
 
 <style scoped>
-.doc-reader { display: flex; flex-direction: column; height: 100%; min-height: 400px; }
+.doc-reader { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 400px; }
 .dr-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-wrap: wrap; background: var(--el-fill-color-lighter); border-radius: 8px 8px 0 0; border: 1px solid var(--el-border-color-extra-light); }
 .dr-font { font-size: 12px; color: var(--el-text-color-secondary); min-width: 40px; text-align: center; }
 .dr-info { font-size: 12px; color: var(--el-text-color-secondary); margin-left: auto; }
@@ -132,8 +231,14 @@ onMounted(async () => {
 .dr-title { font-size: 24px; font-weight: 700; text-align: center; margin-bottom: 24px; color: var(--el-text-color-primary); }
 .dr-chapter { margin-bottom: 28px; }
 .dr-chapter-title { font-size: 18px; font-weight: 700; color: var(--bailu-accent); border-left: 4px solid var(--bailu-accent); padding-left: 10px; margin-bottom: 12px; }
-.dr-chapter-text { font-size: inherit; line-height: 1.9; color: var(--el-text-color-regular); white-space: pre-wrap; }
+.dr-chapter-text { font-size: inherit; line-height: 1.9; color: var(--el-text-color-regular); white-space: pre-wrap; user-select: text; cursor: text; }
 .dr-dark .dr-content { background: #1e1e1e; }
 .dr-dark .dr-chapter-title, .dr-dark .dr-title { color: #a8c3d1; }
 .dr-dark .dr-chapter-text { color: #ccc; }
+.dr-sel-bar { position: fixed; z-index: 50; display: flex; gap: 4px; padding: 4px; background: #fff; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25); border: 1px solid var(--el-border-color-light); }
+.ann-item { padding: 10px; border: 1px solid var(--el-border-color-extra-light); border-radius: 8px; margin-bottom: 8px; }
+.ann-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.ann-text { font-size: 13px; color: var(--el-text-color-regular); margin-bottom: 4px; }
+.ann-note { font-size: 12px; color: var(--el-text-color-secondary); }
+.form-tip { color: var(--el-text-color-secondary); font-size: 12px; }
 </style>

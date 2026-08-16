@@ -22,7 +22,7 @@
             <div class="report-toolbar">
               <el-button size="small" type="primary" plain @click="copyReport">📋 复制报告</el-button>
             </div>
-            <div class="report-text">{{ ovContent }}</div>
+            <div class="report-text markdown-body" v-html="renderMarkdown(ovContent)"></div>
           </div>
           <el-empty v-else description="选择文献后生成综合阅读报告" :image-size="80" />
           <template v-if="reports.length">
@@ -71,7 +71,7 @@
             <div ref="trainBox" class="train-box">
               <div v-for="(m, i) in trainMsgs" :key="i" :class="['train-msg', m.role]">
                 <div class="train-label">{{ m.role === 'user' ? '我' : 'AI' }}</div>
-                <div class="train-content" :class="{ loading: m.loading }">{{ m.content }}</div>
+                <div class="train-content markdown-body" :class="{ loading: m.loading }" v-html="renderMarkdown(m.content)"></div>
               </div>
               <div v-if="trainLoading" class="train-msg ai">
                 <div class="train-label">AI</div>
@@ -94,7 +94,8 @@
 <script setup>
 import { ref, nextTick, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { listBooks, getTask, studyOverview, studyTrainStart, studyTrainAsk } from '../api'
+import { listBooks, getTask, studyOverview, studyReports, studyTrainStart, studyTrainAsk } from '../api'
+import { renderMarkdown } from '../utils/markdown'
 
 const tab = ref('overview')
 const books = ref([])

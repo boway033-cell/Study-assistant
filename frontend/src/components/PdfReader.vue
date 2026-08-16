@@ -235,6 +235,9 @@ const loadPdf = async () => {
     const useSaved = props.useSavedPos && saved && saved.page
     const target = useSaved ? saved.page : (props.initialPage || 1)
     page.value = Math.min(Math.max(1, target), doc.numPages)
+    // 自动适应宽度（页面更大更清晰）
+    await nextTick()
+    fitWidth()
     await renderVisible()
     if (useSaved && saved.scrollTop) {
       await nextTick()
@@ -521,8 +524,16 @@ const loadNodeOptions = async () => {
 const onMouseUp = async (e) => {
   const sel = window.getSelection()
   if (!sel || sel.isCollapsed || !sel.toString().trim()) { selToolbar.value = false; return }
-  const node = sel.anchorNode
-  const tl = node?.parentElement?.closest('.text-layer')
+  // 健壮定位文本层：优先公共祖先，回退 anchorNode
+  let tl = null
+  try {
+    const ancestor = sel.getRangeAt(0).commonAncestorContainer
+    const el = ancestor.nodeType === 1 ? ancestor : ancestor.parentElement
+    tl = el?.closest?.('.text-layer')
+  } catch { /* ignore */ }
+  if (!tl) {
+    tl = sel.anchorNode?.parentElement?.closest?.('.text-layer') || sel.focusNode?.parentElement?.closest?.('.text-layer')
+  }
   if (!tl) return
   const rect = sel.getRangeAt(0).getBoundingClientRect()
   if (!rect.width) return
@@ -534,7 +545,7 @@ const onMouseUp = async (e) => {
   const pr = rootEl.value.getBoundingClientRect()
   selPos.value = {
     x: Math.max(8, Math.min(rect.left - pr.left + scroller.value.scrollLeft, pr.width - 320)),
-    y: Math.max(8, rect.bottom - pr.top + scroller.value.scrollTop + 8),
+    y: Math.max(8, Math.min(rect.bottom - pr.top + scroller.value.scrollTop + 8, pr.height - 60)),
   }
   selToolbar.value = true
 }
@@ -790,9 +801,9 @@ onBeforeUnmount(() => {
 .pr-mode-scroll .pr-page, .pr-mode-single .pr-page { display: block; margin: 0 auto 10px; }
 .pr-mode-double .pr-page { display: inline-block; vertical-align: top; margin: 0 4px 10px; }
 .pr-canvas { display: block; }
-.text-layer { position: absolute; inset: 0; overflow: hidden; line-height: 1; }
-.text-layer :deep(span) { position: absolute; white-space: pre; transform-origin: 0 0; color: transparent; }
-.text-layer :deep(span::selection) { background: rgba(59, 130, 246, 0.35); }
+.text-layer { position: absolute; inset: 0; overflow: hidden; line-height: 1; cursor: text; }
+.text-layer :deep(span) { position: absolute; white-space: pre; transform-origin: 0 0; color: transparent; cursor: text; user-select: text; }
+.text-layer :deep(span::selection) { background: rgba(59, 130, 246, 0.4); }
 .pr-hl { position: absolute; border-radius: 2px; pointer-events: auto; cursor: pointer; }
 .pr-hl:hover { outline: 1px solid #c45656; }
 .pr-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }

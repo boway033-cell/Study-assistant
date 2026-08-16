@@ -15,7 +15,7 @@
           <span class="reader-title">📝 Markdown 精读版</span>
           <span class="reader-tip">标题目录 + AI 逐章精读总结 + 正文（由深度分析生成）</span>
         </div>
-        <div class="md-content" v-if="mdText">{{ mdText }}</div>
+        <div class="md-content markdown-body" v-if="mdText" v-html="renderMarkdown(mdText)"></div>
         <div v-else-if="mdLoading" v-loading="true" style="height: 200px" />
         <div v-else class="md-empty">尚无 Markdown：<el-button size="small" type="primary" plain @click="runDeep">生成（深度分析）</el-button></div>
       </div>
@@ -31,6 +31,7 @@ import { useRoute } from 'vue-router'
 import PdfReader from '../components/PdfReader.vue'
 import DocReader from '../components/DocReader.vue'
 import { getBook, bookFileUrl, getBookDeep, deepAnalyze, getTask } from '../api'
+import { renderMarkdown } from '../utils/markdown'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -122,8 +123,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.reader-page { display: flex; flex-direction: column; height: calc(100vh - 120px); }
-.reader-top { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.reader-page { display: flex; flex-direction: column; height: calc(100vh - 70px); }
+.reader-top { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
 .reader-title { font-size: 15px; font-weight: 600; color: var(--el-text-color-primary); }
 .reader-tip { font-size: 12px; color: var(--el-text-color-secondary); }
 .reader-body { flex: 1; min-height: 0; }

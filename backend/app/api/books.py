@@ -350,6 +350,22 @@ def get_document(book_id: int, db: Session = Depends(get_db)):
     }
 
 
+@router.patch("/chapters/{chapter_id}")
+def rename_chapter(chapter_id: int, req: dict, db: Session = Depends(get_db)):
+    """重命名章节标题（docx/pptx 目录编辑）。"""
+    from backend.app.models import Chapter as _Chapter
+
+    ch = db.get(_Chapter, chapter_id)
+    if not ch:
+        raise HTTPException(404, "章节不存在")
+    title = (req.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "标题不能为空")
+    ch.title = title
+    db.commit()
+    return {"id": ch.id, "title": ch.title}
+
+
 @router.get("/books/{book_id}/notes", response_model=list[NoteResp])
 def list_notes(book_id: int, db: Session = Depends(get_db)):
     notes = db.scalars(

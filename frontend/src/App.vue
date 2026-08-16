@@ -182,7 +182,23 @@ html, body, #app { height: 100%; }
   letter-spacing: 2px;
 }
 
-.main { background: var(--el-bg-color-page); overflow: auto; }
+.main { background: var(--el-bg-color-page); overflow: auto; padding: 12px; }
+
+/* —— Markdown 渲染样式 —— */
+.markdown-body h1 { font-size: 1.6em; margin: 0.6em 0 0.4em; }
+.markdown-body h2 { font-size: 1.35em; margin: 0.8em 0 0.4em; border-bottom: 1px solid var(--el-border-color-lighter); padding-bottom: 0.2em; }
+.markdown-body h3 { font-size: 1.15em; margin: 0.6em 0 0.3em; }
+.markdown-body h4, .markdown-body h5 { margin: 0.5em 0 0.2em; }
+.markdown-body p { margin: 0.4em 0; line-height: 1.8; }
+.markdown-body ul, .markdown-body ol { padding-left: 1.6em; margin: 0.4em 0; }
+.markdown-body li { margin: 0.2em 0; line-height: 1.7; }
+.markdown-body code { background: var(--el-fill-color-light); padding: 2px 5px; border-radius: 4px; font-size: 0.9em; }
+.markdown-body pre { background: var(--el-fill-color-light); padding: 10px; border-radius: 6px; overflow-x: auto; }
+.markdown-body pre code { background: none; padding: 0; }
+.markdown-body blockquote { border-left: 4px solid var(--el-color-primary-light-5); padding-left: 12px; color: var(--el-text-color-secondary); margin: 0.5em 0; }
+.markdown-body strong { font-weight: 700; }
+.markdown-body table { border-collapse: collapse; margin: 0.6em 0; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--el-border-color); padding: 5px 10px; }
 
 /* —— 首次使用引导弹窗 —— */
 .guide-body { line-height: 1.9; font-size: 14px; color: var(--el-text-color-primary); }

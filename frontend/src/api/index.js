@@ -31,6 +31,7 @@ export const getChunkOriginal = (bookId, chunkId) => http.get(`/books/${bookId}/
 export const getPageText = (bookId, pageNo) => http.get(`/books/${bookId}/page/${pageNo}`)
 export const bookFileUrl = (bookId) => `/api/books/${bookId}/file`
 export const getBookDocument = (bookId) => http.get(`/books/${bookId}/document`)
+export const renameChapter = (id, title) => http.patch(`/chapters/${id}`, { title })
 
 // ===== 问答 =====
 export const chatStream = async (body, onEvent) => {
