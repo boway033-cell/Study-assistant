@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.app.api import ai, annotations, books, chat, deep, knowledge, quizzes, settings, stats, study
+from backend.app.api import ai, annotations, books, chat, deep, graph, knowledge, plan, quizzes, settings, stats, study
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import Base, engine
 from backend.app.services.rag import fts
@@ -100,6 +100,8 @@ app.include_router(annotations.router)
 app.include_router(ai.router)
 app.include_router(deep.router)
 app.include_router(study.router)
+app.include_router(graph.router)
+app.include_router(plan.router)
 
 
 @app.get("/api/health")

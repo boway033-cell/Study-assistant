@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
-from backend.app.models import Annotation, Book
+from backend.app.models import Annotation, Book, KnowledgeNode
 from backend.app.schemas import AnnotationCreateReq, AnnotationResp, AnnotationUpdateReq
 
 router = APIRouter(prefix="/api", tags=["annotations"])
@@ -37,10 +37,19 @@ def list_annotations(
 def create_annotation(book_id: int, req: AnnotationCreateReq, db: Session = Depends(get_db)):
     if not db.get(Book, book_id):
         raise HTTPException(404, "书籍不存在")
+    # 批注自动回流知识树：未显式指定节点时，用笔记/原文自动创建知识树节点并关联
+    node_id = req.knowledge_node_id
+    if node_id is None:
+        seed = (req.note or req.text or "").strip()
+        if seed:
+            node = KnowledgeNode(title=seed[:40] or "批注", book_id=book_id, node_type="note", note=seed[:500])
+            db.add(node)
+            db.flush()
+            node_id = node.id
     a = Annotation(
         book_id=book_id, page=req.page, rect_json=req.rect_json,
         text=req.text, color=req.color, note=req.note,
-        knowledge_node_id=req.knowledge_node_id,
+        knowledge_node_id=node_id,
     )
     db.add(a)
     db.commit()

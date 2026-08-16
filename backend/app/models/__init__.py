@@ -224,3 +224,27 @@ class BookAnalysis(Base):
     footer_count: Mapped[int] = mapped_column(Integer, default=0)
     table_pages: Mapped[str | None] = mapped_column(Text)        # JSON 页码列表
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class StudyPlan(Base):
+    """学习计划：设定考试日期，倒推每日任务。"""
+
+    __tablename__ = "study_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, default="学习计划")
+    exam_date: Mapped[str] = mapped_column(String(20), nullable=False)  # YYYY-MM-DD
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class CheckIn(Base):
+    """每日打卡记录。"""
+
+    __tablename__ = "check_ins"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("study_plans.id"), nullable=False, index=True)
+    date: Mapped[str] = mapped_column(String(20), nullable=False)  # YYYY-MM-DD
+    content: Mapped[str | None] = mapped_column(Text)
+    done: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)

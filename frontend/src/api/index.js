@@ -123,3 +123,12 @@ export const studyTrainEnd = (data) => http.post('/study/train/end', data)
 export const getSettings = () => http.get('/settings')
 export const updateSettings = (data) => http.put('/settings', data)
 export const probeSettings = () => http.get('/settings/probe')
+
+// ===== 知识图谱 =====
+export const getGraph = () => http.get('/graph')
+export const getConceptSources = (name) => http.get(`/graph/concept/${encodeURIComponent(name)}/sources`)
+
+// ===== 学习计划 =====
+export const getPlan = () => http.get('/plan')
+export const savePlan = (data) => http.post('/plan', data)
+export const planCheckin = (data) => http.post('/plan/checkin', data)

@@ -12,6 +12,8 @@
         <el-menu-item index="/library"><el-icon><Folder /></el-icon>资料库</el-menu-item>
         <el-menu-item index="/chat"><el-icon><ChatDotRound /></el-icon>AI 问答</el-menu-item>
         <el-menu-item index="/knowledge"><el-icon><Share /></el-icon>知识树</el-menu-item>
+        <el-menu-item index="/graph"><el-icon><Connection /></el-icon>知识图谱</el-menu-item>
+        <el-menu-item index="/plan"><el-icon><Calendar /></el-icon>学习计划</el-menu-item>
         <el-menu-item index="/quiz"><el-icon><EditPen /></el-icon>刷题自测</el-menu-item>
         <el-menu-item index="/stats"><el-icon><DataAnalysis /></el-icon>学习统计</el-menu-item>
         <el-menu-item index="/study"><el-icon><MagicStick /></el-icon>AI 研读</el-menu-item>
@@ -55,7 +57,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Folder, ChatDotRound, Share, EditPen, DataAnalysis, Setting, MagicStick } from '@element-plus/icons-vue'
+import { Folder, ChatDotRound, Share, EditPen, DataAnalysis, Setting, MagicStick, Connection, Calendar } from '@element-plus/icons-vue'
 import { getSettings } from './api'
 import { getSolarTerm } from './utils/solarTerm'
 
