@@ -67,11 +67,16 @@ def list_books(
         select(Chapter.book_id, func.count()).group_by(Chapter.book_id)
     ).all())
 
+    from backend.app.models import BookDeep
+    deep_statuses = dict(db.execute(
+        select(BookDeep.book_id, BookDeep.status).where(BookDeep.status != "none")
+    ).all())
     items = [
         BookListItem(
             id=b.id, title=b.title, file_type=b.file_type, status=b.status,
             total_pages=b.total_pages, chapter_count=chapter_counts.get(b.id, 0),
-            quiz_count=quiz_counts.get(b.id, 0),
+            quiz_count=quiz_counts.get(b.id, 0), category=b.category,
+            deep_status=deep_statuses.get(b.id, "none"),
             created_at=b.created_at,
         )
         for b in books

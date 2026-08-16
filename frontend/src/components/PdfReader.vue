@@ -13,7 +13,7 @@
         <el-button size="small" :disabled="page >= numPages" @click="goPage(1)">下一页</el-button>
       </el-button-group>
       <span class="pr-pageinfo">
-        <el-input-number v-model="page" :min="1" :max="numPages || 1" size="small" controls-position="right" style="width: 100px" />
+        <el-input-number v-model="page" :min="1" :max="numPages || 1" size="small" controls-position="right" style="width: 100px" @change="onPageInput" />
         <span class="pr-total">/ {{ numPages || '…' }} 页</span>
       </span>
       <el-button-group>
@@ -415,6 +415,10 @@ const goPage = (delta) => {
     return
   }
   scrollToPage(Math.min(numPages.value, Math.max(1, page.value + delta)))
+}
+
+const onPageInput = (val) => {
+  if (val) scrollToPage(val, false)
 }
 
 const scrollToPage = (p, smooth = true) => {

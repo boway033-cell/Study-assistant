@@ -29,6 +29,7 @@ class Book(Base):
     total_pages: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending/parsing/ready/failed
     error_msg: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(String(50))  # AI 自动分类（数学/管理学/…）
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     chapters: Mapped[list["Chapter"]] = relationship(back_populates="book", cascade="all, delete-orphan")
@@ -163,6 +164,32 @@ class Annotation(Base):
 
     book: Mapped["Book"] = relationship()
     knowledge_node: Mapped["KnowledgeNode | None"] = relationship()
+
+
+class BookDeep(Base):
+    """深度分析产物：三级标题目录 + AI 逐章总结 + Markdown 转换。"""
+
+    __tablename__ = "book_deep"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"), nullable=False, unique=True, index=True)
+    toc_json: Mapped[str | None] = mapped_column(Text)        # 完整三级标题目录 [{title,level,page}]
+    summaries_json: Mapped[str | None] = mapped_column(Text)  # [{title, summary}]
+    markdown: Mapped[str | None] = mapped_column(Text)        # Markdown 版本
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/running/done/failed
+    error_msg: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class StudyReport(Base):
+    """AI 综合阅读报告。"""
+
+    __tablename__ = "study_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    book_ids_json: Mapped[str | None] = mapped_column(Text)
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 
 class Setting(Base):

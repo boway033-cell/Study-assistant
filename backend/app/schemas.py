@@ -15,6 +15,8 @@ class BookListItem(BaseModel):
     total_pages: int | None = None
     chapter_count: int = 0
     quiz_count: int = 0
+    category: str | None = None
+    deep_status: str = "none"
     created_at: datetime
 
 

@@ -8,16 +8,35 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.app.api import ai, annotations, books, chat, knowledge, quizzes, settings, stats
+from backend.app.api import ai, annotations, books, chat, deep, knowledge, quizzes, settings, stats, study
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import Base, engine
 from backend.app.services.rag import fts
+
+
+def _migrate():
+    """轻量迁移：老库补 books.category 列 + 复位中断的深度分析任务。"""
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            cols = [r[1] for r in conn.execute(text("PRAGMA table_info(books)")).fetchall()]
+            if "category" not in cols:
+                conn.execute(text("ALTER TABLE books ADD COLUMN category VARCHAR(50)"))
+            # 重启后复位 stuck 任务（后台任务在内存，重启即丢失）
+            try:
+                conn.execute(text("UPDATE book_deep SET status='pending', error_msg='服务重启，任务中断，可重新分析' WHERE status='running'"))
+            except Exception:  # noqa: BLE001
+                pass
+            conn.commit()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # 建表（幂等）
     Base.metadata.create_all(bind=engine)
+    _migrate()
     # FTS5 虚拟表
     fts.init_fts()
     # 从 DB 读取向量检索开关（用户设置持久化）
@@ -51,6 +70,8 @@ app.include_router(stats.router)
 app.include_router(settings.router)
 app.include_router(annotations.router)
 app.include_router(ai.router)
+app.include_router(deep.router)
+app.include_router(study.router)
 
 
 @app.get("/api/health")

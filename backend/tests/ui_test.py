@@ -64,7 +64,7 @@ with sync_playwright() as p:
     page.wait_for_timeout(800)
     check("导图视图", page.locator(".mm-svg").count() == 1)
     page.click("text=大纲")
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(600)
     page.screenshot(path="backend/tests/ui_3_knowledge.png", full_page=True)
 
     print("=== 4. 刷题自测页（AI 生成入口）===")

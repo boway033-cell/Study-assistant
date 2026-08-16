@@ -14,6 +14,7 @@
         <el-menu-item index="/knowledge"><el-icon><Share /></el-icon>知识树</el-menu-item>
         <el-menu-item index="/quiz"><el-icon><EditPen /></el-icon>刷题自测</el-menu-item>
         <el-menu-item index="/stats"><el-icon><DataAnalysis /></el-icon>学习统计</el-menu-item>
+        <el-menu-item index="/study"><el-icon><MagicStick /></el-icon>AI 研读</el-menu-item>
         <el-menu-item index="/settings"><el-icon><Setting /></el-icon>设置</el-menu-item>
       </el-menu>
       <div class="aside-footer">
@@ -54,7 +55,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Folder, ChatDotRound, Share, EditPen, DataAnalysis, Setting } from '@element-plus/icons-vue'
+import { Folder, ChatDotRound, Share, EditPen, DataAnalysis, Setting, MagicStick } from '@element-plus/icons-vue'
 import { getSettings } from './api'
 
 const router = useRouter()

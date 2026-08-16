@@ -74,6 +74,11 @@ export const wrongQuizzes = (params) => http.get('/quizzes/wrong', { params })
 export const importQuizzes = (data) => http.post('/quizzes/batch-import', data)
 export const generateQuizzes = (bookId, data) => http.post(`/books/${bookId}/generate-quizzes`, data || {})
 export const clearBookQuizzes = (bookId) => http.delete(`/books/${bookId}/quizzes`)
+export const deepAnalyze = (bookId) => http.post(`/books/${bookId}/deep-analyze`)
+export const getBookDeep = (bookId) => http.get(`/books/${bookId}/deep`)
+export const classifyBook = (bookId) => http.post(`/books/${bookId}/classify`)
+export const classifyAllBooks = () => http.post('/books/classify-all')
+export const setBookCategory = (bookId, category) => http.patch(`/books/${bookId}/category`, { category })
 
 // ===== 统计 =====
 export const getOverview = () => http.get('/stats/overview')
@@ -102,6 +107,10 @@ export const deleteAnnotation = (id) => http.delete(`/annotations/${id}`)
 export const aiExplain = (data) => http.post('/ai/explain', data)
 export const aiSummarize = (data) => http.post('/ai/summarize', data)
 export const aiVision = (data) => http.post('/ai/vision', data)
+export const studyOverview = (data) => http.post('/study/overview', data)
+export const studyReports = () => http.get('/study/reports')
+export const studyTrainStart = (data) => http.post('/study/train/start', data)
+export const studyTrainAsk = (data) => http.post('/study/train/ask', data)
 
 // ===== 设置 =====
 export const getSettings = () => http.get('/settings')

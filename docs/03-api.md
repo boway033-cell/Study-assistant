@@ -360,7 +360,27 @@ POST /api/ai/summarize   body: {"book_id":3,"chapter_id":4}        # 章节总�
 POST /api/ai/vision      body: {"book_id":3,"page":4,"image":"data:image/jpeg;base64,…","prompt":null}  # Qwen-VL
 ```
 
-## 9. 状态码约定
+## 9. 深度分析 /api（标题目录+精读+Markdown）
+
+```
+POST /api/books/{book_id}/deep-analyze   # 触发（导入后自动触发；可手动重跑）
+GET  /api/books/{book_id}/deep           # {status, toc, summaries, markdown}
+POST /api/books/{book_id}/classify       # AI 分类单本
+POST /api/books/classify-all             # AI 分类全部
+PATCH /api/books/{book_id}/category      # 手动改分类 {category}
+GET  /api/deep/status                    # 全部书籍深度状态
+```
+
+## 10. AI 研读 /api/study
+
+```
+POST /api/study/overview        # 综合阅读报告（后台任务，book_ids 可空=全部）
+GET  /api/study/reports         # 历史报告
+POST /api/study/train/start     # 思维训练开始 {book_ids, mode: quiz|free, topic}
+POST /api/study/train/ask       # 回答一轮 {session_id, answer} → {message, round, done}
+```
+
+## 11. 状态码约定
 
 | 码 | 场景 |
 |---|---|

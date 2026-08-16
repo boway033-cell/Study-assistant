@@ -6,6 +6,7 @@
           <template #header>
             <div class="card-header">
               <span>我的资料</span>
+              <el-button type="success" plain :loading="classifying" @click="classifyAll">🤖 自动分类</el-button>
               <el-upload
                 :show-file-list="false"
                 :before-upload="handleUpload"
@@ -34,6 +35,19 @@
               </template>
             </el-table-column>
             <el-table-column prop="total_pages" label="页数" width="70" />
+            <el-table-column label="分类" width="90">
+              <template #default="{ row }">
+                <el-tag v-if="row.category" size="small" type="info" class="cat-tag" @click="editCategory(row)">{{ row.category }}</el-tag>
+                <el-button v-else link type="primary" size="small" @click="editCategory(row)">未分类</el-button>
+              </template>
+            </el-table-column>
+            <el-table-column label="深度分析" width="90">
+              <template #default="{ row }">
+                <el-tag v-if="row.deep_status === 'done'" size="small" type="success">✓ 已精读</el-tag>
+                <el-tag v-else-if="row.deep_status === 'running'" size="small" type="warning">分析中</el-tag>
+                <el-button v-else link type="primary" size="small" @click="runDeep(row)">深度分析</el-button>
+              </template>
+            </el-table-column>
             <el-table-column prop="quiz_count" label="题目" width="70" />
             <el-table-column label="操作" width="150">
               <template #default="{ row }">
@@ -135,14 +149,15 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { listBooks, uploadBook, deleteBook, getBook, searchBooks, getTask } from '../api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { listBooks, uploadBook, deleteBook, getBook, searchBooks, getTask, classifyAllBooks, setBookCategory, deepAnalyze } from '../api'
 import OriginalViewer from '../components/OriginalViewer.vue'
 
 const router = useRouter()
 const books = ref([])
 const loading = ref(false)
 const uploading = ref(false)
+const classifying = ref(false)
 const searchQ = ref('')
 const results = ref(null)
 const searching = ref(false)
@@ -198,6 +213,41 @@ const removeBook = async (row) => {
     await deleteBook(row.id)
     ElMessage.success('已删除')
     if (currentBook.value?.id === row.id) currentBook.value = null
+    loadBooks()
+  } catch (e) {
+    ElMessage.error(e.message)
+  }
+}
+
+const classifyAll = async () => {
+  classifying.value = true
+  try {
+    const resp = await classifyAllBooks()
+    ElMessage.success('分类完成')
+    loadBooks()
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    classifying.value = false
+  }
+}
+
+const editCategory = async (row) => {
+  try {
+    const { value } = await ElMessageBox.prompt(`《${row.title}》分类（数学/管理学/经济学/…）`, '修改分类', {
+      confirmButtonText: '保存', cancelButtonText: '取消',
+      inputValue: row.category || '',
+    })
+    await setBookCategory(row.id, value.trim() || '其他')
+    ElMessage.success('已保存')
+    loadBooks()
+  } catch { /* 取消 */ }
+}
+
+const runDeep = async (row) => {
+  try {
+    const resp = await deepAnalyze(row.id)
+    ElMessage.success('深度分析已启动')
     loadBooks()
   } catch (e) {
     ElMessage.error(e.message)

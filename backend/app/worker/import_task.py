@@ -200,6 +200,12 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
 
         book.status = "ready"
         db.commit()
+        # 自动触发深度分析（三级标题目录/核对/AI补全/逐章总结/Markdown，后台异步）
+        try:
+            from backend.app.worker.tasks import submit
+            submit("deep", lambda rec: _auto_deep(rec, book.id))
+        except Exception:  # noqa: BLE001
+            pass
         return {
             "book_id": book.id,
             "chapters": len(chapters),
@@ -219,6 +225,16 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         raise
     finally:
         db.close()
+
+
+async def _auto_deep(record, book_id: int) -> dict:
+    """导入后自动深度分析（失败不影响导入结果）。"""
+    from backend.app.api.deep import run_deep_analysis
+
+    try:
+        return await run_deep_analysis(record, book_id)
+    except Exception:  # noqa: BLE001
+        return {"skipped": True}
 
 
 def _save_analysis(db, book_id: int, keyinfo: dict, layout) -> None:
