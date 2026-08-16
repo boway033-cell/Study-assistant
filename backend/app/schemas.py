@@ -237,6 +237,8 @@ class KnowledgeNodeResp(BaseModel):
     book_id: int | None = None
     chapter_id: int | None = None
     note: str | None = None
+    node_type: str = "concept"
+    mastery: str = "unknown"
     order_index: int = 0
     children: list["KnowledgeNodeResp"] = []
 
@@ -256,6 +258,13 @@ class KnowledgeNodeUpdateReq(BaseModel):
     note: str | None = None
     book_id: int | None = None
     chapter_id: int | None = None
+    node_type: str | None = None
+    mastery: str | None = None
+
+
+class KnowledgeNodeExpandReq(BaseModel):
+    """AI 展开节点：基于节点标题+关联章节生成子节点。"""
+    node_id: int
 
 
 class KnowledgeMoveReq(BaseModel):

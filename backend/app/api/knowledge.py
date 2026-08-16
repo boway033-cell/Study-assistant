@@ -12,6 +12,7 @@ from backend.app.models import Book, Chapter, Chunk, KnowledgeNode
 from backend.app.schemas import (
     KnowledgeAiGenerateReq,
     KnowledgeImportReq,
+    KnowledgeNodeExpandReq,
     KnowledgeMoveReq,
     KnowledgeNodeCreateReq,
     KnowledgeNodeResp,
@@ -31,6 +32,7 @@ def _to_resp(node: KnowledgeNode, db: Session) -> KnowledgeNodeResp:
     return KnowledgeNodeResp(
         id=node.id, parent_id=node.parent_id, title=node.title,
         book_id=node.book_id, chapter_id=node.chapter_id, note=node.note,
+        node_type=node.node_type or "concept", mastery=node.mastery or "unknown",
         order_index=node.order_index,
         children=[_to_resp(c, db) for c in children],
     )
@@ -88,6 +90,10 @@ def update_node(node_id: int, req: KnowledgeNodeUpdateReq, db: Session = Depends
         node.title = req.title.strip()
     if req.note is not None:
         node.note = req.note
+    if req.node_type is not None:
+        node.node_type = req.node_type
+    if req.mastery is not None:
+        node.mastery = req.mastery
     if req.chapter_id is not None:
         ch = db.get(Chapter, req.chapter_id)
         if not ch:
@@ -335,3 +341,77 @@ def node_annotations(node_id: int, db: Session = Depends(get_db)):
             "color": a.color, "note": a.note or "", "created_at": a.created_at.isoformat(),
         })
     return out
+
+
+@router.post("/nodes/expand", status_code=202)
+def expand_node(req: KnowledgeNodeExpandReq, db: Session = Depends(get_db)):
+    """AI 展开节点：基于节点标题与关联章节生成子节点（后台任务）。"""
+    from backend.app.services.llm import LLMRouter, load_llm_config
+    from backend.app.worker.tasks import submit
+
+    node = _get_node(db, req.node_id)
+    cfg = load_llm_config(db)
+    if not cfg.get("deepseek_api_key"):
+        raise HTTPException(400, "未配置 DeepSeek API Key")
+
+    # 素材：节点标题 + 关联章节文本（若有）
+    context = f"知识点：{node.title}"
+    if node.chapter_id:
+        chunks = db.scalars(
+            select(Chunk).where(Chunk.chapter_id == node.chapter_id).order_by(Chunk.chunk_index).limit(10)
+        ).all()
+        body = "\n".join(c.content[:500] for c in chunks)[:6000]
+        context += f"\n关联章节内容：\n{body}"
+
+    async def run(record):
+        from backend.app.worker.tasks import update_progress
+        update_progress(record, 0.2, "expand", "AI 正在展开知识点…")
+        provider = LLMRouter.get("auto", cfg)
+        prompt = [
+            {"role": "system", "content": (
+                "你是知识结构化助手。给定一个知识点和（可选的）关联章节内容，"
+                "把它展开成 3-8 个下级知识点。只输出 JSON 数组："
+                '[{"title":"下级知识点","node_type":"concept|theorem|point|example|question"}]。'
+                "要求：下级知识点具体、可学习；类型合理（概念/定理/考点/例题/疑问）。"
+            )},
+            {"role": "user", "content": context},
+        ]
+        answer = ""
+        for attempt in range(3):
+            try:
+                answer = ""
+                async for delta in provider.stream_chat(prompt):
+                    answer += delta
+                from backend.app.services.llm import parse_json_response
+                data = parse_json_response(answer)
+                if isinstance(data, list) and data:
+                    break
+            except Exception:  # noqa: BLE001
+                data = None
+            import asyncio
+            await asyncio.sleep(2)
+        if not isinstance(data, list) or not data:
+            raise RuntimeError("AI 展开失败，请稍后重试")
+
+        update_progress(record, 0.7, "expand", "正在写入子节点…")
+        siblings = db.scalars(
+            select(KnowledgeNode).where(KnowledgeNode.parent_id == node.id)
+        ).all()
+        base = max((s.order_index for s in siblings), default=-1)
+        created = 0
+        for i, item in enumerate(data[:8]):
+            title = str(item.get("title", "")).strip()
+            if not title:
+                continue
+            db.add(KnowledgeNode(
+                parent_id=node.id, title=title,
+                node_type=str(item.get("node_type", "concept"))[:20],
+                order_index=base + 1 + i,
+            ))
+            created += 1
+        db.commit()
+        update_progress(record, 1.0, "expand", "完成")
+        return {"created": created}
+
+    record = submit("knowledge-expand", run)
+    return {"task_id": record.id, "status": "running"}

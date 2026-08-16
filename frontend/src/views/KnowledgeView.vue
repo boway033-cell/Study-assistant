@@ -80,9 +80,27 @@
             <el-form-item label="节点标题">
               <el-input v-model="edit.title" style="max-width: 420px" />
             </el-form-item>
+            <el-form-item label="节点类型">
+              <el-radio-group v-model="edit.node_type" size="small">
+                <el-radio-button value="concept">📘 概念</el-radio-button>
+                <el-radio-button value="theorem">📐 定理</el-radio-button>
+                <el-radio-button value="point">🎯 考点</el-radio-button>
+                <el-radio-button value="example">📝 例题</el-radio-button>
+                <el-radio-button value="question">❓ 疑问</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="掌握度">
+              <el-radio-group v-model="edit.mastery" size="small">
+                <el-radio-button value="unknown">⬜ 未标记</el-radio-button>
+                <el-radio-button value="known">🟢 已掌握</el-radio-button>
+                <el-radio-button value="fuzzy">🟡 模糊</el-radio-button>
+                <el-radio-button value="miss">🔴 未掌握</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
             <el-form-item label="我的内容">
               <el-input v-model="edit.note" type="textarea" :rows="5"
-                placeholder="在这里自由记录：知识点的理解、总结、易错点、例题…（纯文本）" />
+                placeholder="记录知识点的理解、总结、易错点、例题…（支持 Markdown）" />
+              <div v-if="edit.note" class="note-preview markdown-body" v-html="renderMarkdown(edit.note)"></div>
             </el-form-item>
             <el-form-item label="关联章节">
               <el-select v-model="edit.book_id" placeholder="选择书籍（可跨书）" clearable style="width: 190px; margin-right: 8px" @change="onBookChange">
@@ -96,6 +114,7 @@
             <el-form-item>
               <el-button type="primary" @click="saveNode">保存</el-button>
               <el-button @click="loadSource">加载原文</el-button>
+              <el-button type="warning" plain :loading="expanding" @click="expandNode">🤖 AI 展开子节点</el-button>
             </el-form-item>
           </el-form>
 
@@ -180,13 +199,14 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { renderMarkdown } from '../utils/markdown'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MindMap from '../components/MindMap.vue'
 import PdfReader from '../components/PdfReader.vue'
 import {
   getKnowledgeTree, createKnowledgeNode, updateKnowledgeNode,
   deleteKnowledgeNode, moveKnowledgeNode, getKnowledgeSource,
-  importKnowledgeChapters, aiGenerateKnowledge,
+  importKnowledgeChapters, aiGenerateKnowledge, expandKnowledgeNode,
   listBooks, getBook, getTask, bookFileUrl, getNodeAnnotations,
 } from '../api'
 
@@ -196,7 +216,8 @@ const books = ref([])
 const nodeAnns = ref([])
 const viewMode = ref('outline')
 const current = ref(null)
-const edit = ref({ title: '', book_id: null, chapter_id: null, note: '' })
+const edit = ref({ title: '', book_id: null, chapter_id: null, note: '', node_type: 'concept', mastery: 'unknown' })
+const expanding = ref(false)
 const chapterOptions = ref([])
 const source = ref({})
 const sourceLoading = ref(false)
@@ -236,7 +257,7 @@ const loadBooks = async () => {
 
 const selectNode = async (data) => {
   current.value = data
-  edit.value = { title: data.title, book_id: data.book_id, chapter_id: data.chapter_id, note: data.note || '' }
+  edit.value = { title: data.title, book_id: data.book_id, chapter_id: data.chapter_id, note: data.note || '', node_type: data.node_type || 'concept', mastery: data.mastery || 'unknown' }
   source.value = {}
   sourceView.value = 'text'
   if (data.book_id) {
@@ -366,12 +387,37 @@ const saveNode = async () => {
       note: edit.value.note,
       book_id: edit.value.book_id || null,
       chapter_id: edit.value.chapter_id || null,
+      node_type: edit.value.node_type,
+      mastery: edit.value.mastery,
     })
     ElMessage.success('已保存')
     loadTree()
     loadSource()
   } catch (e) {
     ElMessage.error(e.message)
+  }
+}
+
+const expandNode = async () => {
+  if (!current.value?.id) return
+  expanding.value = true
+  try {
+    const resp = await expandKnowledgeNode(current.value.id)
+    ElMessage.success('AI 正在展开…')
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 2000))
+      const t = await getTask(resp.task_id)
+      if (t.status === 'done') {
+        ElMessage.success('已展开 ' + (t.result?.created || 0) + ' 个子节点')
+        loadTree()
+        break
+      }
+      if (t.status === 'failed') { ElMessage.error('展开失败：' + (t.error || '')); break }
+    }
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    expanding.value = false
   }
 }
 

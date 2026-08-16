@@ -139,7 +139,9 @@ class KnowledgeNode(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     book_id: Mapped[int | None] = mapped_column(ForeignKey("books.id"))
     chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id"))
-    note: Mapped[str | None] = mapped_column(Text)  # 用户笔记/总结
+    note: Mapped[str | None] = mapped_column(Text)  # 用户笔记/总结（Markdown）
+    node_type: Mapped[str] = mapped_column(String(20), default="concept")  # concept/theorem/point/example/question
+    mastery: Mapped[str] = mapped_column(String(10), default="unknown")  # unknown/known/fuzzy/unknown 掌握度
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 

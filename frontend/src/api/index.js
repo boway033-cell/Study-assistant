@@ -98,6 +98,7 @@ export const getKnowledgeSource = (id) => http.get(`/knowledge/nodes/${id}/sourc
 export const getNodeAnnotations = (id) => http.get(`/knowledge/nodes/${id}/annotations`)
 export const importKnowledgeChapters = (data) => http.post('/knowledge/import-chapters', data)
 export const aiGenerateKnowledge = (data) => http.post('/knowledge/ai-generate', data)
+export const expandKnowledgeNode = (nodeId) => http.post('/knowledge/nodes/expand', { node_id: nodeId })
 
 // ===== PDF 标注 =====
 export const listAnnotations = (bookId, params) => http.get(`/books/${bookId}/annotations`, { params })

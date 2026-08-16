@@ -22,6 +22,14 @@ def _migrate():
             cols = [r[1] for r in conn.execute(text("PRAGMA table_info(books)")).fetchall()]
             if "category" not in cols:
                 conn.execute(text("ALTER TABLE books ADD COLUMN category VARCHAR(50)"))
+            # 知识树节点新列（类型/掌握度）
+            for col, ddl in (("node_type", "VARCHAR(20) DEFAULT 'concept'"), ("mastery", "VARCHAR(10) DEFAULT 'unknown'")):
+                try:
+                    kcols = [r[1] for r in conn.execute(text("PRAGMA table_info(knowledge_nodes)")).fetchall()]
+                    if col not in kcols:
+                        conn.execute(text(f"ALTER TABLE knowledge_nodes ADD COLUMN {col} {ddl}"))
+                except Exception:  # noqa: BLE001
+                    pass
             # 重启后复位 stuck 任务（后台任务在内存，重启即丢失）
             try:
                 conn.execute(text("UPDATE book_deep SET status='pending', error_msg='服务重启，任务中断，可重新分析' WHERE status='running'"))
