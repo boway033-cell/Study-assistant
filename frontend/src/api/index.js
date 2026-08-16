@@ -117,6 +117,7 @@ export const studyReports = () => http.get('/study/reports')
 export const deleteStudyReport = (id) => http.delete(`/study/reports/${id}`)
 export const studyTrainStart = (data) => http.post('/study/train/start', data)
 export const studyTrainAsk = (data) => http.post('/study/train/ask', data)
+export const studyTrainEnd = (data) => http.post('/study/train/end', data)
 
 // ===== 设置 =====
 export const getSettings = () => http.get('/settings')

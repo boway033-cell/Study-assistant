@@ -159,9 +159,12 @@ async def train_start(req: TrainStartReq, db: Session = Depends(get_db)):
     if not context:
         raise HTTPException(400, "没有可用的文献")
     sid = uuid.uuid4().hex[:12]
+    # 防御：会话内存上限，避免无限轮/反复开新会话累积内存（低内存底线）
+    while len(_sessions) >= 100:
+        _sessions.pop(next(iter(_sessions)), None)
     _sessions[sid] = {
         "mode": req.mode, "topic": req.topic, "book_ids": req.book_ids or [],
-        "context": context, "history": [], "round": 0, "max_round": 6, "done": False,
+        "context": context, "history": [], "round": 0, "done": False,
     }
     provider = LLMRouter.get("auto", cfg)
     first = await _gen_turn(provider, _sessions[sid], None)
@@ -186,6 +189,16 @@ async def train_ask(req: TrainAskReq, db: Session = Depends(get_db)):
     return {"session_id": req.session_id, "message": msg, "round": sess["round"], "done": sess["done"]}
 
 
+class TrainEndReq(BaseModel):
+    session_id: str
+
+
+@router.post("/train/end", status_code=204)
+def train_end(req: TrainEndReq):
+    """结束训练并释放会话内存。"""
+    _sessions.pop(req.session_id, None)
+
+
 async def _gen_turn(provider, sess: dict, user_answer: str | None):
     """生成一轮：user_answer 为 None 表示开场问题。"""
     if user_answer is not None:
@@ -196,7 +209,7 @@ async def _gen_turn(provider, sess: dict, user_answer: str | None):
             "你是思维训练导师（苏格拉底式）。基于文献内容训练用户：\n"
             "- 每次只出 1 道题，题型按顺序递进：概念理解→应用场景→批判思考→跨文献联系→综合\n"
             "- 用户回答后：① 简短评价（对错与不足，30 字内）② 若答错/含糊，追问一次引导 ③ 答得好则出下一题\n"
-            "- 第 6 轮后给出 100-150 字总结评价（掌握情况 + 建议）并标注【训练结束】\n"
+            "- 不设轮数上限，可持续深入；当用户表示想结束或总结时，给出 100-150 字总结评价（掌握情况 + 建议）并标注【训练结束】\n"
             "- 输出格式：先【评价】再【提问】或【总结】，用中文。"
         )
     else:
@@ -204,7 +217,7 @@ async def _gen_turn(provider, sess: dict, user_answer: str | None):
             "你是文献陪练导师。基于文献内容与用户自由对话：\n"
             "- 主动引导用户深入理解（提问、类比、举例、指出矛盾）\n"
             "- 用户回答后给予反馈并继续深入，像真正的老师一样\n"
-            "- 第 6 轮后总结学习收获并标注【训练结束】\n"
+            "- 不设轮数上限，可持续深入对话；当用户表示想结束或总结时，总结学习收获并标注【训练结束】\n"
             "- 用中文。"
         )
     topic_hint = f"本次训练主题：{sess['topic']}\n" if sess.get("topic") else ""
@@ -227,6 +240,6 @@ async def _gen_turn(provider, sess: dict, user_answer: str | None):
 
     sess["history"].append({"role": "assistant", "content": answer})
     sess["round"] += 1
-    if sess["round"] >= sess["max_round"] or "【训练结束】" in answer:
+    if "【训练结束】" in answer:
         sess["done"] = True
     return answer

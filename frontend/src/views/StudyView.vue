@@ -64,13 +64,13 @@
               </el-form-item>
             </el-form>
             <el-alert type="info" :closable="false" show-icon
-              title="AI 会基于文献内容持续出题/追问，答完一轮点评并进入下一轮，6 轮后给出总结评价" />
+              title="AI 会基于文献内容持续出题/追问或自由陪练，轮数不限；想结束时告诉 AI，或点右上角「结束训练」" />
           </template>
 
           <template v-else>
             <div class="train-header">
               <el-tag size="small" type="warning">{{ trMode === 'quiz' ? '出题训练' : '自由陪练' }}</el-tag>
-              <span class="round-info">第 {{ trainRound }} / 6 轮</span>
+              <span class="round-info">第 {{ trainRound }} 轮</span>
               <el-button size="small" type="danger" plain @click="endTrain">结束训练</el-button>
             </div>
             <div ref="trainBox" class="train-box">
@@ -99,7 +99,7 @@
 <script setup>
 import { ref, nextTick, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { listBooks, getTask, studyOverview, studyReports, deleteStudyReport, studyTrainStart, studyTrainAsk } from '../api'
+import { listBooks, getTask, studyOverview, studyReports, deleteStudyReport, studyTrainStart, studyTrainAsk, studyTrainEnd } from '../api'
 import { renderMarkdown } from '../utils/markdown'
 
 const tab = ref('overview')
@@ -215,7 +215,10 @@ const sendAnswer = async () => {
   }
 }
 
-const endTrain = () => {
+const endTrain = async () => {
+  if (sessionId.value) {
+    studyTrainEnd({ session_id: sessionId.value }).catch(() => {})
+  }
   sessionId.value = ''
   trainMsgs.value = []
   trainRound.value = 0
@@ -231,6 +234,24 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* AI 研读 tab 标题：大字号 + 白色 + 加粗 */
+:deep(.el-tabs__item) {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffffff;
+  transition: all 0.2s ease;
+}
+:deep(.el-tabs__item.is-active) {
+  color: #ffffff;
+}
+:deep(.el-tabs__item:hover) {
+  color: #ffffff;
+  opacity: 0.85;
+}
+:deep(.el-tabs__active-bar) {
+  height: 3px;
+  background-color: #C2A285;
+}
 .ov-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .tip { font-size: 12px; color: var(--el-text-color-secondary); }
 .ov-progress { margin: 12px 0; }
