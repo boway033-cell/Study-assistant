@@ -16,6 +16,9 @@ python-pptx==1.0.2
 # 中文分词
 jieba==0.42.1
 
+# OCR（扫描版 PDF 识别；rapidocr 中文效果好，纯 pip，无需系统依赖）
+rapidocr-onnxruntime==1.2.3
+
 # 云端 AI 客户端
 httpx==0.28.1
 openai==3.1.0

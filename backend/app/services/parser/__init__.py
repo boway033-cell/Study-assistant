@@ -71,6 +71,40 @@ def _parse_pdf(p: Path) -> ParseResult:
 
 
 # ---------- DOCX ----------
+# 标题样式映射：支持英文 Heading / 中文「大标题」「一级标题」等常见样式名
+_HEADING_STYLE_MAP = {
+    "heading 1": 1, "heading 2": 2, "heading 3": 3, "heading 4": 4, "heading 5": 5,
+    "title": 1, "subtitle": 2,
+    # 中文样式名（不同作者习惯）
+    "大标题": 1, "标题": 1, "章标题": 1, "篇标题": 1,
+    "一级标题": 1, "二级标题": 2, "三级标题": 3, "四级标题": 4, "五级标题": 5,
+    "小节标题": 2,
+}
+
+
+def _docx_style_level(style_name: str) -> int | None:
+    """把任意样式名解析为标题层级（None=非标题）。支持前缀匹配与数字后缀。"""
+    if not style_name:
+        return None
+    name = style_name.strip()
+    # 精确映射
+    if name.lower() in _HEADING_STYLE_MAP:
+        return _HEADING_STYLE_MAP[name.lower()]
+    # 前缀匹配：Heading 1 / 标题 1 / heading1 等
+    import re as _re
+    m = _re.match(r"(?:heading|标题)\s*(\d)", name, _re.IGNORECASE)
+    if m:
+        lvl = int(m.group(1))
+        return lvl if 1 <= lvl <= 6 else None
+    # 中文前缀：标题 2 / 标题三 等
+    m = _re.match(r"标题\s*([一二三四五六七八九十\d]+)", name)
+    if m:
+        _cn = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6}
+        s = m.group(1)
+        return _cn.get(s, int(s) if s.isdigit() else 1)
+    return None
+
+
 def _parse_docx(p: Path) -> ParseResult:
     try:
         import docx
@@ -80,12 +114,10 @@ def _parse_docx(p: Path) -> ParseResult:
     d = docx.Document(p)
     result = ParseResult()
 
-    # 收集标题（Heading 样式 → 目录候选）与正文段落
-    heading_levels = {"Heading 1": 1, "Heading 2": 2, "Heading 3": 3,
-                      "Heading 4": 4, "Heading 5": 5, "Title": 1}
     page_text: list[str] = []
     current = []
     page_no = 1
+    style_hit_count = 0  # 样式命中计数（判断是否走启发式回退）
 
     def flush():
         nonlocal current, page_no
@@ -94,21 +126,110 @@ def _parse_docx(p: Path) -> ParseResult:
             current = []
             page_no += 1
 
+    # 第一遍：样式标题识别
     for para in d.paragraphs:
         style = para.style.name if para.style is not None else ""
         text = para.text.strip()
         if not text:
             continue
-        if style in heading_levels:
+        level = _docx_style_level(style)
+        if level is not None:
             flush()
-            level = heading_levels[style]
             result.toc.append(TocItem(title=text, level=level, page=page_no))
+            style_hit_count += 1
         current.append(text)
 
     flush()
+
+    # 第二遍：样式 + 启发式合并，并重建「每标题一页」的页结构
+    from backend.app.services.rag.toc_heuristic import _CHAPTER_RE, _SECTION_RE
+    import re as _re
+
+    # 收集样式标题行号（避免启发式重复识别同一行）
+    style_lines: set[int] = set()
+    for idx, para in enumerate(d.paragraphs):
+        style = para.style.name if para.style is not None else ""
+        if _docx_style_level(style) is not None and para.text.strip():
+            style_lines.add(idx)
+
+    # 逐段扫描：识别标题（样式优先，其次启发式），重建 pages
+    merged_toc: list[TocItem] = []
+    seen_keys: set[str] = set()
+    page_text = []
+    current = []
+    last_chapter_level = None  # 最近「第X章」是否出现（用于「一、」层级推断）
+
+    def push_toc(title: str, level: int):
+        nonlocal current
+        key = title.strip()
+        if not key or key in seen_keys:
+            return
+        seen_keys.add(key)
+        if current:
+            page_text.append("\n".join(current))
+            current = []
+        merged_toc.append(TocItem(title=_clean_docx_title(title), level=level, page=len(merged_toc) + 1))
+
+    for idx, para in enumerate(d.paragraphs):
+        text = para.text.strip()
+        if not text:
+            continue
+        style = para.style.name if para.style is not None else ""
+        level = _docx_style_level(style) if idx in style_lines else None
+        if level is not None:
+            push_toc(text, level)
+            last_chapter_level = (level == 1)
+            current.append(text)
+            continue
+        # 启发式：第X章 / 第X节
+        m = _CHAPTER_RE.match(text)
+        if m and len(text) <= 45:
+            num = _re.search(r"第\s*([一二三四五六七八九十百千万0-9]+)", text)
+            title = "第" + (num.group(1) if num else "?") + "章 " + _clean_docx_title(m.group(1))
+            push_toc(title, 1)
+            last_chapter_level = True
+            current.append(text)
+            continue
+        m2 = _SECTION_RE.match(text)
+        if m2 and len(text) <= 45:
+            num = _re.search(r"第\s*([一二三四五六七八九十百千万0-9]+)", text)
+            title = "第" + (num.group(1) if num else "?") + "节 " + _clean_docx_title(m2.group(1))
+            push_toc(title, 2)
+            current.append(text)
+            continue
+        # 中文序号「一、」：紧跟章后为二级，否则一级
+        if _re.match(r"^[一二三四五六七八九十]+、", text) and 2 <= len(text) <= 40:
+            push_toc(text, 2 if last_chapter_level else 1)
+            current.append(text)
+            continue
+        # 其他情况：正文行
+        current.append(text)
+
+    if current:
+        page_text.append("\n".join(current))
+    result.toc = merged_toc
     result.pages = page_text or [""]
     result.total_pages = len(page_text)
+    # 标题过少则放弃目录（保持整本一章）
+    if len(result.toc) < 2:
+        result.toc = []
     return result
+
+
+def _clean_docx_title(raw: str) -> str:
+    """清理标题尾部页码/年份/考试提示等噪声。"""
+    import re as _re
+    t = raw.strip()
+    # 尾部纯数字/页码
+    t = _re.sub(r"\s*[\d\s]+$", "", t)
+    # 尾部「（4）」「(10)」等编号括号
+    t = _re.sub(r"[（(]\d+[）)]\s*$", "", t)
+    # 尾部「2012年简答：...」「2016论述：...」等考试提示
+    t = _re.sub(r"20\d{2}\s*年?\s*(简答|论述|名词解释|计算|问答|考|预测).*$", "", t)
+    t = _re.sub(r"（20\d{2}年?[^）]*）\s*$", "", t)
+    # 中文间空格（字距）
+    t = _re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", t)
+    return t.strip(" ，。、|｜:：")
 
 
 # ---------- PPTX ----------

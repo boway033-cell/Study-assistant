@@ -26,7 +26,12 @@ def detect_scanned(pages: list[str]) -> bool:
 
 
 def has_ocr_engine() -> bool:
-    """检查是否安装了可用的 OCR 引擎（pytesseract 或 paddleocr）。"""
+    """检查是否安装了可用的 OCR 引擎（rapidocr / pytesseract / paddleocr）。"""
+    try:
+        from rapidocr_onnxruntime import RapidOCR  # noqa: F401
+        return True
+    except ImportError:
+        pass
     try:
         import pytesseract  # noqa: F401
         return True
@@ -43,24 +48,33 @@ def has_ocr_engine() -> bool:
 def ocr_pdf(path: str | Path) -> list[str]:
     """对扫描版 PDF 做 OCR，返回每页文本。
 
-    按优先级尝试后端：pytesseract → paddleocr。
+    按优先级尝试后端：rapidocr（中文最佳，纯 pip）→ pytesseract → paddleocr。
     均不可用时抛出 RuntimeError 并给出安装指引。
     """
     p = Path(path)
     if p.suffix.lower() != ".pdf":
         raise RuntimeError("OCR 仅支持 PDF 文件")
 
-    # 尝试 pytesseract
+    # 1. RapidOCR（onnxruntime，中文效果好，纯 pip 安装）
+    try:
+        from rapidocr_onnxruntime import RapidOCR  # noqa: F401
+        return _ocr_rapid(p)
+    except ImportError:
+        pass
+    except Exception as e:  # noqa: BLE001
+        # rapidocr 运行失败，继续尝试下一个
+        pass
+
+    # 2. pytesseract
     try:
         import pytesseract  # noqa: F401
         return _ocr_tesseract(p)
     except ImportError:
         pass
     except Exception as e:  # noqa: BLE001
-        # tesseract 装了但二进制缺失等，继续尝试下一个
         pass
 
-    # 尝试 paddleocr
+    # 3. paddleocr
     try:
         import paddleocr  # noqa: F401
         return _ocr_paddle(p)
@@ -70,9 +84,10 @@ def ocr_pdf(path: str | Path) -> list[str]:
     raise RuntimeError(
         "该 PDF 为扫描版（无文本层），且未检测到可用的 OCR 引擎。"
         "请任选其一安装：\n"
-        "1) Tesseract：https://github.com/UB-Mannheim/tesseract/wiki 下载安装，"
+        "1) RapidOCR：pip install rapidocr-onnxruntime（推荐，中文效果好）\n"
+        "2) Tesseract：https://github.com/UB-Mannheim/tesseract/wiki 下载安装，"
         "勾选中文语言包，再 pip install pytesseract\n"
-        "2) PaddleOCR：pip install paddlepaddle paddleocr（体积较大）"
+        "3) PaddleOCR：pip install paddlepaddle paddleocr（体积较大，需 Python≤3.12）"
     )
 
 
@@ -89,6 +104,39 @@ def _render_pdf_pages(p: Path) -> list:
         images.append(img)
     doc.close()
     return images
+
+
+_rapid_engine = None
+
+
+def _get_rapid_engine():
+    """缓存 RapidOCR 引擎实例（首次加载模型，之后复用）。"""
+    global _rapid_engine
+    if _rapid_engine is None:
+        from rapidocr_onnxruntime import RapidOCR
+        _rapid_engine = RapidOCR()
+    return _rapid_engine
+
+
+def _ocr_rapid(p: Path) -> list[str]:
+    """用 RapidOCR 识别每页（中文效果好，CPU 可跑）。"""
+    import numpy as np
+    import cv2
+
+    engine = _get_rapid_engine()
+    images = _render_pdf_pages(p)
+    texts = []
+    for img in images:
+        arr = np.array(img)
+        # 转 BGR（RapidOCR 期望 BGR）
+        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        result, _ = engine(bgr)
+        if result:
+            lines = [str(item[1]) for item in result]
+            texts.append("\n".join(lines))
+        else:
+            texts.append("")
+    return texts
 
 
 def _ocr_tesseract(p: Path) -> list[str]:

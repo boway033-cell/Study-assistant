@@ -317,6 +317,18 @@ async def summarize_by_toc(provider, book_title: str, toc: list[dict],
 
 
 # ---------- 5. Markdown 转换 ----------
+def _downgrade_headers(md_text: str, levels: int = 2) -> str:
+    """把 AI 总结内部的 Markdown 标题降级，避免与章节标题层级冲突。
+
+    章节标题从 H2/H3 开始，总结内部标题至少应为 H4+。
+    """
+    import re as _re
+    def _sub(m: "re.Match") -> str:
+        hashes = m.group(1)
+        return "#" * min(6, len(hashes) + levels) + " " + m.group(2)
+    return _re.sub(r"^(#{1,6})\s+(.+)$", _sub, md_text, flags=_re.M)
+
+
 def to_markdown(book_title: str, toc: list[dict], summaries: list[dict],
                 section_texts: dict[str, str]) -> str:
     """生成 Markdown：目录 + 逐章 AI 总结 + 各节正文。"""
@@ -349,7 +361,7 @@ def to_markdown(book_title: str, toc: list[dict], summaries: list[dict],
                     md.append("<details>")
                     md.append("<summary>💡 AI 精读总结（点击展开/收起）</summary>")
                     md.append("")
-                    md.append(summary)
+                    md.append(_downgrade_headers(summary))
                     md.append("")
                     md.append("</details>")
                     md.append("")
