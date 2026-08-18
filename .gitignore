@@ -39,3 +39,5 @@ server.log
 backup-*.zip
 # PID file
 server.pid
+# runtime err log
+server.err.log
