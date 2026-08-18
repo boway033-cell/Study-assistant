@@ -2,7 +2,7 @@
   <div class="chat-page">
     <el-row :gutter="16" class="chat-row">
       <!-- 左：提问范围 + 历史 -->
-      <el-col :span="5">
+      <el-col :span="4">
         <el-card shadow="never" class="side-card">
           <template #header>提问范围</template>
           <el-select v-model="bookId" placeholder="全部书籍" clearable style="width: 100%">
@@ -18,7 +18,7 @@
       </el-col>
 
       <!-- 中：对话 -->
-      <el-col :span="12">
+      <el-col :span="11">
         <el-card shadow="never" class="chat-card">
           <template #header>
             <div class="chat-header">
@@ -43,7 +43,7 @@
                   <el-tag v-for="(s, j) in m.sources" :key="j" size="small" type="info"
                     :effect="activeSourceIndex === i && activeSourceIdx === j ? 'dark' : 'plain'"
                     class="source-tag" @click="showSource(m, s, j)">
-                    第 {{ s.page || '?' }} 页 📄
+                    {{ (s.book_title ? '《' + s.book_title + '》' : '') + (s.chapter_title ? ' ' + s.chapter_title : '') }} {{ s.page_start && s.page_end && s.page_end !== s.page_start ? '第' + s.page_start + '-' + s.page_end + '页' : '第' + (s.page || s.page_start || '?') + '页' }} 📄
                   </el-tag>
                 </div>
               </div>
@@ -65,7 +65,7 @@
       </el-col>
 
       <!-- 右：原文展示面板 -->
-      <el-col :span="7">
+      <el-col :span="9">
         <el-card shadow="never" class="source-card">
           <template #header>📖 出处原文</template>
           <div v-if="sourceLoading" v-loading="true" style="height: 160px" />
@@ -74,14 +74,15 @@
               <el-tag size="small" type="info">《{{ source.book_title || '' }}》</el-tag>
               <el-tag size="small" type="warning" v-if="source.chapter_title">{{ source.chapter_title }}</el-tag>
               <el-tag size="small" type="success">第 {{ source.page_start }} - {{ source.page_end }} 页</el-tag>
-              <el-radio-group v-model="sourceView" size="small" style="margin-left: auto">
+              <el-button link size="small" type="primary" @click="goFullRead" style="margin-left: auto">⛶ 全屏阅读</el-button>
+              <el-radio-group v-model="sourceView" size="small">
                 <el-radio-button value="text">文本</el-radio-button>
                 <el-radio-button value="pdf" v-if="sourceBookType === 'pdf'">PDF 原文</el-radio-button>
               </el-radio-group>
             </div>
             <div v-if="sourceView === 'text'" class="source-text">{{ source.text }}</div>
             <div v-else-if="sourceView === 'pdf'" class="pdf-box">
-              <PdfReader :src="pdfUrl" :book-id="source.book_id" :initial-page="source.page_start || 1" />
+              <PdfReader :src="pdfUrl" :book-id="source.book_id" :initial-page="source.page_start || 1" :use-saved-pos="false" />
             </div>
           </template>
           <el-empty v-else description="提问后，答案引用的原文会自动显示在这里" :image-size="80" />
@@ -93,11 +94,13 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { listBooks, chatStream, chatHistory, getChunkOriginal, getBook, bookFileUrl } from '../api'
 import PdfReader from '../components/PdfReader.vue'
 import { sanitizeHtml } from '../utils/markdown'
 
+const router = useRouter()
 const books = ref([])
 const bookId = ref(null)
 const model = ref('flash')
@@ -178,6 +181,11 @@ const showSource = (m, s, idx) => {
   activeSourceIndex.value = messages.value.indexOf(m)
   activeSourceIdx.value = idx
   loadSourcePanel(bid, s.chunk_id)
+}
+
+const goFullRead = () => {
+  if (!source.value.book_id) return
+  router.push('/reader/' + source.value.book_id + '?page=' + (source.value.page_start || 1))
 }
 
 const send = async () => {
@@ -282,9 +290,9 @@ onMounted(async () => {
 .history-time { font-size: 11px; color: var(--el-text-color-placeholder); }
 .source-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .source-text {
-  background: var(--el-fill-color-lighter); border-radius: 8px; padding: 12px;
-  font-size: 13px; line-height: 1.9; color: var(--el-text-color-primary);
-  max-height: 400px; overflow-y: auto; white-space: pre-wrap;
+  background: var(--el-fill-color-lighter); border-radius: 8px; padding: 14px;
+  font-size: 14px; line-height: 2; color: var(--el-text-color-primary);
+  max-height: 560px; overflow-y: auto; white-space: pre-wrap;
   border: 1px solid var(--el-border-color-extra-light);
 }
 .pdf-box { height: 480px; border-radius: 8px; overflow: hidden; border: 1px solid var(--el-border-color-extra-light); }

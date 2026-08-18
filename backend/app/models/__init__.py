@@ -1,21 +1,31 @@
-"""ORM 模型：books / chapters / chunks / notes / chat_logs / quizzes / attempts / knowledge_nodes / settings
+"""ORM 模型：books / chapters / chunks / notes / chat_logs / quizzes / attempts / knowledge_nodes /
+settings / book_analysis / book_deep / study_reports / study_plans / check_ins / tags / import_tasks
 对应 docs/02-database.md。卡片学习已取消，无 cards / review_logs 表。"""
 from __future__ import annotations
 
 from datetime import datetime
 
 from sqlalchemy import (
+    Column,
     DateTime,
     Float,
     ForeignKey,
     Integer,
     String,
+    Table,
     Text,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
+
+# 书籍-标签 多对多关联表（需在 Book / Tag 之前定义）
+book_tags = Table(
+    "book_tags", Base.metadata,
+    Column("book_id", ForeignKey("books.id"), primary_key=True),
+    Column("tag_id", ForeignKey("tags.id"), primary_key=True),
+)
 
 
 class Book(Base):
@@ -26,15 +36,18 @@ class Book(Base):
     file_path: Mapped[str] = mapped_column(String(500), nullable=False)
     file_type: Mapped[str] = mapped_column(String(10), nullable=False)  # pdf/docx/pptx
     file_size: Mapped[int | None] = mapped_column(Integer)
+    file_hash: Mapped[str | None] = mapped_column(String(64), index=True)  # SHA-256，用于去重
     total_pages: Mapped[int | None] = mapped_column(Integer)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending/parsing/ready/failed
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending/parsing/ready/failed/needs_ocr
     error_msg: Mapped[str | None] = mapped_column(Text)
     category: Mapped[str | None] = mapped_column(String(50))  # AI 自动分类（数学/管理学/…）
+    duplicate_of: Mapped[int | None] = mapped_column(Integer)  # 疑似重复的 book_id（0=无）
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     chapters: Mapped[list["Chapter"]] = relationship(back_populates="book", cascade="all, delete-orphan")
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="book", cascade="all, delete-orphan")
     quizzes: Mapped[list["Quiz"]] = relationship(back_populates="book", cascade="all, delete-orphan")
+    tags: Mapped[list["Tag"]] = relationship(secondary=book_tags, back_populates="books")
 
 
 class Chapter(Base):
@@ -186,6 +199,7 @@ class BookDeep(Base):
     toc_json: Mapped[str | None] = mapped_column(Text)        # 完整三级标题目录 [{title,level,page}]
     summaries_json: Mapped[str | None] = mapped_column(Text)  # [{title, summary}]
     markdown: Mapped[str | None] = mapped_column(Text)        # Markdown 版本
+    chapter_hashes_json: Mapped[str | None] = mapped_column(Text)  # 各章内容哈希（增量缓存用）
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/running/done/failed
     error_msg: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -248,3 +262,36 @@ class CheckIn(Base):
     content: Mapped[str | None] = mapped_column(Text)
     done: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class Tag(Base):
+    """资料标签：多对多关联书籍，支持自动/手动标签。"""
+
+    __tablename__ = "tags"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    color: Mapped[str] = mapped_column(String(20), default="#8B5A2B")
+    auto_generated: Mapped[int] = mapped_column(Integer, default=0)  # 1=自动生成
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+    books: Mapped[list["Book"]] = relationship(secondary=book_tags, back_populates="tags")
+
+
+class ImportTask(Base):
+    """导入任务持久化记录（断点恢复用）。"""
+
+    __tablename__ = "import_tasks"
+
+    id: Mapped[str] = mapped_column(String(60), primary_key=True)  # 同 TaskRecord.id
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)  # import / reimport
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending/running/done/failed
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
+    stage: Mapped[str] = mapped_column(String(30), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str | None] = mapped_column(Text)
+    result_json: Mapped[str | None] = mapped_column(Text)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

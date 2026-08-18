@@ -144,7 +144,8 @@
               <el-tag size="small" type="info">《{{ source.book_title }}》</el-tag>
               <el-tag size="small" type="warning">{{ source.chapter_title }}</el-tag>
               <el-tag size="small" type="success">第 {{ source.page_start }} - {{ source.page_end }} 页</el-tag>
-              <el-radio-group v-model="sourceView" size="small" style="margin-left: auto">
+              <el-button link size="small" type="primary" @click="goReadSource" style="margin-left: auto">⛶ 全屏阅读</el-button>
+              <el-radio-group v-model="sourceView" size="small">
                 <el-radio-button value="text">文本</el-radio-button>
                 <el-radio-button value="pdf" v-if="source.book_id && pdfBookType === 'pdf'">📄 PDF 原文</el-radio-button>
               </el-radio-group>
@@ -152,7 +153,7 @@
             <div v-if="sourceView === 'text'" class="source-text">{{ source.text }}</div>
             <div v-else-if="sourceView === 'pdf'" class="pdf-box">
               <PdfReader :src="pdfUrl" :book-id="source.book_id" :initial-page="source.page_start || 1"
-                :toc="tocFlat" show-toc show-ai />
+                :toc="tocFlat" show-toc show-ai :use-saved-pos="false" />
             </div>
           </template>
           <el-empty v-else description="该节点尚未关联书籍章节，或该章节暂无内容" :image-size="80" />
@@ -335,6 +336,11 @@ const loadNodeAnns = async (nodeId) => {
 
 const goRead = (a) => {
   router.push('/reader/' + a.book_id + '?page=' + a.page)
+}
+
+const goReadSource = () => {
+  if (!source.value.book_id) return
+  router.push('/reader/' + source.value.book_id + '?page=' + (source.value.page_start || 1))
 }
 
 const loadChapters = async (bookId) => {

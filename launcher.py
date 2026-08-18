@@ -40,21 +40,37 @@ def port_in_use(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+def print_banner(port: int) -> None:
+    """打印启动横幅。"""
+    url = f"http://127.0.0.1:{port}"
+    print()
+    print("  ============================================")
+    print("  |                                          |")
+    print("  |    Study Assistant - Learning Toolbox    |")
+    print("  |                                          |")
+    print(f"  |    {url:<33}       |")
+    print("  |                                          |")
+    print("  |    Press Ctrl+C to stop                  |")
+    print("  |                                          |")
+    print("  ============================================")
+    print()
+
+
 def main() -> int:
     port = get_port()
     url = f"http://127.0.0.1:{port}"
 
     # 0. 已在运行？直接打开浏览器
     if health_ok(port):
-        print(f"[launcher] 应用已在运行: {url}，直接打开浏览器")
+        print(f"[launcher] Application already running at {url}")
         webbrowser.open(url)
         return 0
 
     # 1. 端口被其他程序占用？明确提示
     if port_in_use(port):
-        print(f"[launcher] 端口 {port} 已被其他程序占用（不是本应用）。")
-        print(f"          换端口启动: python launcher.py {port + 1}")
-        input("按回车退出...")
+        print(f"[launcher] Port {port} is occupied by another program.")
+        print(f"          Try: python launcher.py {port + 1}")
+        input("Press Enter to exit...")
         return 1
 
     # 2. 启动服务（子进程，日志同时输出到控制台与 server.log）
@@ -82,9 +98,8 @@ def main() -> int:
         time.sleep(1)
 
     if ready:
-        print(f"[launcher] 服务已就绪: {url}")
+        print_banner(port)
         webbrowser.open(url)
-        print("[launcher] 按 Ctrl+C 停止服务")
     else:
         print("[launcher] 服务启动超时，请查看 server.log")
         proc.terminate()
@@ -94,7 +109,7 @@ def main() -> int:
     try:
         proc.wait()
     except KeyboardInterrupt:
-        print("\n[launcher] 正在停止服务...")
+        print("\n[launcher] Shutting down...")
         proc.terminate()
         try:
             proc.wait(timeout=10)

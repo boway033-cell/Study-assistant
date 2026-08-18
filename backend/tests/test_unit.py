@@ -46,13 +46,19 @@ class TestParser:
     def test_split_pages_into_chunks(self):
         from backend.app.services.rag.chunker import split_pages_into_chunks
 
-        # 两页 300 字 + 分隔符 = 602 字 → 主块 600 字 + 尾部碎片(82字,与主块重叠80字)被跳过 → 1 块
+        # 两页各 300 字，chunk_size=600，overlap=80：
+        # 页1入 buffer(302)，页2加入后超 600 → flush 页1为 chunk0(page 1-1)
+        # 保留 80 字重叠 → chunk1 含页1尾部+页2(page 1-2)
         pages = ["a" * 300, "b" * 300]
         chunks = split_pages_into_chunks(pages, [(1, 1, 2)])
-        assert len(chunks) == 1
+        assert len(chunks) == 2
         assert chunks[0]["page_start"] == 1
+        assert chunks[0]["page_end"] == 1  # 第一块只含页1
+        assert chunks[1]["page_start"] == 1  # 重叠：含页1尾部
+        assert chunks[1]["page_end"] == 2    # 含页2
         assert chunks[0]["chapter_id"] == 1
-        assert len(chunks[0]["content"]) == 600
+        # 所有 chunk 内容不超过 chunk_size
+        assert all(c["word_count"] <= 600 for c in chunks)
 
     def test_split_long_text_multiple_chunks(self):
         from backend.app.services.rag.chunker import split_pages_into_chunks

@@ -15,7 +15,7 @@
       <!-- PDF 原文：pdf.js 内置阅读器（无需下载，直接内嵌渲染） -->
       <div v-if="meta.bookType === 'pdf'" class="pdf-view">
         <div class="pdf-tip">📄 PDF 原文（第 {{ meta.pageStart }} 页起）—— 内置阅读器，滚轮翻页 / Ctrl+滚轮缩放</div>
-        <PdfReader :src="pdfUrl" :book-id="meta.bookId" :initial-page="meta.pageStart || 1" />
+        <PdfReader :src="pdfUrl" :book-id="meta.bookId" :initial-page="meta.pageStart || 1" :use-saved-pos="false" />
       </div>
     </template>
   </el-drawer>

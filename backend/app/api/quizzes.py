@@ -56,7 +56,7 @@ def generate_quizzes(book_id: int, req: QuizGenReq | None = None, db: Session = 
 
     async def run(record):
         from backend.app.core.database import SessionLocal
-        from backend.app.models import Chunk
+        from backend.app.services.knowledge_base import get_context_for_quiz
         # 后台线程独立 Session（不共享请求级 Session，避免生命周期/线程安全问题）
         db2 = SessionLocal()
         try:
@@ -69,12 +69,10 @@ def generate_quizzes(book_id: int, req: QuizGenReq | None = None, db: Session = 
             for i, ch in enumerate(chs):
                 record.progress = i / len(chs) if chs else 0
                 record.stage = f"生成题目: {ch.title}"
-                chunks = db2.scalars(
-                    select(Chunk).where(Chunk.chapter_id == ch.id).order_by(Chunk.chunk_index).limit(6)
-                ).all()
-                if not chunks:
+                # 使用知识事实层：优先用深度分析缓存的章节总结 + 原文片段
+                material = get_context_for_quiz(db2, book_id, ch.id, max_chars=4000)
+                if not material.strip():
                     continue
-                material = "\n\n".join(c.content[:600] for c in chunks)[:4000]
                 prompt = [
                     {"role": "system", "content": (
                         "你是专业课出题老师。根据教材片段，生成 5 道单项选择题和 5 道简答题。"

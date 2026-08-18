@@ -9,15 +9,26 @@
         </div>
       </div>
       <el-menu :default-active="$route.path" router class="menu">
-        <el-menu-item index="/library"><el-icon><Folder /></el-icon>资料库</el-menu-item>
-        <el-menu-item index="/chat"><el-icon><ChatDotRound /></el-icon>AI 问答</el-menu-item>
-        <el-menu-item index="/knowledge"><el-icon><Share /></el-icon>知识树</el-menu-item>
-        <el-menu-item index="/graph"><el-icon><Connection /></el-icon>知识图谱</el-menu-item>
-        <el-menu-item index="/plan"><el-icon><Calendar /></el-icon>学习计划</el-menu-item>
-        <el-menu-item index="/quiz"><el-icon><EditPen /></el-icon>刷题自测</el-menu-item>
-        <el-menu-item index="/stats"><el-icon><DataAnalysis /></el-icon>学习统计</el-menu-item>
-        <el-menu-item index="/study"><el-icon><MagicStick /></el-icon>AI 研读</el-menu-item>
-        <el-menu-item index="/settings"><el-icon><Setting /></el-icon>设置</el-menu-item>
+        <el-menu-item-group title="资料">
+          <el-menu-item index="/library"><el-icon><Folder /></el-icon>资料库</el-menu-item>
+        </el-menu-item-group>
+        <el-menu-item-group title="学习">
+          <el-menu-item index="/chat"><el-icon><ChatDotRound /></el-icon>AI 问答</el-menu-item>
+          <el-menu-item index="/study"><el-icon><MagicStick /></el-icon>综合研读</el-menu-item>
+          <el-menu-item index="/quiz"><el-icon><EditPen /></el-icon>刷题自测</el-menu-item>
+        </el-menu-item-group>
+        <el-menu-item-group title="知识结构">
+          <el-menu-item index="/knowledge"><el-icon><Share /></el-icon>知识树</el-menu-item>
+          <el-menu-item index="/graph"><el-icon><Connection /></el-icon>知识图谱</el-menu-item>
+          <el-menu-item index="/draw"><el-icon><EditPen /></el-icon>AI 绘图</el-menu-item>
+        </el-menu-item-group>
+        <el-menu-item-group title="进度">
+          <el-menu-item index="/plan"><el-icon><Calendar /></el-icon>学习计划</el-menu-item>
+          <el-menu-item index="/stats"><el-icon><DataAnalysis /></el-icon>学习统计</el-menu-item>
+        </el-menu-item-group>
+        <el-menu-item-group title="系统">
+          <el-menu-item index="/settings"><el-icon><Setting /></el-icon>设置</el-menu-item>
+        </el-menu-item-group>
       </el-menu>
       <div class="aside-footer">
         <div class="dew-dot" v-for="i in 3" :key="i" :style="{ left: 24 + i * 44 + 'px', animationDelay: i * 0.6 + 's' }"></div>
@@ -98,6 +109,7 @@ html, body, #app { height: 100%; }
   flex-direction: column;
   position: relative;
   overflow: hidden;
+  height: 100vh;
 }
 /* 侧边栏底部淡露纹 */
 .aside::after {
@@ -138,7 +150,15 @@ html, body, #app { height: 100%; }
   background: transparent;
   flex: 1;
   padding-top: 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(194, 162, 133, 0.3) transparent;
 }
+.menu::-webkit-scrollbar { width: 4px; }
+.menu::-webkit-scrollbar-track { background: transparent; }
+.menu::-webkit-scrollbar-thumb { background: rgba(194, 162, 133, 0.3); border-radius: 2px; }
 .menu .el-menu-item {
   color: rgba(245, 240, 232, 0.75);
   margin: 3px 10px;
@@ -151,11 +171,17 @@ html, body, #app { height: 100%; }
   font-weight: 600;
 }
 .menu .el-menu-item:hover { background: rgba(245, 240, 232, 0.1); color: #F5F0E8; }
+.menu :deep(.el-menu-item-group__title) {
+  font-size: 11px; color: rgba(194, 162, 133, 0.7);
+  padding: 8px 10px 2px; letter-spacing: 1px;
+  text-transform: uppercase;
+}
 
 /* —— 侧边栏底部：露珠 + 诗句 —— */
 .aside-footer {
   position: relative;
-  height: 64px;
+  height: 48px;
+  flex-shrink: 0;
   border-top: 1px dashed rgba(62, 127, 163, 0.25);
   display: flex; align-items: center; justify-content: center;
 }

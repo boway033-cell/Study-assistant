@@ -90,3 +90,53 @@ def extract_toc_heuristic(pages: list[str], min_pages: int = 3) -> list[dict]:
         seen_num.add(key)
         dedup.append(r)
     return dedup
+
+
+def extract_toc_from_layout(layout) -> list[dict]:
+    """从版面分析的 title_lines 提取目录（第二来源，当书签和第X章正则都失败时）。
+
+    layout: LayoutResult，其 pages 含 BlockInfo 列表（block_type='title' 的块有 page 属性）。
+    返回 [{"title","level","page"}]
+    """
+    results: list[dict] = []
+    if not layout or not layout.pages:
+        return results
+
+    for page_blocks in layout.pages:
+        for blk in page_blocks:
+            if blk.block_type != "title":
+                continue
+            title = blk.text.strip()
+            if not title or len(title) > 50:
+                continue
+            # 判断层级：含"章/篇/编/部"→1；含"节"或数字.数字→2；其他→2
+            if re.search(r"第s*[一二三四五六七八九十百千万0-9]+s*[章篇编部]", title):
+                level = 1
+            elif re.search(r"第s*[一二三四五六七八九十百千万0-9]+s*节", title):
+                level = 2
+            elif re.match(r"d{1,2}.d{1,2}", title):
+                level = 2
+            elif re.match(r"d{1,2}.d{1,2}.d{1,2}", title):
+                level = 3
+            else:
+                level = 2  # 版面识别的标题默认归二级
+            results.append({"title": title, "level": level, "page": blk.page})
+
+    # 去重 + 最少数量校验
+    if len(results) < 3:
+        return []
+    seen: set[str] = set()
+    dedup: list[dict] = []
+    for r in results:
+        key = _norm_title_key(r["title"])
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(r)
+    return dedup
+
+
+def _norm_title_key(title: str) -> str:
+    """标题归一化 key（去空白标点）。"""
+    t = re.sub(r"[s　，。、|｜.．:：—-]+", "", title.strip())
+    return t

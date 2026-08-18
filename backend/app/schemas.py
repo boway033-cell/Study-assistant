@@ -68,6 +68,8 @@ class SearchResultItem(BaseModel):
     chapter_id: int | None = None
     chapter_title: str | None = None
     page: int | None = None
+    page_start: int | None = None
+    page_end: int | None = None
     snippet: str
 
 
@@ -118,6 +120,10 @@ class ChatSource(BaseModel):
     chunk_id: int
     book_id: int | None = None
     page: int | None = None
+    page_start: int | None = None
+    page_end: int | None = None
+    book_title: str = ""
+    chapter_title: str | None = None
     snippet: str
 
 

@@ -21,29 +21,15 @@ router = APIRouter(prefix="/api/study", tags=["study"])
 _sessions: dict[str, dict] = {}
 
 
-def _book_context(db: Session, book_ids: list[int] | None, limit_per_book: int = 8000) -> str:
-    """收集选中文献的结构与内容摘要（优先 Markdown 精读版，否则章节+chunk）。"""
-    q = select(Book).where(Book.status == "ready")
-    if book_ids:
-        q = q.where(Book.id.in_(book_ids))
-    books = db.scalars(q).all()
-    parts: list[str] = []
-    for b in books[:8]:
-        deep = db.scalar(select(BookDeep).where(BookDeep.book_id == b.id))
-        if deep and deep.markdown and deep.status == "done":
-            md = deep.markdown[:limit_per_book]
-            parts.append(f"【文献《{b.title}》】\n{md}")
-            continue
-        chapters = db.scalars(
-            select(Chapter).where(Chapter.book_id == b.id).order_by(Chapter.order_index)
-        ).all()
-        titles = "、".join(ch.title for ch in chapters[:40])
-        chunks = db.scalars(
-            select(Chunk).where(Chunk.book_id == b.id).order_by(Chunk.chunk_index).limit(12)
-        ).all()
-        body = "\n".join(c.content[:400] for c in chunks)[:limit_per_book]
-        parts.append(f"【文献《{b.title}》】章节：{titles}\n内容片段：{body[:limit_per_book]}")
-    return "\n\n".join(parts)[:40000]
+def _book_context(db: Session, book_ids: list[int] | None, limit_per_book: int = 4000) -> str:
+    """收集选中文献的结构与内容摘要。
+    
+    使用统一知识事实层（KnowledgeBase），替代直接读原始 chunks：
+    - 有深度分析 → 用 Markdown 精读版（已缓存，零 AI 消耗）
+    - 无深度分析 → 用结构化摘要（章节+关键词+定义），本地零 AI
+    """
+    from backend.app.services.knowledge_base import get_multi_book_digest
+    return get_multi_book_digest(db, book_ids, limit_per_book=limit_per_book)
 
 
 # ---------- 综合阅读 ----------

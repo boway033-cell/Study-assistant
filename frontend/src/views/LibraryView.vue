@@ -10,11 +10,23 @@
               <el-upload
                 :show-file-list="false"
                 :before-upload="handleUpload"
+                multiple
                 accept=".pdf,.docx,.pptx"
                 :disabled="uploading"
               >
                 <el-button type="primary" :loading="uploading">
                   {{ uploading ? '上传中…' : '上传 PDF / Word / PPT' }}
+                </el-button>
+              </el-upload>
+              <el-upload
+                :show-file-list="false"
+                :before-upload="handleBatchUpload"
+                multiple
+                accept=".pdf,.docx,.pptx"
+                :disabled="uploading"
+              >
+                <el-button type="warning" plain :loading="uploading">
+                  {{ uploading ? '批量上传中…' : '📁 批量上传' }}
                 </el-button>
               </el-upload>
             </div>
@@ -64,13 +76,19 @@
         </el-card>
 
         <el-card shadow="never" style="margin-top: 16px">
-          <template #header>全文搜索</template>
+          <template #header>全文搜索（跨资料混合检索）</template>
+          <div class="search-filters">
+            <el-select v-model="searchCategory" placeholder="全部分类" clearable size="small" style="width: 120px">
+              <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
+            </el-select>
+          </div>
           <el-input
             v-model="searchQ"
-            placeholder="输入关键词，如：拉格朗日 / 特征值 / 定积分"
+            placeholder="输入关键词，跨全部资料搜索（向量+全文+子串三路融合）"
             clearable
             @keyup.enter="doSearch()"
             @clear="results = null"
+            style="margin-top: 8px"
           >
             <template #append>
               <el-button @click="doSearch()">搜索</el-button>
@@ -84,7 +102,8 @@
               <div class="result-meta">
                 <el-tag size="small" type="info">《{{ r.book_title }}》</el-tag>
                 <span v-if="r.chapter_title" class="result-chapter">{{ r.chapter_title }}</span>
-                <span v-if="r.page" class="result-page">第 {{ r.page }} 页</span>
+                <span v-if="r.page_start && r.page_end && r.page_end !== r.page_start" class="result-page">第 {{ r.page_start }}-{{ r.page_end }} 页</span>
+                <span v-else-if="r.page || r.page_start" class="result-page">第 {{ r.page || r.page_start }} 页</span>
                 <el-button link type="primary" size="small" style="margin-left: auto"
                   @click="viewOriginal(r)">📄 查看原文</el-button>
               </div>
@@ -150,7 +169,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listBooks, uploadBook, deleteBook, getBook, searchBooks, getTask, classifyAllBooks, setBookCategory, deepAnalyze } from '../api'
+import { listBooks, uploadBook, uploadBookBatch, deleteBook, getBook, searchBooks, getTask, classifyAllBooks, setBookCategory, deepAnalyze } from '../api'
 import { sanitizeHtml } from '../utils/markdown'
 import OriginalViewer from '../components/OriginalViewer.vue'
 
@@ -162,6 +181,8 @@ const classifying = ref(false)
 const searchQ = ref('')
 const results = ref(null)
 const searching = ref(false)
+const searchCategory = ref(null)
+const categories = ref([])
 const currentBook = ref(null)
 const chapterTree = ref([])
 const originalViewer = ref(null)
@@ -171,6 +192,9 @@ const loadBooks = async () => {
   try {
     const resp = await listBooks({ page_size: 100 })
     books.value = resp.items
+    // 提取唯一分类列表
+    const cats = [...new Set(resp.items.map((b) => b.category).filter(Boolean))]
+    categories.value = cats
   } catch (e) {
     ElMessage.error(e.message)
   } finally {
@@ -182,9 +206,12 @@ const handleUpload = async (file) => {
   uploading.value = true
   try {
     const resp = await uploadBook(file)
-    ElMessage.success(`已上传，开始解析：${resp.title}`)
-    // 轮询任务状态
-    await pollTask(resp.task_id)
+    if (resp.duplicate) {
+      ElMessage.warning(resp.message || '文件已存在')
+    } else {
+      ElMessage.success(`已上传，开始解析：${resp.title}`)
+      await pollTask(resp.task_id)
+    }
     loadBooks()
   } catch (e) {
     ElMessage.error('上传失败：' + e.message)
@@ -192,6 +219,31 @@ const handleUpload = async (file) => {
     uploading.value = false
   }
   return false // 阻止默认上传
+}
+
+const batchFiles = ref([])
+const handleBatchUpload = async (file) => {
+  batchFiles.value.push(file)
+  return false // 收集文件，不立即上传
+}
+
+const submitBatch = async () => {
+  if (!batchFiles.value.length) return
+  uploading.value = true
+  try {
+    const resp = await uploadBookBatch(batchFiles.value)
+    const results = resp.results || []
+    const ok = results.filter(r => r.task_id).length
+    const dup = results.filter(r => r.duplicate).length
+    const fail = results.filter(r => r.error).length
+    ElMessage.success(`批量上传完成：${ok} 个解析中，${dup} 个重复跳过，${fail} 个失败`)
+    batchFiles.value = []
+    loadBooks()
+  } catch (e) {
+    ElMessage.error('批量上传失败：' + e.message)
+  } finally {
+    uploading.value = false
+  }
 }
 
 const pollTask = async (taskId) => {
@@ -273,7 +325,9 @@ const doSearch = async () => {
   if (!searchQ.value.trim()) return
   searching.value = true
   try {
-    results.value = await searchBooks({ q: searchQ.value, page_size: 20 })
+    const params = { q: searchQ.value, page_size: 20 }
+    if (searchCategory.value) params.category = searchCategory.value
+    results.value = await searchBooks(params)
   } catch (e) {
     ElMessage.error(e.message)
   } finally {
@@ -289,12 +343,14 @@ const searchKeyword = (kw) => {
 
 const viewOriginal = (item) => {
   const book = books.value.find((b) => b.id === item.book_id)
+  const ps = item.page_start || item.page || null
+  const pe = item.page_end || item.page || null
   originalViewer.value?.open({
     bookId: item.book_id,
     chunkId: item.chunk_id,
     chapter: item.chapter_title || '',
-    pageStart: item.page || null,
-    pageEnd: item.page || null,
+    pageStart: ps,
+    pageEnd: pe,
     bookType: book?.file_type || 'pdf',
   })
 }
@@ -304,6 +360,7 @@ onMounted(loadBooks)
 
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
+.search-filters { display: flex; gap: 8px; margin-bottom: 4px; }
 .result-item { margin-top: 8px; }
 .result-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
 .result-chapter { color: var(--el-text-color-secondary); font-size: 12px; }

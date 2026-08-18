@@ -42,7 +42,7 @@
 
       <div ref="scroller" class="pr-body" :class="'pr-mode-' + mode"
         @scroll="onScroll" @mouseup="onMouseUp" @mousedown="onMouseDown" @wheel="onWheel">
-        <div v-for="p in pageList" :key="p" class="pr-page" :data-page="p"
+        <div v-for="p in renderPageList" :key="p" class="pr-page" :data-page="p"
           :style="{ width: pageWidthPx(p) + 'px', height: pageH(p) + 'px' }">
           <canvas :ref="(el) => setCanvasRef(p, el)" class="pr-canvas" />
           <div :ref="(el) => setTextRef(p, el)" class="text-layer"></div>
@@ -148,6 +148,18 @@ const loading = ref(false)
 const errorMsg = ref('')
 const showTocPanel = ref(false)
 const pageList = ref([])
+
+// In double mode, only render the visible pair. In other modes, render all (lazy render by visibleRange).
+const renderPageList = computed(() => {
+  if (!numPages.value) return []
+  if (mode.value === 'double') {
+    const r = visibleRange()
+    const list = []
+    for (let p = r.start; p <= r.end; p++) list.push(p)
+    return list
+  }
+  return pageList.value
+})
 const mode = ref('scroll')
 const baseHeights = {}   // scale=1 时的页高缓存（缩放不重算）
 const baseWidths = {}
@@ -796,10 +808,11 @@ onBeforeUnmount(() => {
 .pr-toc-item:hover { background: var(--el-color-primary-light-9); }
 .pr-toc-item.active { background: var(--el-color-primary-light-8); color: var(--el-color-primary); font-weight: 600; }
 .pr-body { position: relative; flex: 1; overflow: auto; padding: 10px 14px; background: #525659; }
-.pr-body.pr-mode-scroll, .pr-body.pr-mode-double { text-align: center; }
+.pr-body.pr-mode-scroll, .pr-body.pr-mode-single { text-align: center; }
+.pr-body.pr-mode-double { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .pr-page { position: relative; box-shadow: 0 2px 10px rgba(0,0,0,.4); background: #fff; }
 .pr-mode-scroll .pr-page, .pr-mode-single .pr-page { display: block; margin: 0 auto 10px; }
-.pr-mode-double .pr-page { display: inline-block; vertical-align: top; margin: 0 4px 10px; }
+.pr-mode-double .pr-page { display: inline-block; vertical-align: top; margin: 0 4px; }
 .pr-canvas { display: block; }
 .text-layer { position: absolute; inset: 0; overflow: hidden; line-height: 1; cursor: text; }
 .text-layer :deep(span) { position: absolute; white-space: pre; transform-origin: 0 0; color: transparent; cursor: text; user-select: text; }

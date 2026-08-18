@@ -69,42 +69,78 @@ def split_pages_into_chunks(
     返回: [{"chapter_id","page_start","page_end","content","chunk_index","word_count"}]
     """
     size, overlap = settings.chunk_size, settings.chunk_overlap
+    step = max(size - overlap, 50)
     chunks: list[dict] = []
     idx = 0
 
     for chapter_id, start_page, end_page in chapter_pages:
-        # 拼接该章节的页面文本
-        parts: list[str] = []
-        for p in range(start_page, end_page + 1):
-            if 1 <= p <= len(pages):
-                parts.append(pages[p - 1])
-        text = "\n\n".join(parts).strip()
-        if not text:
-            continue
+        buf: list[str] = []          # 当前 chunk 累积的文本片段
+        buf_pages: list[int] = []    # 当前 chunk 包含的页码列表
+        buf_len = 0
 
-        # 按窗口切分（按字符，中英文通用）
-        step = max(size - overlap, 50)
-        i = 0
-        while i < len(text):
-            seg = text[i:i + size].strip()
-            if not seg:
-                i += step
+        for p in range(start_page, end_page + 1):
+            if not (1 <= p <= len(pages)):
                 continue
-            # 尾部碎片块（与上一块高度重叠且很短）跳过，避免重复内容
-            if i > 0 and len(seg) < step * 0.5:
-                break
-            chunks.append({
-                "chapter_id": chapter_id,
-                "page_start": start_page,
-                "page_end": start_page,  # 粗略归到起始页
-                "content": seg,
-                "chunk_index": idx,
-                "word_count": len(seg),
-            })
+            page_text = pages[p - 1].strip()
+            if not page_text:
+                continue
+
+            # 单页超过窗口大小：先把已有 buffer flush，再对该页自身切片
+            if len(page_text) > size:
+                if buf:
+                    chunks.append(_make_chunk_def(chapter_id, buf, buf_pages, idx))
+                    idx += 1
+                    buf, buf_pages, buf_len = [], [], 0
+                i = 0
+                while i < len(page_text):
+                    seg = page_text[i:i + size].strip()
+                    if not seg:
+                        i += step
+                        continue
+                    if i > 0 and len(seg) < step * 0.5:
+                        break
+                    chunks.append(_make_chunk_def(chapter_id, [seg], [p], idx))
+                    idx += 1
+                    i += step
+                continue
+
+            # 正常页：加入后超窗口则先 flush
+            if buf and buf_len + len(page_text) + 2 > size:
+                chunks.append(_make_chunk_def(chapter_id, buf, buf_pages, idx))
+                idx += 1
+                # 重叠：保留 buffer 尾部一部分
+                if overlap > 0 and buf:
+                    tail = "\n\n".join(buf)
+                    keep_text = tail[-overlap:] if len(tail) > overlap else tail
+                    buf = [keep_text]
+                    buf_pages = [buf_pages[-1]]
+                    buf_len = len(keep_text)
+                else:
+                    buf, buf_pages, buf_len = [], [], 0
+
+            buf.append(page_text)
+            if p not in buf_pages:
+                buf_pages.append(p)
+            buf_len += len(page_text) + 2  # +2 for \n\n separator
+
+        if buf:
+            chunks.append(_make_chunk_def(chapter_id, buf, buf_pages, idx))
             idx += 1
-            i += step
 
     return chunks
+
+
+def _make_chunk_def(chapter_id: int | None, buf: list[str], buf_pages: list[int], idx: int) -> dict:
+    """组装单个 chunk dict，page_start/page_end 取实际覆盖页码区间。"""
+    content = "\n\n".join(buf)
+    return {
+        "chapter_id": chapter_id,
+        "page_start": min(buf_pages) if buf_pages else None,
+        "page_end": max(buf_pages) if buf_pages else None,
+        "content": content,
+        "chunk_index": idx,
+        "word_count": len(content),
+    }
 
 
 def build_chapter_pages(chapters: list[dict], total_pages: int) -> list[tuple[int | None, int, int]]:

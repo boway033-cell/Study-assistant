@@ -18,6 +18,7 @@ from backend.app.schemas import (
     NoteCreateReq,
     NoteResp,
     NoteUpdateReq,
+    SearchResultItem,
     SearchResp,
     TaskResp,
 )
@@ -125,13 +126,31 @@ def _get_analysis(db: Session, book_id: int):
     }
 
 
-@router.post("/books/upload", status_code=201)
-async def upload_book(file: UploadFile, db: Session = Depends(get_db)):
-    file_type = (file.filename or "").rsplit(".", 1)[-1].lower()
-    if file_type not in ("pdf", "docx", "pptx"):
-        raise HTTPException(400, f"不支持的文件类型: {file_type}，仅支持 pdf/docx/pptx")
+def _validate_upload_file(content: bytes, file_type: str) -> None:
+    """文件签名校验（防改扩展名伪装）+ 压缩炸弹检查。"""
+    head = content[:16]
+    if file_type == "pdf":
+        if not head.lstrip().startswith(b"%PDF-"):
+            raise HTTPException(400, "文件内容不是有效的 PDF（缺少 PDF 签名）")
+    else:  # docx / pptx 是 ZIP 容器
+        _pk = b"PK" + bytes([3, 4])
+        _pk5 = b"PK" + bytes([5, 6])
+        _pk7 = b"PK" + bytes([7, 8])
+        if not (head.startswith(_pk) or head.startswith(_pk5) or head.startswith(_pk7)):
+            raise HTTPException(400, f"文件内容不是有效的 {file_type.upper()}（缺少 ZIP 结构）")
+        import io as _io
+        import zipfile as _zip
+        try:
+            with _zip.ZipFile(_io.BytesIO(content)) as z:
+                unpacked = sum(i.file_size for i in z.infolist())
+                if unpacked > 500 * 1024 * 1024:
+                    raise HTTPException(400, "文件解压后过大，疑似压缩炸弹")
+        except _zip.BadZipFile:
+            raise HTTPException(400, f"文件内容不是有效的 {file_type.upper()}（ZIP 结构损坏）")
 
-    # 流式读取，边读边限制大小（不把最多 200MB 一次性读入内存）
+
+async def _read_upload_file(file: UploadFile) -> bytes:
+    """流式读取上传文件，限制 200MB。"""
     MAX_SIZE = 200 * 1024 * 1024
     chunks: list[bytes] = []
     total = 0
@@ -146,41 +165,101 @@ async def upload_book(file: UploadFile, db: Session = Depends(get_db)):
     content = b"".join(chunks)
     if not content:
         raise HTTPException(400, "文件为空")
+    return content
 
-    # 文件签名校验（防改扩展名伪装）
-    head = content[:16]
-    if file_type == "pdf":
-        if not head.lstrip().startswith(b"%PDF-"):
-            raise HTTPException(400, "文件内容不是有效的 PDF（缺少 PDF 签名）")
-    else:  # docx / pptx 是 ZIP 容器
-        if not (head.startswith(b"PK\x03\x04") or head.startswith(b"PK\x05\x06") or head.startswith(b"PK\x07\x08")):
-            raise HTTPException(400, f"文件内容不是有效的 {file_type.upper()}（缺少 ZIP 结构）")
-        # 压缩炸弹检查：解压后总大小
-        import io as _io
-        import zipfile as _zip
+
+def _check_duplicate(db: Session, file_hash: str) -> "Book | None":
+    """按文件哈希查重，返回已存在的 Book（若有）。"""
+    return db.scalar(select(Book).where(Book.file_hash == file_hash).limit(1))
+
+
+@router.post("/books/upload", status_code=201)
+async def upload_book(file: UploadFile, db: Session = Depends(get_db)):
+    file_type = (file.filename or "").rsplit(".", 1)[-1].lower()
+    if file_type not in ("pdf", "docx", "pptx"):
+        raise HTTPException(400, f"不支持的文件类型: {file_type}，仅支持 pdf/docx/pptx")
+
+    content = await _read_upload_file(file)
+    _validate_upload_file(content, file_type)
+
+    path, file_hash = save_upload(file.filename, content)
+
+    # 去重：相同哈希的文件已存在则跳过解析
+    existing = _check_duplicate(db, file_hash)
+    if existing:
         try:
-            with _zip.ZipFile(_io.BytesIO(content)) as z:
-                unpacked = sum(i.file_size for i in z.infolist())
-                if unpacked > 500 * 1024 * 1024:
-                    raise HTTPException(400, "文件解压后过大，疑似压缩炸弹")
-        except _zip.BadZipFile:
-            raise HTTPException(400, f"文件内容不是有效的 {file_type.upper()}（ZIP 结构损坏）")
+            path.unlink()
+        except OSError:
+            pass
+        return {"id": existing.id, "title": existing.title, "file_type": existing.file_type,
+                "status": existing.status, "task_id": None, "duplicate": True,
+                "message": f"文件已存在：《{existing.title}》", "created_at": existing.created_at}
 
-    path = save_upload(file.filename, content)
     book = Book(
         title=Path(file.filename).stem,
         file_path=path.name,
         file_type=file_type,
         file_size=len(content),
+        file_hash=file_hash,
         status="pending",
     )
     db.add(book)
     db.commit()
     db.refresh(book)
 
-    record = submit("import", lambda rec: run_import(rec, book.id))
+    record = submit("import", lambda rec: run_import(rec, book.id), book_id=book.id)
     return {"id": book.id, "title": book.title, "file_type": book.file_type,
             "status": book.status, "task_id": record.id, "created_at": book.created_at}
+
+
+@router.post("/books/upload-batch", status_code=201)
+async def upload_books_batch(files: list[UploadFile], db: Session = Depends(get_db)):
+    """批量上传多个文件。逐个校验+去重+提交解析任务（FIFO 队列串行执行）。"""
+    results: list[dict] = []
+    for file in files:
+        file_type = (file.filename or "").rsplit(".", 1)[-1].lower()
+        if file_type not in ("pdf", "docx", "pptx"):
+            results.append({"filename": file.filename, "error": f"不支持的文件类型: {file_type}"})
+            continue
+        try:
+            content = await _read_upload_file(file)
+            _validate_upload_file(content, file_type)
+            path, file_hash = save_upload(file.filename, content)
+
+            existing = _check_duplicate(db, file_hash)
+            if existing:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                results.append({
+                    "filename": file.filename, "id": existing.id, "title": existing.title,
+                    "status": existing.status, "duplicate": True,
+                    "message": f"文件已存在：《{existing.title}》",
+                })
+                continue
+
+            book = Book(
+                title=Path(file.filename).stem,
+                file_path=path.name,
+                file_type=file_type,
+                file_size=len(content),
+                file_hash=file_hash,
+                status="pending",
+            )
+            db.add(book)
+            db.commit()
+            db.refresh(book)
+            record = submit("import", lambda rec, bid=book.id: run_import(rec, bid), book_id=book.id)
+            results.append({
+                "filename": file.filename, "id": book.id, "title": book.title,
+                "status": "pending", "task_id": record.id,
+            })
+        except HTTPException as e:
+            results.append({"filename": file.filename, "error": e.detail})
+        except Exception as e:  # noqa: BLE001
+            results.append({"filename": file.filename, "error": str(e)})
+    return {"results": results}
 
 
 @router.patch("/books/{book_id}")
@@ -317,7 +396,7 @@ def reparse_book(book_id: int, db: Session = Depends(get_db)):
     book.status = "pending"
     book.error_msg = None
     db.commit()
-    record = submit("import", lambda rec: run_import(rec, book.id))
+    record = submit("reimport", lambda rec: run_import(rec, book.id), book_id=book.id)
     return {"task_id": record.id}
 
 
@@ -325,12 +404,75 @@ def reparse_book(book_id: int, db: Session = Depends(get_db)):
 def search(
     q: str = Query(min_length=1),
     book_id: int | None = Query(default=None),
+    book_ids: str | None = Query(default=None),  # 逗号分隔的 book_id 列表
+    category: str | None = Query(default=None),
+    tag_id: int | None = Query(default=None),
     chapter_id: int | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
 ):
-    result = fts.search(q, book_id=book_id, chapter_id=chapter_id, page=page, page_size=page_size)
-    return result
+    """跨资料全文+语义混合检索（RRF 融合）。
+
+    支持按 book_id / book_ids / category / tag_id 过滤。
+    """
+    # 解析 book_ids 参数
+    ids_list: list[int] | None = None
+    if book_ids:
+        try:
+            ids_list = [int(x.strip()) for x in book_ids.split(",") if x.strip()]
+        except ValueError:
+            ids_list = None
+
+    # 按 category / tag 过滤出 book_ids
+    filter_ids: set[int] | None = None
+    if category:
+        cat_books = db.scalars(select(Book).where(Book.category == category)).all()
+        filter_ids = {b.id for b in cat_books}
+    if tag_id:
+        from backend.app.models import book_tags
+        tagged = db.execute(select(book_tags.c.book_id).where(book_tags.c.tag_id == tag_id)).all()
+        tag_ids_set = {r[0] for r in tagged}
+        filter_ids = tag_ids_set if filter_ids is None else (filter_ids & tag_ids_set)
+
+    # 合并 book_id / book_ids / filter_ids
+    final_ids: list[int] | None = None
+    if ids_list:
+        final_ids = ids_list
+    elif book_id is not None:
+        final_ids = [book_id]
+    if filter_ids is not None:
+        if final_ids:
+            final_ids = [bid for bid in final_ids if bid in filter_ids]
+        else:
+            final_ids = list(filter_ids)
+
+    # 走混合检索（RRF 融合：向量 + FTS + LIKE）
+    from backend.app.services.rag import retriever
+    items = retriever.retrieve(q, book_ids=final_ids, top_k=page_size)
+
+    # 分页（混合检索结果已在内存中，手动切片）
+    total = len(items)
+    start = (page - 1) * page_size
+    end = start + page_size
+    paged = items[start:end]
+
+    return SearchResp(
+        total=total,
+        items=[
+            SearchResultItem(
+                chunk_id=it.get("chunk_id", 0),
+                book_id=it.get("book_id", 0),
+                book_title=it.get("book_title", ""),
+                chapter_id=it.get("chapter_id"),
+                chapter_title=it.get("chapter_title"),
+                page=it.get("page"),
+                page_start=it.get("page_start") or it.get("page"),
+                page_end=it.get("page_end") or it.get("page"),
+                snippet=it.get("snippet", ""),
+            ) for it in paged
+        ],
+    )
 
 
 @router.get("/tasks/{task_id}", response_model=TaskResp)

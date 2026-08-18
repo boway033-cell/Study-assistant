@@ -9,6 +9,7 @@ import ReaderView from '../views/ReaderView.vue'
 import StudyView from '../views/StudyView.vue'
 import GraphView from '../views/GraphView.vue'
 import PlanView from '../views/PlanView.vue'
+import DrawView from '../views/DrawView.vue'
 
 // 使用 hash 模式：构建产物由 FastAPI 静态托管时无需服务端路由配置
 // 静态 import 避免动态 import 在 Windows + rollup 下的解析问题
@@ -22,6 +23,7 @@ const routes = [
   { path: '/study', name: 'study', component: StudyView, meta: { title: 'AI 研读' } },
   { path: '/graph', name: 'graph', component: GraphView, meta: { title: '知识图谱' } },
   { path: '/plan', name: 'plan', component: PlanView, meta: { title: '学习计划' } },
+  { path: '/draw', name: 'draw', component: DrawView, meta: { title: 'AI 绘图' } },
   { path: '/settings', name: 'settings', component: SettingsView, meta: { title: '设置' } },
   { path: '/reader/:bookId', name: 'reader', component: ReaderView, meta: { title: 'PDF 阅读器' } },
 ]

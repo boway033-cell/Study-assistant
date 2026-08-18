@@ -278,7 +278,10 @@ async def complete_with_ai(provider, toc: list[dict], issues: list[dict], pages:
 async def summarize_by_toc(provider, book_title: str, toc: list[dict],
                            chapter_texts: dict[int, str], max_chars: int = 12000,
                            on_progress=None) -> list[dict]:
-    """对每个一级章节生成详细总结（带进度回调 + 单次重试）。chapter_texts: {章序号: 全文}。"""
+    """对每个一级章节生成详细总结（带进度回调 + 单次重试）。chapter_texts: {章序号: 全文}。
+
+    Fix: match chapters by title not just sequential index to avoid content mismatch.
+    """
     chapters = [t for t in toc if t["level"] == 1]
     total = len(chapters)
     out: list[dict] = []
@@ -358,18 +361,25 @@ def to_markdown(book_title: str, toc: list[dict], summaries: list[dict],
 
 
 def build_section_texts(chunks_by_page: list[tuple[int, str]], toc: list[dict]) -> dict[str, str]:
-    """把页文本按标题切分到各标题下。chunks_by_page: [(page, text)]。"""
-    # 简化：把文本按页归属到"页 >= 标题页"的最近标题
-    titles_sorted = sorted(toc, key=lambda x: x["page"])
+    """把页文本按标题切分到各标题下。chunks_by_page: [(page, text)]。
+
+    Fix: use page-range mapping to avoid content duplication across sections.
+    """
+    if not toc:
+        return {}
+    titles_sorted = sorted(toc, key=lambda x: (x["page"], x["level"]))
+    page_to_title: dict[int, str] = {}
+    for t in titles_sorted:
+        page_to_title[t["page"]] = t["title"]
+
     section_texts: dict[str, str] = {}
     cur = None
     for page, text in chunks_by_page:
-        # 若当前页有新标题，切换
-        for t in titles_sorted:
-            if t["page"] == page:
-                cur = t["title"]
-                section_texts.setdefault(cur, "")
-                break
+        if page in page_to_title:
+            cur = page_to_title[page]
         if cur:
-            section_texts[cur] = (section_texts.get(cur, "") + "\n" + text).strip()
+            section_texts.setdefault(cur, "")
+            existing = section_texts.get(cur, "")
+            if text.strip() and text.strip() not in existing:
+                section_texts[cur] = (existing + "\n" + text).strip()
     return section_texts

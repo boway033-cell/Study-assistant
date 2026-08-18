@@ -37,3 +37,5 @@ server.log
 
 # 备份产物
 backup-*.zip
+# PID file
+server.pid

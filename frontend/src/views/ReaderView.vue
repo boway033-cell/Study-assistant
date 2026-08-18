@@ -4,14 +4,14 @@
       <el-button size="small" @click="$router.push('/library')">← 返回资料库</el-button>
       <span class="reader-title">📖 {{ book?.title || '阅读器' }}</span>
       <el-tag v-if="currentChapter" size="small" type="warning">{{ currentChapter }}</el-tag>
-      <el-button v-if="book && book.file_type === 'pdf'" size="small" type="primary" plain @click="toggleMd">📝 Markdown 精读版</el-button>
+      <el-button v-if="book" size="small" type="primary" plain @click="toggleMd">📝 Markdown 精读版</el-button>
       <span class="reader-tip">本地渲染 · 选中文字可 AI 解释/翻译/高亮 · 深色模式 · 目录跳转 · 阅读位置自动记忆</span>
     </div>
     <div class="reader-body">
-      <DocReader v-if="book && book.file_type !== 'pdf'" :book-id="book.id" />
-      <div v-else-if="showMd" class="md-view">
+      <DocReader v-if="book && book.file_type !== 'pdf' && !showMd" :book-id="book.id" />
+      <div v-else-if="book && showMd" class="md-view">
         <div class="md-toolbar">
-          <el-button size="small" @click="showMd = false">← 返回 PDF</el-button>
+          <el-button size="small" @click="showMd = false">← 返回阅读器</el-button>
           <span class="reader-title">📝 Markdown 精读版</span>
           <span class="reader-tip">标题目录 + AI 逐章精读总结 + 正文（由深度分析生成）</span>
         </div>
@@ -128,4 +128,12 @@ onMounted(() => {
 .reader-title { font-size: 15px; font-weight: 600; color: var(--el-text-color-primary); }
 .reader-tip { font-size: 12px; color: var(--el-text-color-secondary); }
 .reader-body { flex: 1; min-height: 0; }
+.md-view { height: 100%; display: flex; flex-direction: column; }
+.md-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.md-content {
+  flex: 1; overflow-y: auto; padding: 24px 32px;
+  background: #F5F0E8; border-radius: 8px;
+  font-size: 15px; line-height: 2; color: #333 !important;
+}
+.md-empty { padding: 40px; text-align: center; color: var(--el-text-color-secondary); }
 </style>

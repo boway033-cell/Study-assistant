@@ -21,25 +21,58 @@ CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE} USING fts5(
   book_id UNINDEXED,
   chapter_id UNINDEXED,
   page UNINDEXED,
+  page_end UNINDEXED,
   chunk_id UNINDEXED,
   tokenize = 'unicode61'
 )
 """
 
 _INSERT_SQL = f"""
-INSERT INTO {FTS_TABLE}(content, book_id, chapter_id, page, chunk_id)
-VALUES (:content, :book_id, :chapter_id, :page, :chunk_id)
+INSERT INTO {FTS_TABLE}(content, book_id, chapter_id, page, page_end, chunk_id)
+VALUES (:content, :book_id, :chapter_id, :page, :page_end, :chunk_id)
 """
 
 
-def init_fts() -> None:
-    """应用启动时调用。"""
+def init_fts(force_rebuild: bool = False) -> None:
+    """应用启动时调用。检测旧 FTS 表是否缺 page_end 列，缺则重建并从 chunks 重灌索引。
+    
+    force_rebuild: True 时强制重建（索引版本变更时由 data_manager 触发）。
+    """
+    need_rebuild = force_rebuild
     with engine.begin() as conn:
+        if not force_rebuild:
+            try:
+                conn.execute(text(f"SELECT page_end FROM {FTS_TABLE} LIMIT 0"))
+            except Exception:
+                # 旧表缺 page_end 列 → 删旧表重建
+                conn.execute(text(f"DROP TABLE IF EXISTS {FTS_TABLE}"))
+                need_rebuild = True
+        else:
+            conn.execute(text(f"DROP TABLE IF EXISTS {FTS_TABLE}"))
         conn.execute(text(_CREATE_SQL))
+    # 如果旧表被删，从 chunks 表重建全部索引
+    if need_rebuild:
+        rebuild_all_from_chunks()
 
 
-def index_chunk(book_id: int, chapter_id: int | None, page: int | None, chunk_id: int, content: str) -> None:
-    """为单个 chunk 建索引（分词后写入）。"""
+def rebuild_all_from_chunks() -> None:
+    """从 chunks 表重建全部 FTS 索引（用于 schema 变更后恢复）。"""
+    from sqlalchemy import select as sa_select
+    from backend.app.models import Chunk
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sa_select(Chunk.id, Chunk.book_id, Chunk.chapter_id,
+                      Chunk.page_start, Chunk.page_end, Chunk.content)
+            .order_by(Chunk.book_id, Chunk.chunk_index)
+        ).all()
+    for r in rows:
+        index_chunk(r.book_id, r.chapter_id, r.page_start, r.id,
+                    r.content, r.page_end)
+
+
+def index_chunk(book_id: int, chapter_id: int | None, page: int | None, chunk_id: int,
+                content: str, page_end: int | None = None) -> None:
+    """为单个 chunk 建索引（分词后写入）。page_end 为 chunk 覆盖的终止页。"""
     tok = tokenize(content)
     with engine.begin() as conn:
         conn.execute(text(_INSERT_SQL), {
@@ -47,6 +80,7 @@ def index_chunk(book_id: int, chapter_id: int | None, page: int | None, chunk_id
             "book_id": book_id,
             "chapter_id": chapter_id if chapter_id is not None else -1,
             "page": page if page is not None else 0,
+            "page_end": page_end if page_end is not None else (page if page is not None else 0),
             "chunk_id": chunk_id,
         })
 
@@ -54,6 +88,7 @@ def index_chunk(book_id: int, chapter_id: int | None, page: int | None, chunk_id
 def search(
     query: str,
     book_id: int | None = None,
+    book_ids: list[int] | None = None,
     chapter_id: int | None = None,
     page: int = 1,
     page_size: int = 20,
@@ -61,8 +96,9 @@ def search(
 ) -> dict:
     """FTS5 检索。
 
+    book_ids: 多书搜索（与 book_id 互斥，优先 book_ids）。
     返回: {"total": int, "items": [{chunk_id, book_id, book_title, chapter_id,
-                                    chapter_title, page, snippet}]}
+                                    chapter_title, page, page_start, page_end, snippet}]}
     """
     match_expr = tokenize_query(query)
     if not match_expr:
@@ -73,7 +109,16 @@ def search(
 
     params: dict = {"match": match_expr, "limit": limit, "offset": offset}
     where = f"{FTS_TABLE} MATCH :match"
-    if book_id is not None:
+    if book_ids:
+        if len(book_ids) == 1:
+            where += " AND f.book_id = :book_id"
+            params["book_id"] = book_ids[0]
+        else:
+            placeholders = ", ".join(f":bid{i}" for i in range(len(book_ids)))
+            where += f" AND f.book_id IN ({placeholders})"
+            for i, bid in enumerate(book_ids):
+                params[f"bid{i}"] = bid
+    elif book_id is not None:
         where += " AND f.book_id = :book_id"
         params["book_id"] = book_id
     if chapter_id is not None:
@@ -81,7 +126,7 @@ def search(
         params["chapter_id"] = chapter_id
 
     sql = f"""
-    SELECT f.chunk_id, f.book_id, f.chapter_id, f.page,
+    SELECT f.chunk_id, f.book_id, f.chapter_id, f.page, f.page_end,
            snippet({FTS_TABLE}, 0, '[', ']', '…', 12) AS snippet,
            b.title AS book_title,
            c.title AS chapter_title
@@ -104,13 +149,17 @@ def search(
 
     items = []
     for r in rows:
+        page = r["page"] if r["page"] else None
+        page_end = r["page_end"] if r["page_end"] else None
         items.append({
             "chunk_id": r["chunk_id"],
             "book_id": r["book_id"],
             "book_title": r["book_title"] or "",
             "chapter_id": r["chapter_id"] if r["chapter_id"] and r["chapter_id"] != -1 else None,
             "chapter_title": r["chapter_title"] or None,
-            "page": r["page"] if r["page"] else None,
+            "page": page,
+            "page_start": page,
+            "page_end": page_end if page_end and page_end != page else page,
             "snippet": r["snippet"] or "",
         })
 
@@ -133,7 +182,8 @@ def get_chunk_text(chunk_id: int) -> str:
 
 
 # ---------- 宽定位检索辅助 ----------
-def fallback_search(query: str, book_id: int | None = None, limit: int = 5) -> list[dict]:
+def fallback_search(query: str, book_id: int | None = None, book_ids: list[int] | None = None,
+                    limit: int = 5) -> list[dict]:
     """LIKE 子串匹配兜底检索：任何包含查询词片段的 chunk 都能命中。
 
     当 FTS5 关键词检索因分词/同义表述差异而漏检时，用子串匹配保证召回。
@@ -156,12 +206,21 @@ def fallback_search(query: str, book_id: int | None = None, limit: int = 5) -> l
         params[f"w{i}"] = f"%{w}%"
 
     where = f"({like_clauses})"
-    if book_id is not None:
+    if book_ids:
+        if len(book_ids) == 1:
+            where += " AND c.book_id = :book_id"
+            params["book_id"] = book_ids[0]
+        else:
+            placeholders = ", ".join(f":bid{i}" for i in range(len(book_ids)))
+            where += f" AND c.book_id IN ({placeholders})"
+            for i, bid in enumerate(book_ids):
+                params[f"bid{i}"] = bid
+    elif book_id is not None:
         where += " AND c.book_id = :book_id"
         params["book_id"] = book_id
 
     sql = f"""
-    SELECT c.id AS chunk_id, c.book_id, c.chapter_id, c.page_start AS page,
+    SELECT c.id AS chunk_id, c.book_id, c.chapter_id, c.page_start, c.page_end,
            substr(c.content, 1, 400) AS snippet,
            b.title AS book_title, ch.title AS chapter_title
     FROM chunks c
@@ -175,13 +234,17 @@ def fallback_search(query: str, book_id: int | None = None, limit: int = 5) -> l
 
     items = []
     for r in rows:
+        ps = r["page_start"] if r["page_start"] else None
+        pe = r["page_end"] if r["page_end"] else ps
         items.append({
             "chunk_id": r["chunk_id"],
             "book_id": r["book_id"],
             "book_title": r["book_title"] or "",
             "chapter_id": r["chapter_id"],
             "chapter_title": r["chapter_title"] or None,
-            "page": r["page"],
+            "page": ps,
+            "page_start": ps,
+            "page_end": pe if pe and pe != ps else ps,
             "snippet": r["snippet"] or "",
         })
     return items

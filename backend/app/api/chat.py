@@ -34,6 +34,10 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
     provider = LLMRouter.get("auto", cfg)
     sources_payload = [
         {"chunk_id": s["chunk_id"], "book_id": s.get("book_id"), "page": s.get("page"),
+         "page_start": s.get("page_start") or s.get("page"),
+         "page_end": s.get("page_end") or s.get("page"),
+         "book_title": s.get("book_title", ""),
+         "chapter_title": s.get("chapter_title"),
          "snippet": s.get("snippet", "")}
         for s in sources
     ]
@@ -51,6 +55,15 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
             return
 
         answer = "".join(answer_parts)
+
+        # 引用核验：检查 AI 回答中的 [资料N] 标注是否与检索到的 sources 匹配
+        try:
+            from backend.app.services.rag.reranker import verify_citation, record_citation_eval
+            verification = verify_citation(answer, sources_payload)
+            record_citation_eval(verification)
+        except Exception:  # noqa: BLE001
+            verification = {}
+
         # 存历史
         log = ChatLog(
             book_id=req.book_id, question=req.question, answer=answer,
@@ -60,7 +73,8 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
         db.add(log)
         db.commit()
         db.refresh(log)
-        yield _sse("done", {"chat_id": log.id, "sources": sources_payload})
+        yield _sse("done", {"chat_id": log.id, "sources": sources_payload,
+                            "citation_verified": verification.get("verified", False)})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -79,7 +93,8 @@ def chat_history(
     q = select(ChatLog)
     if book_id:
         q = q.where(ChatLog.book_id == book_id)
-    total = len(db.scalars(q).all())
+    from sqlalchemy import func as _func
+    total = db.scalar(select(_func.count()).select_from(q.subquery())) or 0
     logs = db.scalars(q.order_by(ChatLog.created_at.desc()).offset((page - 1) * page_size).limit(page_size)).all()
     items = []
     for log in logs:
@@ -102,3 +117,10 @@ def delete_chat(chat_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "记录不存在")
     db.delete(log)
     db.commit()
+
+
+@router.get("/chat/eval")
+def chat_eval_stats():
+    """检索效果评测统计（命中率、引用核验率）。"""
+    from backend.app.services.rag.reranker import get_eval_stats
+    return get_eval_stats()

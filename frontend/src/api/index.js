@@ -21,6 +21,11 @@ export const uploadBook = (file) => {
   form.append('file', file)
   return http.post('/books/upload', form, { timeout: 120000 })
 }
+export const uploadBookBatch = (files) => {
+  const form = new FormData()
+  for (const f of files) form.append('files', f)
+  return http.post('/books/upload-batch', form, { timeout: 600000 })
+}
 export const deleteBook = (id) => http.delete(`/books/${id}`)
 export const renameBook = (id, title) => http.patch(`/books/${id}`, { title })
 export const searchBooks = (params) => http.get('/search', { params })
@@ -82,6 +87,13 @@ export const classifyBook = (bookId) => http.post(`/books/${bookId}/classify`)
 export const classifyAllBooks = () => http.post('/books/classify-all')
 export const setBookCategory = (bookId, category) => http.patch(`/books/${bookId}/category`, { category })
 
+// ===== 标签 =====
+export const listTags = () => http.get('/tags')
+export const createTag = (data) => http.post('/tags', data)
+export const getBookTags = (bookId) => http.get(`/books/${bookId}/tags`)
+export const addBookTags = (bookId, data) => http.post(`/books/${bookId}/tags`, data)
+export const removeBookTag = (bookId, tagId) => http.delete(`/books/${bookId}/tags/${tagId}`)
+
 // ===== 统计 =====
 export const getOverview = () => http.get('/stats/overview')
 export const getMastery = (bookId) => http.get('/stats/mastery', { params: { book_id: bookId } })
@@ -132,3 +144,14 @@ export const getConceptSources = (name) => http.get(`/graph/concept/${encodeURIC
 export const getPlan = () => http.get('/plan')
 export const savePlan = (data) => http.post('/plan', data)
 export const planCheckin = (data) => http.post('/plan/checkin', data)
+
+// ===== 数据健康 =====
+export const getHealthData = () => http.get('/health/data')
+export const getChatEval = () => http.get('/chat/eval')
+
+// ===== AI 绘图 =====
+export const drawGenerate = (data) => http.post('/draw/generate', data, { timeout: 120000 })
+export const drawModify = (data) => http.post('/draw/modify', data, { timeout: 120000 })
+export const drawListSessions = () => http.get('/draw/sessions')
+export const drawGetSession = (sid) => http.get(`/draw/sessions/${sid}`)
+export const drawDeleteSession = (sid) => http.delete(`/draw/sessions/${sid}`)

@@ -81,24 +81,88 @@ async def run_deep_analysis(record, book_id: int) -> dict:
             verify = verify_toc(toc)
             update_progress(record, 0.55, "deep", f"补全后核对：缺失 {len(verify['issues'])} 项")
 
-        # 逐章 AI 总结
+        # 逐章 AI 总结（增量缓存：跳过内容未变化的章节）
         summaries: list[dict] = []
+        import hashlib as _hashlib
         if use_ai:
             update_progress(record, 0.6, "deep", "AI 按目录逐章精读总结...")
             chapters = db.scalars(
                 select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.order_index)
             ).all()
             ch_texts: dict[int, str] = {}
+            ch_hashes: dict[int, str] = {}
             for ch in chapters:
                 chunks = db.scalars(
                     select(Chunk).where(Chunk.chapter_id == ch.id).order_by(Chunk.chunk_index)
                 ).all()
-                ch_texts[ch.order_index] = "\n".join(c.content for c in chunks)
-            def _sum_progress(i, total, title):
-                update_progress(record, 0.6 + 0.2 * i / max(total, 1), "deep",
-                                f"AI 精读总结 {i}/{total}：{title[:30]}")
-            summaries = await summarize_by_toc(provider, book.title, toc, ch_texts,
-                                               on_progress=_sum_progress)
+                text = "\n".join(c.content for c in chunks)
+                ch_texts[ch.order_index] = text
+                ch_hashes[ch.order_index] = _hashlib.md5(text.encode()).hexdigest()
+
+            # 加载旧缓存：已总结且内容哈希未变的章节跳过
+            old_summaries: dict[str, str] = {}  # title -> summary
+            old_hashes: dict[int, str] = {}
+            cached_toc_titles: set[str] = set()
+            if deep.summaries_json:
+                try:
+                    for s in json.loads(deep.summaries_json):
+                        old_summaries[s.get("title", "")] = s.get("summary", "")
+                except (ValueError, TypeError):
+                    pass
+            if deep.chapter_hashes_json:
+                try:
+                    for h in json.loads(deep.chapter_hashes_json):
+                        old_hashes[int(h["order_index"])] = h["hash"]
+                except (ValueError, TypeError):
+                    pass
+
+            # 只对内容有变化的章节调 AI；未变的用缓存
+            chapters_toc = [t for t in toc if t["level"] == 1]
+            need_summarize: dict[int, str] = {}  # 章序号 -> 文本
+            cached_summaries: list[dict] = []
+            for i, ch_toc in enumerate(chapters_toc, start=1):
+                title = ch_toc["title"]
+                text = ch_texts.get(i, "")
+                cur_hash = ch_hashes.get(i, "")
+                old_hash = old_hashes.get(i, "")
+                if text and cur_hash == old_hash and title in old_summaries:
+                    # 内容未变，用缓存
+                    cached_summaries.append({"title": title, "summary": old_summaries[title]})
+                elif text:
+                    need_summarize[i] = text
+                else:
+                    cached_summaries.append({"title": title, "summary": "（该章无正文内容）"})
+
+            skipped = len(cached_summaries)
+            need_count = len(need_summarize)
+            if skipped > 0:
+                update_progress(record, 0.62, "deep",
+                                f"增量缓存：跳过 {skipped} 章未变，需总结 {need_count} 章")
+
+            # 只对 need_summarize 的章节调 AI
+            new_summaries: list[dict] = []
+            if need_summarize:
+                def _sum_progress(i, total, title):
+                    update_progress(record, 0.62 + 0.2 * i / max(total, 1), "deep",
+                                    f"AI 精读总结 {i}/{total}：{title[:30]}")
+                new_summaries = await summarize_by_toc(provider, book.title, toc, need_summarize,
+                                                       on_progress=_sum_progress)
+
+            # 合并缓存 + 新总结（按目录顺序）
+            new_map = {s["title"]: s["summary"] for s in new_summaries}
+            for ch_toc in chapters_toc:
+                title = ch_toc["title"]
+                if title in new_map:
+                    summaries.append({"title": title, "summary": new_map[title]})
+                else:
+                    cs = next((c for c in cached_summaries if c["title"] == title), None)
+                    if cs:
+                        summaries.append(cs)
+
+            # 保存新的哈希表
+            deep.chapter_hashes_json = json.dumps(
+                [{"order_index": k, "hash": v} for k, v in sorted(ch_hashes.items())],
+                ensure_ascii=False)
             update_progress(record, 0.85, "deep", "正在生成 Markdown...")
         else:
             update_progress(record, 0.85, "deep", "未配置 AI，生成纯本地 Markdown（无 AI 总结）...")
@@ -168,6 +232,22 @@ def get_deep(book_id: int, db: Session = Depends(get_db)):
 
 
 # ---------- 文献分类 ----------
+def _get_classify_inputs(db: Session, book_id: int) -> tuple[list[str], list[str]]:
+    """获取分类用的关键词 + 章节标题。"""
+    from backend.app.models import BookAnalysis, Chapter
+    keywords: list[str] = []
+    analysis = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book_id))
+    if analysis and analysis.keywords_json:
+        try:
+            keywords = json.loads(analysis.keywords_json)
+        except (ValueError, TypeError):
+            keywords = []
+    chapters = [c.title for c in db.scalars(
+        select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.order_index).limit(40)
+    ).all()]
+    return keywords, chapters
+
+
 async def _classify_book(provider, book: Book, keywords: list[str]) -> str:
     prompt = [
         {"role": "system", "content": (
@@ -191,28 +271,26 @@ async def _classify_book(provider, book: Book, keywords: list[str]) -> str:
 
 @router.post("/books/{book_id}/classify")
 async def classify_book(book_id: int, db: Session = Depends(get_db)):
-    """AI 分析文献主题并分类（存 books.category）。"""
-    from backend.app.models import BookAnalysis
+    """分析文献主题并分类（存 books.category）。有 API Key 时用 AI，无则本地降级。"""
     from backend.app.services.llm import LLMRouter, load_llm_config
+    from backend.app.services.analyzer.classify import classify_local
 
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
+    keywords, chapters = _get_classify_inputs(db, book_id)
     cfg = load_llm_config(db)
     if not cfg.get("deepseek_api_key"):
-        raise HTTPException(400, "未配置 DeepSeek API Key，无法分类")
+        # 本地降级分类
+        category = classify_local(book.title, keywords, chapters)
+        book.category = category
+        db.commit()
+        return {"category": category, "method": "local"}
     provider = LLMRouter.get("auto", cfg)
-    keywords: list[str] = []
-    analysis = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book_id))
-    if analysis and analysis.keywords_json:
-        try:
-            keywords = json.loads(analysis.keywords_json)
-        except (ValueError, TypeError):
-            keywords = []
     category = await _classify_book(provider, book, keywords)
     book.category = category
     db.commit()
-    return {"category": category}
+    return {"category": category, "method": "ai"}
 
 
 class CategoryReq(BaseModel):
@@ -239,29 +317,26 @@ def deep_status_all(db: Session = Depends(get_db)):
 
 @router.post("/books/classify-all")
 async def classify_all(db: Session = Depends(get_db)):
-    """AI 一键分类全部书籍（逐个，失败跳过）。"""
-    from backend.app.models import BookAnalysis as _BookAnalysis
+    """一键分类全部书籍。有 API Key 时用 AI，无则本地降级。逐个处理，失败跳过。"""
     from backend.app.services.llm import LLMRouter, load_llm_config
+    from backend.app.services.analyzer.classify import classify_local
 
     cfg = load_llm_config(db)
-    if not cfg.get("deepseek_api_key"):
-        raise HTTPException(400, "未配置 DeepSeek API Key，无法分类")
-    provider = LLMRouter.get("auto", cfg)
+    has_key = bool(cfg.get("deepseek_api_key"))
+    provider = LLMRouter.get("auto", cfg) if has_key else None
     books = db.scalars(select(Book).where(Book.status == "ready")).all()
     done = {}
+    method = "ai" if has_key else "local"
     for book in books:
         if book.category:
             done[book.id] = book.category
             continue
-        analysis = db.scalar(select(_BookAnalysis).where(_BookAnalysis.book_id == book.id))
-        keywords = []
-        if analysis and analysis.keywords_json:
-            try:
-                keywords = json.loads(analysis.keywords_json)
-            except (ValueError, TypeError):
-                keywords = []
-        cat = await _classify_book(provider, book, keywords)
+        keywords, chapters = _get_classify_inputs(db, book.id)
+        if has_key:
+            cat = await _classify_book(provider, book, keywords)
+        else:
+            cat = classify_local(book.title, keywords, chapters)
         book.category = cat
         done[book.id] = cat
         db.commit()
-    return {"classified": done}
+    return {"classified": done, "method": method}

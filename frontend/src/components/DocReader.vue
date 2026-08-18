@@ -12,7 +12,9 @@
       </el-button-group>
       <el-button size="small" :type="dark ? 'primary' : ''" @click="dark = !dark">{{ dark ? '☀️' : '🌙' }}</el-button>
       <el-button size="small" @click="showAnnPanel = true">🖍 批注({{ annotations.length }})</el-button>
-      <span class="dr-info">{{ doc?.file_type?.toUpperCase() }} · {{ chapters.length }} 章</span>
+      <span class="dr-info">{{ doc?.file_type?.toUpperCase() }} · {{ chapters.length }} {{ isPpt ? '幻灯片' : '章' }}</span>
+      <el-input-number v-if="isPpt" v-model="jumpSlide" :min="1" :max="sections.length" size="small" style="width: 120px" @change="jumpToSlide" />
+      <el-button v-if="isPpt" size="small" @click="jumpToSlide">跳转</el-button>
     </div>
     <div class="dr-body">
       <aside v-if="showToc" class="dr-toc">
@@ -29,10 +31,14 @@
         <div v-if="loading" v-loading="true" style="height: 200px" />
         <div v-else>
           <div class="dr-title">{{ doc?.title }}</div>
-          <template v-for="sec in sections" :key="sec.chapter_id">
-            <div class="dr-chapter" :data-cid="sec.chapter_id" :ref="(el) => setSecRef(sec.chapter_id, el)">
-              <div class="dr-chapter-title">{{ sec.title }}</div>
-              <div class="dr-chapter-text">{{ sec.text }}</div>
+          <template v-for="(sec, idx) in sections" :key="sec.chapter_id">
+            <div class="dr-chapter" :class="{ 'dr-slide': isPpt }" :data-cid="sec.chapter_id" :ref="(el) => setSecRef(sec.chapter_id, el)">
+              <div class="dr-chapter-title">
+                <span v-if="isPpt" class="slide-badge">幻灯片 {{ idx + 1 }}</span>
+                {{ sec.title }}
+              </div>
+              <div v-if="isPpt" class="dr-slide-text" v-html="renderSlideText(sec.text)"></div>
+              <div v-else class="dr-chapter-text">{{ sec.text }}</div>
             </div>
           </template>
         </div>
@@ -57,7 +63,7 @@
       <div v-if="!annotations.length" class="form-tip">选中正文文字 → 点「🖍 标注」即可添加</div>
       <div v-for="a in annotations" :key="a.id" class="ann-item">
         <div class="ann-head">
-          <el-tag size="small" type="info">第 {{ a.page || '全文' }}</el-tag>
+          <el-tag size="small" type="info">{{ isPpt ? '幻灯片 ' + (a.page || '?') : (a.page ? '第 ' + a.page + ' 页' : '全文') }}</el-tag>
           <el-button link size="small" type="danger" @click="removeAnn(a)">删除</el-button>
         </div>
         <div class="ann-text">{{ a.text }}</div>
@@ -76,6 +82,24 @@ import { renderMarkdown } from '../utils/markdown'
 const props = defineProps({ bookId: { type: Number, required: true } })
 
 const doc = ref(null)
+const isPpt = computed(() => doc.value?.file_type === 'pptx')
+const jumpSlide = ref(1)
+
+const jumpToSlide = () => {
+  const idx = Math.min(Math.max(1, jumpSlide.value), sections.value.length)
+  if (idx > 0 && idx <= sections.value.length) {
+    const sec = sections.value[idx - 1]
+    if (sec) jumpTo(sec.chapter_id)
+  }
+}
+
+const renderSlideText = (text) => {
+  if (!text) return ''
+  // PPT 文本按行分割，每行作为一个要点
+  return text.split('\n').filter(l => l.trim()).map(l => '<p>' + escapeHtml(l.trim()) + '</p>').join('')
+}
+
+const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const chapters = ref([])
 const sections = ref([])
 const loading = ref(true)
@@ -263,6 +287,13 @@ onMounted(async () => {
 .dr-chapter { margin-bottom: 28px; }
 .dr-chapter-title { font-size: 18px; font-weight: 700; color: var(--bailu-accent); border-left: 4px solid var(--bailu-accent); padding-left: 10px; margin-bottom: 12px; }
 .dr-chapter-text { font-size: inherit; line-height: 1.9; color: var(--el-text-color-regular); white-space: pre-wrap; user-select: text; cursor: text; }
+.dr-slide { background: #fff; border: 1px solid var(--el-border-color-light); border-radius: 12px; padding: 24px 32px; margin-bottom: 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+.dr-slide .dr-chapter-title { display: flex; align-items: center; gap: 8px; font-size: 20px; border-bottom: 2px solid var(--bailu-accent); padding-bottom: 10px; margin-bottom: 16px; }
+.slide-badge { background: var(--bailu-accent); color: #fff; font-size: 12px; padding: 2px 10px; border-radius: 12px; white-space: nowrap; }
+.dr-slide-text { line-height: 2; }
+.dr-slide-text p { margin: 0.5em 0; padding-left: 16px; border-left: 3px solid var(--el-border-color-lighter); }
+.dr-dark .dr-slide { background: #1e1e1e; }
+.dr-dark .dr-slide-text p { border-left-color: #444; }
 .dr-dark .dr-content { background: #1e1e1e; }
 .dr-dark .dr-chapter-title, .dr-dark .dr-title { color: #a8c3d1; }
 .dr-dark .dr-chapter-text { color: #ccc; }
