@@ -35,9 +35,20 @@ def health_ok(port: int) -> bool:
 
 
 def port_in_use(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(1)
-        return s.connect_ex(("127.0.0.1", port)) == 0
+    """检测端口是否被 LISTENING 占用（TIME_WAIT 残留不算占用）。
+
+    之前用 connect_ex 探测，TIME_WAIT 残留会导致误判"端口被占用"而拒绝启动。
+    改为 bind 测试：能成功绑定 = 端口空闲可启动；Address already in use = 真被占用。
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("127.0.0.1", port))
+        return False  # 可绑定 = 无监听占用
+    except OSError:
+        return True   # 绑定失败 = 被占用
+    finally:
+        s.close()
 
 
 def print_banner(port: int) -> None:

@@ -345,12 +345,22 @@ def to_markdown(book_title: str, toc: list[dict], summaries: list[dict],
             if t["level"] == 1:
                 summary = summary_map.get(t["title"])
                 if summary and summary != "（该章无正文内容）":
-                    md.append("> 💡 AI 精读总结")
-                    md.append(">")
-                    md.append("> " + summary.replace("\n", "\n> "))
+                    # AI 总结独立折叠卡片，与原文明显分开（用户可点击展开/收起）
+                    md.append("<details>")
+                    md.append("<summary>💡 AI 精读总结（点击展开/收起）</summary>")
+                    md.append("")
+                    md.append(summary)
+                    md.append("")
+                    md.append("</details>")
+                    md.append("")
+                    md.append("---")
                     md.append("")
             body = section_texts.get(t["title"])
             if body:
+                # 仅一级章节显示"章节原文"标题（与 AI 总结分隔）；小节正文直接跟随标题
+                if t["level"] == 1:
+                    md.append("### 📄 章节原文")
+                    md.append("")
                 md.append(body)
                 md.append("")
             kids = [x for x in order if x.get("parent") is t]
