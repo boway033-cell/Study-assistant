@@ -197,19 +197,15 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         update_progress(record, 0.95, "analysis", "正在保存分析结果...")
         _save_analysis(db, book.id, keyinfo, layout)
 
-        # 8b. 自动分类（有 Key 用 AI，无 Key 本地降级）
+        # 8b. 自动分类（始终用本地分类，不静默调用云端 AI）
         try:
             from backend.app.services.analyzer.classify import classify_local
-            from backend.app.services.llm import LLMRouter, load_llm_config
             chapters_for_class = [c.title for c in db.scalars(
                 select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.order_index).limit(40)
             ).all()]
-            cfg = load_llm_config(db)
-            if cfg.get("deepseek_api_key"):
-                provider = LLMRouter.get("auto", cfg)
-                book.category = await _ai_classify(provider, book, keyinfo["keywords"])
-            else:
-                book.category = classify_local(book.title, keyinfo["keywords"], chapters_for_class)
+            # 导入时只用本地分类（隐私：不静默上传书名/关键词到云端）
+            # 用户可在资料库手动点「自动分类」按钮触发 AI 分类
+            book.category = classify_local(book.title, keyinfo["keywords"], chapters_for_class)
         except Exception:  # noqa: BLE001
             pass  # 分类失败不阻塞导入
 
@@ -269,29 +265,6 @@ def _save_analysis(db, book_id: int, keyinfo: dict, layout) -> None:
     )
     db.add(analysis)
     db.flush()
-
-async def _ai_classify(provider, book, keywords: list[str]) -> str:
-    """AI 分类（复用 deep.py 的 prompt）。"""
-    CATEGORIES = ["数学", "管理学", "经济学", "计算机", "英语", "政治", "物理",
-                  "化学", "生物", "法学", "文学", "历史", "哲学", "其他"]
-    prompt = [
-        {"role": "system", "content": (
-            "你是文献分类助手。根据书名、章节与关键词判断所属学科类别。"
-            f"只能从这些类别中选择一个：{'、'.join(CATEGORIES)}。只输出类别名，不要解释。"
-        )},
-        {"role": "user", "content": f"书名：《{book.title}》\n关键词：{','.join(keywords[:30]) or '无'}"},
-    ]
-    answer = ""
-    try:
-        async for delta in provider.stream_chat(prompt):
-            answer += delta
-    except Exception:  # noqa: BLE001
-        return "其他"
-    answer = answer.strip()
-    for c in CATEGORIES:
-        if c in answer:
-            return c
-    return "其他"
 
 
 def _simhash(text: str, hash_bits: int = 64) -> int:

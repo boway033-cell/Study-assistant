@@ -16,7 +16,7 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
       - name: Unit tests
-        run: python -m pytest backend/tests/test_unit.py backend/tests/test_enhance.py backend/tests/test_semantic.py backend/tests/test_toc_heuristic.py -q
+        run: python -m pytest backend/tests/test_unit.py backend/tests/test_enhance.py backend/tests/test_semantic.py backend/tests/test_toc_heuristic.py backend/tests/test_arch.py -q
 
   frontend-build:
     runs-on: ubuntu-latest

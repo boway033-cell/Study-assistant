@@ -5,8 +5,14 @@ CI 全新环境（无 backend/data/study.db）下，检索类测试会报
 """
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 from pathlib import Path
+
+# CI 全新环境：使用临时数据目录，避免权限/路径问题
+_test_data = Path(tempfile.mkdtemp(prefix="study_test_"))
+os.environ.setdefault("DATA_DIR", str(_test_data))
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
@@ -20,6 +26,17 @@ def _init_db():
     from backend.app.services.rag import fts
     import backend.app.models  # noqa: F401  注册 ORM 模型到 metadata
 
+    # 确保数据目录存在
+    from backend.app.core.config import settings
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    # 建普通表
     Base.metadata.create_all(bind=engine)
-    fts.init_fts()
+
+    # 建 FTS 虚拟表（直接调用，不经过 data_manager 的版本检查，避免依赖 schema_version 表）
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        conn.execute(text(fts._CREATE_SQL))
+
     yield

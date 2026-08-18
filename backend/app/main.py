@@ -61,6 +61,16 @@ def _migrate():
                     conn.execute(text("ALTER TABLE import_tasks ADD COLUMN retry_count INTEGER DEFAULT 0"))
             except Exception:  # noqa: BLE001
                 pass
+            # 加密旧的明文 API Key（向后兼容：旧版直接存明文，新版加密存储）
+            try:
+                from backend.app.core import crypto
+                for key_name in ("deepseek_api_key", "vision_api_key"):
+                    row = conn.execute(text("SELECT value FROM settings WHERE key=:k"), {"k": key_name}).fetchone()
+                    if row and row[0] and not row[0].startswith("enc:"):
+                        encrypted = crypto.encrypt(row[0])
+                        conn.execute(text("UPDATE settings SET value=:v WHERE key=:k"), {"v": encrypted, "k": key_name})
+            except Exception:  # noqa: BLE001
+                pass
             conn.commit()
     except Exception:  # noqa: BLE001
         pass
@@ -182,17 +192,17 @@ def health():
 
 @app.get("/api/health/data")
 def health_data():
-    """数据层健康状态：完整性、版本、备份信息。"""
+    """数据层健康状态：完整性、版本（不暴露路径等敏感信息）。"""
     from backend.app.core.data_manager import check_integrity, get_schema_version, SCHEMA_VERSION
     ok, msg = check_integrity()
     ver = get_schema_version()
+    from backend.app.core.config import settings as _cfg
     return {
         "integrity_ok": ok,
-        "integrity_message": msg,
+        "integrity_message": "ok" if ok else "corrupted",
         "schema_version": ver,
         "expected_version": SCHEMA_VERSION,
-        "db_path": str(settings.db_path) if hasattr(settings, 'db_path') else "",
-        "db_size_mb": round(settings.db_path.stat().st_size / (1024 * 1024), 1) if settings.db_path.exists() else 0,
+        "db_size_mb": round(_cfg.db_path.stat().st_size / (1024 * 1024), 1) if _cfg.db_path.exists() else 0,
     }
 
 
