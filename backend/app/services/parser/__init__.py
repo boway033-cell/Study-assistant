@@ -122,7 +122,8 @@ def _parse_docx(p: Path) -> ParseResult:
     def flush():
         nonlocal current, page_no
         if current:
-            page_text.append("\n".join(current))
+            # 段落间用空行分隔 (blank line separator)
+            page_text.append("\n\n".join(current))
             current = []
             page_no += 1
 
@@ -166,7 +167,7 @@ def _parse_docx(p: Path) -> ParseResult:
             return
         seen_keys.add(key)
         if current:
-            page_text.append("\n".join(current))
+            page_text.append("\n\n".join(current))
             current = []
         merged_toc.append(TocItem(title=_clean_docx_title(title), level=level, page=len(merged_toc) + 1))
 
@@ -206,7 +207,7 @@ def _parse_docx(p: Path) -> ParseResult:
         current.append(text)
 
     if current:
-        page_text.append("\n".join(current))
+        page_text.append("\n\n".join(current))
     result.toc = merged_toc
     result.pages = page_text or [""]
     result.total_pages = len(page_text)

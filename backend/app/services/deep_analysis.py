@@ -403,5 +403,6 @@ def build_section_texts(chunks_by_page: list[tuple[int, str]], toc: list[dict]) 
             section_texts.setdefault(cur, "")
             existing = section_texts.get(cur, "")
             if text.strip() and text.strip() not in existing:
-                section_texts[cur] = (existing + "\n" + text).strip()
+                # 段落间用空行分隔，保证 Markdown 渲染时段落隔断
+                section_texts[cur] = (existing + "\n\n" + text).strip()
     return section_texts

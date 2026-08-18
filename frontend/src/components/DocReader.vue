@@ -38,7 +38,7 @@
                 {{ sec.title }}
               </div>
               <div v-if="isPpt" class="dr-slide-text" v-html="renderSlideText(sec.text)"></div>
-              <div v-else class="dr-chapter-text">{{ sec.text }}</div>
+              <div v-else class="dr-chapter-text" v-html="sanitizeHtml(renderDocText(sec.text))"></div>
             </div>
           </template>
         </div>
@@ -77,7 +77,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getBookDocument, listAnnotations, createAnnotation, deleteAnnotation, renameChapter, aiExplain } from '../api'
-import { renderMarkdown } from '../utils/markdown'
+import { renderMarkdown, sanitizeHtml } from '../utils/markdown'
 
 const props = defineProps({ bookId: { type: Number, required: true } })
 
@@ -97,6 +97,27 @@ const renderSlideText = (text) => {
   if (!text) return ''
   // PPT 文本按行分割，每行作为一个要点
   return text.split('\n').filter(l => l.trim()).map(l => '<p>' + escapeHtml(l.trim()) + '</p>').join('')
+}
+
+// Word 正文渲染：按空行分段为 <p>；识别标题模式行（第X章/一、/1.1/（一）等）加粗
+const renderDocText = (text) => {
+  if (!text) return ''
+  const paras = text.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean)
+  return paras.map(para => {
+    const firstLine = para.split('\n')[0].trim()
+    if (isHeadingLine(firstLine)) {
+      return '<p class="doc-sub-heading">' + escapeHtml(para) + '</p>'
+    }
+    return '<p>' + escapeHtml(para).replace(/\n/g, '<br/>') + '</p>'
+  }).join('')
+}
+
+const isHeadingLine = (line) => {
+  if (!line || line.length > 45) return false
+  return /^第\s*[一二三四五六七八九十百千万0-9]+\s*[章节篇编部]/.test(line)
+    || /^[一二三四五六七八九十]+、/.test(line)
+    || /^\d+(\.\d+)*\s/.test(line)
+    || /^（[一二三四五六七八九十]+）/.test(line)
 }
 
 const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -286,7 +307,10 @@ onMounted(async () => {
 .dr-title { font-size: 24px; font-weight: 700; text-align: center; margin-bottom: 24px; color: var(--el-text-color-primary); }
 .dr-chapter { margin-bottom: 28px; }
 .dr-chapter-title { font-size: 18px; font-weight: 700; color: var(--bailu-accent); border-left: 4px solid var(--bailu-accent); padding-left: 10px; margin-bottom: 12px; }
-.dr-chapter-text { font-size: inherit; line-height: 1.9; color: var(--el-text-color-regular); white-space: pre-wrap; user-select: text; cursor: text; }
+.dr-chapter-text { font-size: inherit; line-height: 1.9; color: var(--el-text-color-regular); user-select: text; cursor: text; }
+.dr-chapter-text p { margin: 0.6em 0; line-height: 1.9; }
+.dr-chapter-text .doc-sub-heading { font-weight: 700; color: var(--el-text-color-primary); font-size: 1.05em; margin-top: 1.1em; }
+.dr-dark .dr-chapter-text .doc-sub-heading { color: #c8d6dc; }
 .dr-slide { background: #fff; border: 1px solid var(--el-border-color-light); border-radius: 12px; padding: 24px 32px; margin-bottom: 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
 .dr-slide .dr-chapter-title { display: flex; align-items: center; gap: 8px; font-size: 20px; border-bottom: 2px solid var(--bailu-accent); padding-bottom: 10px; margin-bottom: 16px; }
 .slide-badge { background: var(--bailu-accent); color: #fff; font-size: 12px; padding: 2px 10px; border-radius: 12px; white-space: nowrap; }

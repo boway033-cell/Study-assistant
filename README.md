@@ -5,12 +5,15 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions)
 
-一个本地部署的**个人学习辅助软件**，把 PDF / Word / PPT 教材转化为
+一个本地部署的**个人知识库 + AI 学习助手**：把 PDF / Word / PPT 教材导入后自动建立
+可检索、可问答、可复习的**个人知识库**，并围绕知识库提供
 「AI 问答 + 知识树 + 知识图谱 + AI 绘图 + 自测刷题 + 深度分析 + AI 研读 + 学习计划」的完整学习闭环。
 
-> 核心思路：把「读资料」变成「主动回忆 + 自测 + 查漏补缺」。
+> 核心思路：**知识库优先**——导入即建库（解析/清洗/目录/切块/索引），检索即定位（文件/章节/页码），
+> AI 只做增值（基于库内内容问答、总结、出题），把「读资料」变成「主动回忆 + 自测 + 查漏补缺」。
 >
 > **AI 策略**：文本解析/切块/检索全部在本地完成（不上传资料）；仅将「提问 + 检索片段」发送到 **DeepSeek 云端**生成回答。
+> **本地部署**：所有数据存于本机（SQLite + 上传文件 + 索引），无网也可用核心功能。
 
 ## 🚀 快速启动（从源码）
 
