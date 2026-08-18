@@ -17,6 +17,7 @@ class BookListItem(BaseModel):
     quiz_count: int = 0
     category: str | None = None
     deep_status: str = "none"
+    task_message: str | None = None
     created_at: datetime
 
 

@@ -68,9 +68,14 @@ def list_books(
         select(Chapter.book_id, func.count()).group_by(Chapter.book_id)
     ).all())
 
-    from backend.app.models import BookDeep
+    from backend.app.models import BookDeep, ImportTask
     deep_statuses = dict(db.execute(
         select(BookDeep.book_id, BookDeep.status).where(BookDeep.status != "none")
+    ).all())
+    # 进行中任务消息（导入/OCR 进度等）
+    task_msgs = dict(db.execute(
+        select(ImportTask.book_id, ImportTask.message)
+        .where(ImportTask.status.in_(["pending", "running"]))
     ).all())
     items = [
         BookListItem(
@@ -78,6 +83,7 @@ def list_books(
             total_pages=b.total_pages, chapter_count=chapter_counts.get(b.id, 0),
             quiz_count=quiz_counts.get(b.id, 0), category=b.category,
             deep_status=deep_statuses.get(b.id, "none"),
+            task_message=task_msgs.get(b.id),
             created_at=b.created_at,
         )
         for b in books

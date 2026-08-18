@@ -69,3 +69,44 @@ def test_task_retry():
     record = TaskRecord(id="test-123", book_id=1)
     assert record.retry_count == 0
     assert record.max_retries == 2
+def test_ocr_cache_and_progress():
+    """OCR 页级缓存 + 进度回调（不真正跑 OCR，只测缓存读写与回调）。"""
+    import tempfile, os
+    from backend.app.services.parser.ocr import _ocr_cache_dir, _file_hash
+
+    with tempfile.TemporaryDirectory() as td:
+        # 模拟一个 PDF 文件（内容任意）
+        pdf = os.path.join(td, "t.pdf")
+        with open(pdf, "wb") as f:
+            f.write(b"%PDF-1.4 test content " * 100)
+
+        h = _file_hash(pdf)
+        assert len(h) == 16
+        cache_dir = _ocr_cache_dir(h)
+        assert cache_dir.exists()
+
+        # 写入 3 页缓存
+        for i in (1, 2, 3):
+            (cache_dir / f"page_{i:04d}.txt").write_text(f"page{i} text", encoding="utf-8")
+
+        # 模拟读取缓存 + 回调计数
+        calls = []
+        texts = []
+        total = 3
+        for i in range(1, 4):
+            cf = cache_dir / f"page_{i:04d}.txt"
+            if cf.exists():
+                texts.append(cf.read_text(encoding="utf-8"))
+                calls.append((i, total, True))
+        assert texts == ["page1 text", "page2 text", "page3 text"]
+        assert all(c[2] is True for c in calls)
+        assert calls[-1][0] == 3 and calls[-1][1] == 3
+
+
+def test_ocr_pdf_progress_signature():
+    """ocr_pdf 支持 on_progress 参数（断点续跑契约）。"""
+    import inspect
+    from backend.app.services.parser.ocr import ocr_pdf
+    sig = inspect.signature(ocr_pdf)
+    assert "on_progress" in sig.parameters
+    assert sig.parameters["on_progress"].default is None

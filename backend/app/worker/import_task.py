@@ -69,7 +69,13 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                 return {"book_id": book.id, "status": "needs_ocr",
                         "message": "扫描版 PDF，需安装 OCR 引擎"}
             update_progress(record, 0.15, "ocr", "检测到扫描版，正在 OCR 识别...")
-            result.pages = ocr_pdf(file_path)
+            # OCR 逐页回调：页级进度细化（0.15 → 0.30 区间），支持断点续跑（缓存命中）
+            def _ocr_progress(page_no: int, total: int, cached: bool) -> None:
+                frac = 0.15 + 0.15 * (page_no / max(total, 1))
+                tag = "（命中缓存）" if cached else ""
+                update_progress(record, min(frac, 0.30), "ocr",
+                                f"OCR 识别中 {page_no}/{total}{tag}")
+            result.pages = ocr_pdf(file_path, on_progress=_ocr_progress)
             result.total_pages = len(result.pages)
 
         if not result.pages or all(not p.strip() for p in result.pages):

@@ -44,7 +44,9 @@
                 <el-tag v-if="row.status === 'ready'" type="success" size="small">已就绪</el-tag>
                 <el-tag v-else-if="row.status === 'failed'" type="danger" size="small">解析失败</el-tag>
                 <el-tag v-else-if="row.status === 'needs_ocr'" type="warning" size="small" effect="dark">需 OCR</el-tag>
-                <el-tag v-else type="info" size="small">解析中</el-tag>
+                <el-tooltip v-else :content="row.task_message || '解析中…'" placement="top">
+                  <el-tag type="info" size="small">{{ row.task_message ? extractProgress(row.task_message) : '解析中' }}</el-tag>
+                </el-tooltip>
               </template>
             </el-table-column>
             <el-table-column prop="total_pages" label="页数" width="70" />
@@ -221,6 +223,14 @@ const handleUpload = async (file) => {
     uploading.value = false
   }
   return false // 阻止默认上传
+}
+
+// 从任务 message 提取进度（如 "OCR 识别中 45/173" → "OCR 45/173"）
+const extractProgress = (msg) => {
+  if (!msg) return ''
+  const m = msg.match(/(\S+)\s+(\d+)\/(\d+)/)
+  if (m) return m[1] + ' ' + m[2] + '/' + m[3]
+  return msg.slice(0, 14)
 }
 
 const batchFiles = ref([])

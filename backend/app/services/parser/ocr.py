@@ -45,8 +45,29 @@ def has_ocr_engine() -> bool:
     return False
 
 
-def ocr_pdf(path: str | Path) -> list[str]:
+def _file_hash(path: Path) -> str:
+    """流式计算文件 SHA-256（前 16 位，作 OCR 缓存键）。"""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
+def _ocr_cache_dir(file_hash: str) -> Path:
+    """OCR 页级缓存目录（data/ocr_cache/{hash}/page_NNNN.txt）。"""
+    from backend.app.core.config import settings
+    d = settings.data_dir / "ocr_cache" / file_hash
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def ocr_pdf(path: str | Path, on_progress=None) -> list[str]:
     """对扫描版 PDF 做 OCR，返回每页文本。
+
+    on_progress(page_no, total, cached)：每页完成后回调（cached=True 表示命中缓存）。
+    支持断点续跑：每页结果缓存到 data/ocr_cache/{file_hash}/，中断后重跑自动跳过已识别页。
 
     按优先级尝试后端：rapidocr（中文最佳，纯 pip）→ pytesseract → paddleocr。
     均不可用时抛出 RuntimeError 并给出安装指引。
@@ -55,20 +76,25 @@ def ocr_pdf(path: str | Path) -> list[str]:
     if p.suffix.lower() != ".pdf":
         raise RuntimeError("OCR 仅支持 PDF 文件")
 
+    # 页级缓存目录（文件内容不变则缓存有效）
+    try:
+        cache_dir = _ocr_cache_dir(_file_hash(p))
+    except Exception:  # noqa: BLE001
+        cache_dir = None
+
     # 1. RapidOCR（onnxruntime，中文效果好，纯 pip 安装）
     try:
         from rapidocr_onnxruntime import RapidOCR  # noqa: F401
-        return _ocr_rapid(p)
+        return _ocr_rapid(p, cache_dir=cache_dir, on_progress=on_progress)
     except ImportError:
         pass
     except Exception as e:  # noqa: BLE001
-        # rapidocr 运行失败，继续尝试下一个
         pass
 
     # 2. pytesseract
     try:
         import pytesseract  # noqa: F401
-        return _ocr_tesseract(p)
+        return _ocr_tesseract(p, cache_dir=cache_dir, on_progress=on_progress)
     except ImportError:
         pass
     except Exception as e:  # noqa: BLE001
@@ -77,7 +103,7 @@ def ocr_pdf(path: str | Path) -> list[str]:
     # 3. paddleocr
     try:
         import paddleocr  # noqa: F401
-        return _ocr_paddle(p)
+        return _ocr_paddle(p, cache_dir=cache_dir, on_progress=on_progress)
     except ImportError:
         pass
 
@@ -118,46 +144,93 @@ def _get_rapid_engine():
     return _rapid_engine
 
 
-def _ocr_rapid(p: Path) -> list[str]:
-    """用 RapidOCR 识别每页（中文效果好，CPU 可跑）。"""
+def _ocr_rapid(p: Path, cache_dir: Path | None = None,
+                on_progress=None) -> list[str]:
+    """用 RapidOCR 识别每页（中文效果好，CPU 可跑）。
+
+    每页结果缓存到 cache_dir/page_NNNN.txt：中断后重跑命中缓存直接读取（断点续 OCR）。
+    """
     import numpy as np
     import cv2
 
     engine = _get_rapid_engine()
     images = _render_pdf_pages(p)
+    total = len(images)
     texts = []
-    for img in images:
+    for i, img in enumerate(images, start=1):
+        # 1. 缓存命中：直接读缓存，跳过 OCR
+        if cache_dir is not None:
+            cache_file = cache_dir / f"page_{i:04d}.txt"
+            if cache_file.exists():
+                texts.append(cache_file.read_text(encoding="utf-8"))
+                if on_progress:
+                    on_progress(i, total, cached=True)
+                continue
+        # 2. 真正 OCR
         arr = np.array(img)
-        # 转 BGR（RapidOCR 期望 BGR）
         bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
         result, _ = engine(bgr)
         if result:
             lines = [str(item[1]) for item in result]
-            texts.append("\n".join(lines))
+            text = "\n".join(lines)
         else:
-            texts.append("")
+            text = ""
+        texts.append(text)
+        # 3. 写缓存
+        if cache_dir is not None:
+            try:
+                cache_file.write_text(text, encoding="utf-8")
+            except OSError:
+                pass
+        if on_progress:
+            on_progress(i, total, cached=False)
     return texts
 
 
-def _ocr_tesseract(p: Path) -> list[str]:
+def _ocr_tesseract(p: Path, cache_dir: Path | None = None,
+                   on_progress=None) -> list[str]:
     import pytesseract
     from PIL import Image
 
     images = _render_pdf_pages(p)
+    total = len(images)
     texts = []
-    for img in images:
+    for i, img in enumerate(images, start=1):
+        if cache_dir is not None:
+            cache_file = cache_dir / f"page_{i:04d}.txt"
+            if cache_file.exists():
+                texts.append(cache_file.read_text(encoding="utf-8"))
+                if on_progress:
+                    on_progress(i, total, cached=True)
+                continue
         txt = pytesseract.image_to_string(img, lang="chi_sim+eng")
         texts.append(txt)
+        if cache_dir is not None:
+            try:
+                cache_file.write_text(txt, encoding="utf-8")
+            except OSError:
+                pass
+        if on_progress:
+            on_progress(i, total, cached=False)
     return texts
 
 
-def _ocr_paddle(p: Path) -> list[str]:
+def _ocr_paddle(p: Path, cache_dir: Path | None = None,
+                  on_progress=None) -> list[str]:
     from paddleocr import PaddleOCR
 
     images = _render_pdf_pages(p)
     ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
+    total = len(images)
     texts = []
-    for img in images:
+    for i, img in enumerate(images, start=1):
+        if cache_dir is not None:
+            cache_file = cache_dir / f"page_{i:04d}.txt"
+            if cache_file.exists():
+                texts.append(cache_file.read_text(encoding="utf-8"))
+                if on_progress:
+                    on_progress(i, total, cached=True)
+                continue
         import numpy as np
         result = ocr.ocr(np.array(img), cls=True)
         lines = []
@@ -166,5 +239,13 @@ def _ocr_paddle(p: Path) -> list[str]:
                 txt = line[1][0] if len(line) > 1 else ""
                 if txt:
                     lines.append(txt)
-        texts.append("\n".join(lines))
+        text = "\n".join(lines)
+        texts.append(text)
+        if cache_dir is not None:
+            try:
+                cache_file.write_text(text, encoding="utf-8")
+            except OSError:
+                pass
+        if on_progress:
+            on_progress(i, total, cached=False)
     return texts
