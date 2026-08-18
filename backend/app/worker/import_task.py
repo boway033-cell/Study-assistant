@@ -20,7 +20,7 @@ from backend.app.models import Book, BookAnalysis, Chapter, Chunk
 from backend.app.services.rag.chunker import build_chapter_pages, build_chapters, split_pages_into_chunks
 from backend.app.services.rag.fts import delete_book_index, index_chunk
 from backend.app.services.parser import ParseError, parse_document
-from backend.app.services.parser.ocr import detect_scanned, ocr_pdf
+from backend.app.services.parser.ocr import detect_scanned, has_ocr_engine, ocr_pdf
 from backend.app.worker.tasks import TaskRecord, update_progress
 
 
@@ -57,6 +57,17 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
 
         # 1b. OCR：扫描版检测（仅 PDF；docx/pptx 必有文本层，跳过避免误判）
         if book.file_type == "pdf" and result.pages and detect_scanned(result.pages):
+            if not has_ocr_engine():
+                # 无 OCR 引擎：标记 needs_ocr（非 failed），保留原文件供阅读器直接查看
+                book.status = "needs_ocr"
+                book.error_msg = (
+                    "该 PDF 为扫描版（无文本层），当前未安装 OCR 引擎。"
+                    "原文件已保留，可用内置阅读器直接查看；"
+                    "如需检索/问答，请安装 OCR 引擎后重新解析。"
+                )
+                db.commit()
+                return {"book_id": book.id, "status": "needs_ocr",
+                        "message": "扫描版 PDF，需安装 OCR 引擎"}
             update_progress(record, 0.15, "ocr", "检测到扫描版，正在 OCR 识别...")
             result.pages = ocr_pdf(file_path)
             result.total_pages = len(result.pages)

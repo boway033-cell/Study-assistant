@@ -39,11 +39,12 @@
                 <el-tag size="small">{{ row.file_type }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="110">
+            <el-table-column label="状态" width="130">
               <template #default="{ row }">
                 <el-tag v-if="row.status === 'ready'" type="success" size="small">已就绪</el-tag>
                 <el-tag v-else-if="row.status === 'failed'" type="danger" size="small">解析失败</el-tag>
-                <el-tag v-else type="warning" size="small">解析中</el-tag>
+                <el-tag v-else-if="row.status === 'needs_ocr'" type="warning" size="small" effect="dark">需 OCR</el-tag>
+                <el-tag v-else type="info" size="small">解析中</el-tag>
               </template>
             </el-table-column>
             <el-table-column prop="total_pages" label="页数" width="70" />
@@ -128,6 +129,7 @@
             empty-text="暂无章节"
           />
           <el-alert v-if="currentBook.status === 'failed'" type="error" :title="'解析失败：' + (currentBook.error_msg || '')" style="margin-top: 12px" />
+          <el-alert v-else-if="currentBook.status === 'needs_ocr'" type="warning" :closable="false" :title="currentBook.error_msg || '扫描版 PDF，需安装 OCR 引擎'" description="可点击「阅读」用内置阅读器直接查看原文件；如需检索/问答，请安装 OCR 引擎后重新解析" style="margin-top: 12px" />
 
           <!-- 智能分析结果 -->
           <template v-if="currentBook.analysis">
@@ -222,9 +224,9 @@ const handleUpload = async (file) => {
 }
 
 const batchFiles = ref([])
-const handleBatchUpload = async (file) => {
-  batchFiles.value.push(file)
-  return false // 收集文件，不立即上传
+// 选择文件后收集（el-upload on-change，auto-upload=false）
+const handleBatchSelect = (file, fileList) => {
+  batchFiles.value = fileList.map(f => f.raw)
 }
 
 const submitBatch = async () => {
@@ -361,6 +363,8 @@ onMounted(loadBooks)
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .search-filters { display: flex; gap: 8px; margin-bottom: 4px; }
+.batch-bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 6px 10px; background: var(--el-fill-color-lighter); border-radius: 6px; }
+.batch-tip { font-size: 12px; color: var(--el-text-color-secondary); }
 .result-item { margin-top: 8px; }
 .result-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
 .result-chapter { color: var(--el-text-color-secondary); font-size: 12px; }

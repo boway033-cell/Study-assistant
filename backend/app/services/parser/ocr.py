@@ -25,6 +25,21 @@ def detect_scanned(pages: list[str]) -> bool:
     return avg < SCAN_THRESHOLD
 
 
+def has_ocr_engine() -> bool:
+    """检查是否安装了可用的 OCR 引擎（pytesseract 或 paddleocr）。"""
+    try:
+        import pytesseract  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    try:
+        import paddleocr  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    return False
+
+
 def ocr_pdf(path: str | Path) -> list[str]:
     """对扫描版 PDF 做 OCR，返回每页文本。
 
