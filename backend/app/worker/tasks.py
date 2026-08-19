@@ -166,12 +166,24 @@ def list_tasks() -> list[TaskRecord]:
     return list(_task_registry.values())
 
 
+import time as _time
+
+_last_persist_time: float = 0.0
+_PERSIST_INTERVAL = 5.0  # 每 5 秒最多持久化一次进度（避免频繁 DB 写入）
+
+
 def update_progress(record: TaskRecord, progress: float, stage: str = "", message: str = "") -> None:
     record.progress = progress
     if stage:
         record.stage = stage
     if message:
         record.message = message
+    # 定期持久化进度到 DB（避免中断后丢失进度信息）
+    global _last_persist_time
+    now = _time.time()
+    if now - _last_persist_time >= _PERSIST_INTERVAL:
+        _last_persist_time = now
+        _persist(record)
 
 
 def recover_pending_tasks() -> list[str]:
