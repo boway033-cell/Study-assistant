@@ -167,9 +167,9 @@
 - **稳定入口**：VBS 漏反斜杠和固定绝对路径已修复；BAT/VBS/PowerShell 均改用脚本自身目录。启动器以 `/api/health` 判定就绪，8000 被其他程序占用时在 8001–8010 选择可用端口，未就绪不打开拒绝连接页面。
 - **自定义协议（已注册）**：当前用户已注册 `study-assistant://open`；支持如 `study-assistant://open/reader/6?page=21` 的白名单深链。WMI 启动独立 `pythonw + server_runner.py`，协议处理器退出后服务仍存活；`uninstall_protocol.ps1` 可撤销。
 - **真实书目已重解析**：《行政管理学夏书章》（book_id=6）已于 2026-08-24 重建为 529 个章节节点（16/55/141/317 四级分布）和 416 个非重叠文本块；旧 `book_deep` 已失效清除。回退快照：`backend/data/backups/before_reparse_book6_20260824_153812.db`。
-- **MinerU 决策**：本机 15.7 GB RAM、RTX 4050 6 GB、D 盘 63.6 GB 可尝试按需 pipeline，但须独立 Python 3.12；当前空闲 RAM 约 5 GB，预检不通过。详见 `docs/MINERU_DEPLOYMENT.md` 和 `scripts/mineru_preflight.ps1`。
+- **解析引擎决策**：MinerU 不进入标准安装或默认导入链；默认使用轻量结构化解析、弱页按需 OCR 与可选 PP-DocLayout-M 子进程，详见 `docs/LIGHTWEIGHT_DOCUMENT_PIPELINE.md`。
 - **验证**：后端 78 项测试通过；前端生产构建与 5 项单测通过（含 SVG 安全与主题视觉令牌）；8010 实启后 `/api/health`、书目范围图谱、书目范围知识树和静态首页均返回 200。
-- **全库目录重解析（2026-08-24）**：10 本全部 `ready`，目录父子异常为 0；修复“第三部门/第三部”“第一部分”断词、层级断档、教材章名页眉重复、论文作者/页码/统计量误识别。完整结果与遗留问题见 `docs/TOC_AUDIT_20260824.md`；全库回退快照为 `backend/data/backups/before_full_toc_reparse_20260824_155547.db`。
+- **全库目录重解析（2026-08-24）**：10 本全部 `ready`，目录父子异常为 0；修复“第三部门/第三部”“第一部分”断词、层级断档、教材章名页眉重复、论文作者/页码/统计量误识别。全库回退快照为 `backend/data/backups/before_full_toc_reparse_20260824_155547.db`。
 
 ## 6. 安全与隐私（本轮重点加固）
 
@@ -262,7 +262,8 @@ git push origin main
 git tag v1.1.0 && git push --tags        # 触发 Release 自动打包
 
 # 关键文档
-docs/00-PRD.md  docs/01-architecture.md  docs/02-database.md  docs/03-api.md
-docs/04-roadmap.md  docs/experience-pdf-analysis.md  docs/产品文档.md
+docs/README.md  docs/产品文档.md  docs/PROJECT_HANDOVER.md
+docs/LIGHTWEIGHT_DOCUMENT_PIPELINE.md  docs/nature-literature-workflow.md
+docs/01-architecture.md  docs/02-database.md  docs/03-api.md
 PRIVACY.md  SECURITY.md  CHANGELOG.md  CONTRIBUTING.md  README.md
 ```

@@ -1,7 +1,7 @@
 # 01 · 技术架构设计
 
-- 版本：v0.4（DeepSeek 云端唯一 AI / 知识树 / 卡片已移除）
-- 配套文档：[00-PRD.md](00-PRD.md) / [02-database.md](02-database.md) / [03-api.md](03-api.md)
+- 状态：当前架构参考；具体实现以源码与自动化测试为准
+- 配套文档：[README.md](README.md) / [02-database.md](02-database.md) / [03-api.md](03-api.md)
 
 ---
 

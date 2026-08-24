@@ -75,19 +75,17 @@ npm run build      # 构建产物由后端自动托管
 | **架构加固** | ✅ 完成 | 数据层版本管理/损坏检测/自动备份、任务重试与断点恢复、知识事实层统一缓存、检索重排与引用核验、服务注册表解耦 |
 | 设置 | ✅ 完成 | DeepSeek API Key、flash/pro 模型切换、连接探测、数据健康状态 |
 
-**测试情况**：后端单元/架构测试 60/60 通过，前端安全单测 3/3 通过；Playwright 浏览器 UI 测试需启动服务后按需运行。
+**测试情况**：后端单元/架构测试 78/78 通过，前端单测 5/5 通过；Playwright 浏览器 UI 测试需启动服务后按需运行。
 
 ## 📚 文档
 
 | 文档 | 内容 |
 |---|---|
-| [docs/00-PRD.md](docs/00-PRD.md) | 产品需求 |
-| [docs/01-architecture.md](docs/01-architecture.md) | 技术架构 |
-| [docs/02-database.md](docs/02-database.md) | 数据库设计 |
-| [docs/03-api.md](docs/03-api.md) | API 接口 |
-| [docs/04-roadmap.md](docs/04-roadmap.md) | 开发路线图 |
+| [docs/README.md](docs/README.md) | 文档索引与维护规则 |
+| [docs/产品文档.md](docs/产品文档.md) | 当前产品定位、功能与视觉规范 |
 | [docs/PROJECT_HANDOVER.md](docs/PROJECT_HANDOVER.md) | 项目交接（含踩坑记录） |
-| [docs/experience-pdf-analysis.md](docs/experience-pdf-analysis.md) | 教材 PDF 分析方法论 |
+| [docs/LIGHTWEIGHT_DOCUMENT_PIPELINE.md](docs/LIGHTWEIGHT_DOCUMENT_PIPELINE.md) | 当前轻量文档解析管线 |
+| [docs/nature-literature-workflow.md](docs/nature-literature-workflow.md) | 文献研究与知识库工作流 |
 | [PRIVACY.md](PRIVACY.md) | 隐私说明（数据流向） |
 | [SECURITY.md](SECURITY.md) | 安全策略 |
 | [CHANGELOG.md](CHANGELOG.md) | 变更日志 |
