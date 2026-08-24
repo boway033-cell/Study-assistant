@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, plan, quizzes, settings, stats, study, tags
+from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, literature, plan, presentations, quizzes, settings, stats, study, tags
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import Base, engine
 from backend.app.services.rag import fts
@@ -44,7 +44,12 @@ def _migrate():
                 pass
             # 导入任务持久化表中的 running 任务复位为 pending（启动时自动恢复入队）
             try:
-                conn.execute(text("UPDATE import_tasks SET status='pending', message='服务重启，自动恢复' WHERE status='running'"))
+                conn.execute(text("UPDATE import_tasks SET status='pending', message='服务重启，自动恢复' WHERE status='running' AND name IN ('import','reimport')"))
+                conn.execute(text("UPDATE import_tasks SET status='failed', error='服务重启，请重新生成', message='任务已中断' WHERE status IN ('pending','running') AND name NOT IN ('import','reimport')"))
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                conn.execute(text("UPDATE presentation_decks SET status='failed', error_msg='服务重启，生成任务已中断，请重新生成' WHERE status IN ('pending','running')"))
             except Exception:  # noqa: BLE001
                 pass
             # book_deep 新增 chapter_hashes_json 列
@@ -52,6 +57,10 @@ def _migrate():
                 bd_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(book_deep)")).fetchall()]
                 if "chapter_hashes_json" not in bd_cols:
                     conn.execute(text("ALTER TABLE book_deep ADD COLUMN chapter_hashes_json TEXT"))
+                if "paper_card" not in bd_cols:
+                    conn.execute(text("ALTER TABLE book_deep ADD COLUMN paper_card TEXT"))
+                if "card_audit_json" not in bd_cols:
+                    conn.execute(text("ALTER TABLE book_deep ADD COLUMN card_audit_json TEXT"))
             except Exception:  # noqa: BLE001
                 pass
             # import_tasks 新增 retry_count 列
@@ -183,6 +192,8 @@ app.include_router(graph.router)
 app.include_router(plan.router)
 app.include_router(tags.router)
 app.include_router(draw.router)
+app.include_router(presentations.router)
+app.include_router(literature.router)
 
 
 @app.get("/api/health")

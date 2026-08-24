@@ -14,6 +14,7 @@ from backend.app.core.database import engine
 from backend.app.services.rag.chunker import tokenize, tokenize_query
 
 FTS_TABLE = "fts_books"
+REBUILD_BATCH_SIZE = 250
 
 _CREATE_SQL = f"""
 CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE} USING fts5(
@@ -56,18 +57,33 @@ def init_fts(force_rebuild: bool = False) -> None:
 
 
 def rebuild_all_from_chunks() -> None:
-    """从 chunks 表重建全部 FTS 索引（用于 schema 变更后恢复）。"""
+    """小批量流式重建 FTS，内存占用与文献库总大小解耦。"""
     from sqlalchemy import select as sa_select
     from backend.app.models import Chunk
-    with engine.connect() as conn:
-        rows = conn.execute(
+    with engine.connect().execution_options(stream_results=True) as source:
+        rows = source.execute(
             sa_select(Chunk.id, Chunk.book_id, Chunk.chapter_id,
                       Chunk.page_start, Chunk.page_end, Chunk.content)
             .order_by(Chunk.book_id, Chunk.chunk_index)
-        ).all()
-    for r in rows:
-        index_chunk(r.book_id, r.chapter_id, r.page_start, r.id,
-                    r.content, r.page_end)
+        )
+        while True:
+            batch = rows.fetchmany(REBUILD_BATCH_SIZE)
+            if not batch:
+                break
+            payload = []
+            for row in batch:
+                page = row.page_start if row.page_start is not None else 0
+                payload.append({
+                    "content": tokenize(row.content),
+                    "book_id": row.book_id,
+                    "chapter_id": row.chapter_id if row.chapter_id is not None else -1,
+                    "page": page,
+                    "page_end": row.page_end if row.page_end is not None else page,
+                    "chunk_id": row.id,
+                })
+            # 每批独立提交，限制 WAL 增长；只有全部完成后调用方才会写入新版本号。
+            with engine.begin() as target:
+                target.execute(text(_INSERT_SQL), payload)
 
 
 def index_chunk(book_id: int, chapter_id: int | None, page: int | None, chunk_id: int,

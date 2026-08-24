@@ -12,6 +12,11 @@
           </template>
 
           <div class="agent-input-section">
+            <el-select v-model="selectedBookIds" multiple collapse-tags filterable clearable
+              placeholder="选择一本或多本文献作为图表来源（可选）" style="width: 100%; margin-bottom: 10px">
+              <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
+            </el-select>
+            <div class="scope-tip">只读取所选书目；多书内容按来源边界组织，不会混入整个知识库。</div>
             <el-input
               v-model="description"
               type="textarea"
@@ -89,11 +94,15 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { drawGenerate, drawModify } from '../api'
+import { drawGenerate, drawModify, listBooks } from '../api'
+import { escapeXml, safeSvgColor } from '../utils/diagram'
+import { sanitizeSvg } from '../utils/markdown'
 
 const description = ref('')
+const books = ref([])
+const selectedBookIds = ref([])
 const model = ref('flash')
 const generating = ref(false)
 const modifying = ref(false)
@@ -114,7 +123,7 @@ const generate = async () => {
   generating.value = true
   chatHistory.value = [{ role: 'user', content: description.value }]
   try {
-    const resp = await drawGenerate({ description: description.value, model: model.value })
+    const resp = await drawGenerate({ description: description.value, model: model.value, book_ids: selectedBookIds.value })
     sessionId.value = resp.session_id
     currentXml.value = resp.xml
     chatHistory.value.push({ role: 'ai', content: '图表已生成！你可以在下方继续描述修改要求。' })
@@ -180,13 +189,17 @@ const clearDiagram = () => {
   description.value = ''
 }
 
+onMounted(async () => {
+  try { books.value = (await listBooks({ page_size: 100 })).items.filter(b => b.status === 'ready') } catch {}
+})
+
 // Parse draw.io mxGraph XML and render as SVG
 function xmlToSvg(xml) {
   try {
     const parser = new DOMParser()
     const doc = parser.parseFromString(xml, 'text/xml')
     const model = doc.querySelector('mxGraphModel')
-    if (!model) return '<div style="padding:20px;color:#999">XML 解析失败：未找到 mxGraphModel</div>'
+    if (!model) return ''
 
     const cells = model.querySelectorAll('mxCell')
     const nodes = []
@@ -293,19 +306,15 @@ function xmlToSvg(xml) {
     svgParts.unshift('<defs><marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#666" /></marker></defs>')
 
     svgParts.push('</svg>')
-    return svgParts.join('')
+    return sanitizeSvg(svgParts.join(''))
   } catch (e) {
-    return '<div style="padding:20px;color:#c00">XML 渲染错误：' + e.message + '</div>'
+    console.warn('XML 渲染错误', e)
+    return ''
   }
 }
 
 function getStyleColor(style, key, fallback) {
-  const match = style.match(new RegExp(key + '=([^;]+)'))
-  return match ? match[1] : fallback
-}
-
-function escapeXml(text) {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return safeSvgColor(style, key, fallback)
 }
 </script>
 

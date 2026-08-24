@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 from backend.app.core.database import get_db
 from backend.app.models import Book, BookDeep, Chapter, Chunk
 from backend.app.services.deep_analysis import (
+    audit_paper_card,
+    build_paper_card,
     build_section_texts,
     complete_with_ai,
     extract_titles_3level,
@@ -175,6 +177,16 @@ async def run_deep_analysis(record, book_id: int) -> dict:
         )
         md = to_markdown(book.title, toc, summaries, section_texts)
 
+        # 证据型 Paper Card：复用同一批来源块，不重复提取 PDF。
+        if use_ai:
+            update_progress(record, 0.92, "deep", "正在生成证据型阅读卡...")
+            all_chunks = db.scalars(
+                select(Chunk).where(Chunk.book_id == book_id).order_by(Chunk.chunk_index)
+            ).all()
+            card = await build_paper_card(provider, book.title, toc, all_chunks)
+            deep.paper_card = card
+            deep.card_audit_json = json.dumps(audit_paper_card(card), ensure_ascii=False)
+
         clean_toc = [{k: v for k, v in t.items() if k != "parent"} for t in toc]
         deep.toc_json = json.dumps(clean_toc, ensure_ascii=False)
         deep.summaries_json = json.dumps(summaries, ensure_ascii=False)
@@ -183,7 +195,8 @@ async def run_deep_analysis(record, book_id: int) -> dict:
         db.commit()
         update_progress(record, 1.0, "deep", "完成")
         return {"toc": len(toc), "chapters": verify["chapters"], "sections": verify["sections"],
-                "summaries": len(summaries), "markdown_chars": len(md), "ai": use_ai}
+                "summaries": len(summaries), "markdown_chars": len(md),
+                "paper_card": bool(deep.paper_card), "ai": use_ai}
     except Exception as e:  # noqa: BLE001
         db.rollback()
         deep = db.scalar(select(BookDeep).where(BookDeep.book_id == book_id))
@@ -206,7 +219,7 @@ def deep_analyze(book_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "书籍不存在")
     if book.status != "ready":
         raise HTTPException(409, "书籍尚未解析完成")
-    record = submit("deep", lambda rec: run_deep_analysis(rec, book_id))
+    record = submit("deep", lambda rec: run_deep_analysis(rec, book_id), book_id=book_id)
     return {"task_id": record.id, "status": "running"}
 
 
@@ -227,6 +240,8 @@ def get_deep(book_id: int, db: Session = Depends(get_db)):
     return {
         "status": deep.status, "toc": toc, "summaries": summaries,
         "markdown": deep.markdown or "", "error_msg": deep.error_msg,
+        "paper_card": deep.paper_card or "",
+        "card_audit": json.loads(deep.card_audit_json) if deep.card_audit_json else None,
         "updated_at": deep.updated_at.isoformat() if deep.updated_at else None,
     }
 

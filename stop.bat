@@ -1,2 +1,2 @@
 @echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "D:\86153\Documents\study-assistant\stopper.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stopper.ps1"

@@ -23,7 +23,7 @@ SYSTEM_PROMPT = (
 
 class DrawGenerateReq(BaseModel):
     description: str
-    book_id: int | None = None
+    book_ids: list[int] = []
     model: str | None = None
 
 class DrawModifyReq(BaseModel):
@@ -46,15 +46,25 @@ async def generate_diagram(req: DrawGenerateReq, db: Session = Depends(get_db)):
         cfg = {**cfg, "deepseek_model": req.model}
     provider = LLMRouter.get("auto", cfg)
     context = ''
-    if req.book_id:
-        try:
-            from backend.app.services.knowledge_base import get_book_digest
-            digest = get_book_digest(db, req.book_id)
-            kws = ", ".join(digest.get("keywords", [])[:15])
-            chs = ", ".join(c["title"] for c in digest.get("chapters", [])[:10])
-            context = f"\nBook: {digest.get('title','')} keywords: {kws}\nchapters: {chs}"
-        except Exception:
-            pass
+    scope = sorted({int(x) for x in req.book_ids if int(x) > 0})
+    if scope:
+        from backend.app.services.knowledge_base import get_book_digest
+        source_blocks = []
+        for book_id in scope[:8]:
+            try:
+                digest = get_book_digest(db, book_id)
+                kws = ", ".join(digest.get("keywords", [])[:12])
+                chs = ", ".join(c["title"] for c in digest.get("chapters", [])[:12])
+                source_blocks.append(
+                    f"[SOURCE BOOK {book_id}] {digest.get('title','')}\nkeywords: {kws}\nchapters: {chs}"
+                )
+            except Exception:
+                continue
+        context = (
+            "\nUse only the following explicitly selected books as factual source material. "
+            "Keep each book's claims distinguishable; do not import knowledge from unselected books.\n"
+            + "\n\n".join(source_blocks)
+        )
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Please draw: {req.description}{context}"},
@@ -72,6 +82,7 @@ async def generate_diagram(req: DrawGenerateReq, db: Session = Depends(get_db)):
     _draw_sessions[sid] = {
         "xml": xml,
         "history": [{"role": "user", "content": req.description}],
+        "book_ids": scope,
         "created_at": datetime.now().isoformat(),
     }
     return DrawSessionResp(session_id=sid, xml=xml, message="Diagram generated")
@@ -109,7 +120,8 @@ def list_draw_sessions():
     """List current drawing sessions."""
     return {
         "sessions": [
-            {"id": sid, "created_at": s["created_at"], "preview": s["xml"][:200]}
+            {"id": sid, "created_at": s["created_at"], "preview": s["xml"][:200],
+             "book_ids": s.get("book_ids", [])}
             for sid, s in _draw_sessions.items()
         ]
     }
@@ -121,7 +133,8 @@ def get_draw_session(session_id: str):
     sess = _draw_sessions.get(session_id)
     if not sess:
         raise HTTPException(404, "Session not found")
-    return {"session_id": session_id, "xml": sess["xml"], "history": sess.get("history", [])}
+    return {"session_id": session_id, "xml": sess["xml"], "history": sess.get("history", []),
+            "book_ids": sess.get("book_ids", [])}
 
 
 @router.delete("/sessions/{session_id}", status_code=204)

@@ -54,6 +54,56 @@ class LayoutResult:
         return "\n".join(parts).strip()
 
 
+def analyze_structured(document) -> LayoutResult:
+    """直接消费统一结构化文档，避免导入阶段为了版面证据再次扫描整本 PDF。"""
+    sizes = [
+        round(block.font_size, 1)
+        for page in document.pages for block in page.blocks
+        if block.font_size and block.font_size > 0
+    ]
+    body_size = Counter(sizes).most_common(1)[0][0] if sizes else 12.0
+    result = LayoutResult(total_pages=len(document.pages), body_size=body_size)
+    all_blocks_by_text: dict[str, list[BlockInfo]] = {}
+    for page in document.pages:
+        converted: list[BlockInfo] = []
+        for block in page.blocks:
+            size = float(block.font_size or body_size)
+            is_bold = bool((block.font_weight or 400) >= 600)
+            btype = _classify(
+                block.text, size, is_bold, False, block.bbox, page.height, body_size
+            )
+            info = BlockInfo(
+                text=block.text, size=size, is_bold=is_bold, is_italic=False,
+                bbox=block.bbox, block_type=btype, page=page.page,
+                page_height=page.height,
+            )
+            converted.append(info)
+            all_blocks_by_text.setdefault(block.text, []).append(info)
+        result.pages.append(converted)
+
+    for text, blocks in all_blocks_by_text.items():
+        pages = {block.page for block in blocks}
+        if len(pages) < 3 or len(text) > 80:
+            continue
+        top = sum(1 for block in blocks if block.bbox[1] < block.page_height * _HEADER_RATIO)
+        bottom = sum(
+            1 for block in blocks
+            if block.bbox[3] > block.page_height * (1 - _FOOTER_RATIO)
+        )
+        if top >= 0.8 * len(blocks):
+            result.header_lines.add(text)
+            for block in blocks:
+                block.block_type = "header"
+        elif bottom >= 0.8 * len(blocks):
+            result.footer_lines.add(text)
+            for block in blocks:
+                block.block_type = "footer"
+    result.title_lines = {
+        block.text for page in result.pages for block in page if block.block_type == "title"
+    }
+    return result
+
+
 def analyze_pdf(path: str | Path) -> LayoutResult:
     """分析 PDF 版面。"""
     import fitz  # PyMuPDF

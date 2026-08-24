@@ -10,6 +10,7 @@ python-dotenv==1.2.2
 
 # 文档解析
 pymupdf==1.28.2
+pdftext==0.7.1
 python-docx==1.2.0
 python-pptx==1.0.2
 
@@ -17,7 +18,8 @@ python-pptx==1.0.2
 jieba==0.42.1
 
 # OCR（扫描版 PDF 识别；rapidocr 中文效果好，纯 pip，无需系统依赖）
-rapidocr-onnxruntime==1.2.3
+rapidocr==3.9.2
+onnxruntime==1.28.0
 
 # 云端 AI 客户端
 httpx==0.28.1

@@ -110,3 +110,61 @@ def test_ocr_pdf_progress_signature():
     sig = inspect.signature(ocr_pdf)
     assert "on_progress" in sig.parameters
     assert sig.parameters["on_progress"].default is None
+
+
+def test_archive_source_map_contract():
+    from types import SimpleNamespace
+    import json
+    from backend.app.services.archive import build_source_map
+
+    chunks = [
+        SimpleNamespace(id=9, book_id=3, chapter_id=4, page_start=7, page_end=8),
+        SimpleNamespace(id=10, book_id=3, chapter_id=None, page_start=None, page_end=None),
+    ]
+    source_map = json.loads(build_source_map(3, chunks, {4: "Methods"}))
+    assert source_map["locator_mode"] == "page-grounded"
+    assert source_map["blocks"][0]["source_id"] == "B3-C9"
+    assert source_map["blocks"][0]["chapter_title"] == "Methods"
+    assert source_map["blocks"][1]["located"] is False
+
+
+def test_paper_card_audit_contract():
+    from backend.app.services.deep_analysis import audit_paper_card
+
+    card = "\n".join(f"## {i:02d} Section\nClaim [B1-C{i}]" for i in range(1, 17))
+    audit = audit_paper_card(card)
+    assert audit["ok"] is True
+    assert audit["missing_sections"] == []
+    assert audit["source_reference_count"] == 16
+
+
+def test_archive_api_roundtrip():
+    from fastapi.testclient import TestClient
+    from backend.app.core.database import SessionLocal
+    from backend.app.main import app
+    from backend.app.models import Book
+
+    db = SessionLocal()
+    try:
+        book = Book(title="Archive API Test", file_path="archive-test.pdf",
+                    file_type="pdf", status="ready")
+        db.add(book)
+        db.commit()
+        db.refresh(book)
+        book_id = book.id
+    finally:
+        db.close()
+
+    with TestClient(app) as client:
+        detail = client.get(f"/api/books/{book_id}")
+        assert detail.status_code == 200
+        assert detail.json()["archive"]["reading_status"] == "unread"
+        updated = client.patch(
+            f"/api/books/{book_id}/archive",
+            json={"authors": "A. Author", "doi": "10.1000/test", "reading_status": "reading",
+                  "favorite": True, "progress_page": 4},
+        )
+        assert updated.status_code == 200
+        payload = updated.json()
+        assert payload["favorite"] is True
+        assert payload["progress_page"] == 4

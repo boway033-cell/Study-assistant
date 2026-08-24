@@ -43,6 +43,17 @@ class TestTextClean:
         result = merge_broken_chinese(text)
         assert "拉格朗日中值定理指出若函数连续" in result
 
+    def test_reflow_does_not_glue_normal_english_words(self):
+        from backend.app.services.analyzer.textclean import reflow_paragraphs
+        assert "This is a paper" in reflow_paragraphs("This is a\npaper")
+
+    def test_reflow_keeps_chinese_heading_boundaries(self):
+        from backend.app.services.analyzer.textclean import reflow_paragraphs
+        text = "一、研究背景\n这是第一行\n继续说明。\n\n（二）研究方法"
+        out = reflow_paragraphs(text)
+        assert "一、研究背景\n\n这是第一行继续说明。" in out
+        assert "\n\n（二）研究方法" in out
+
 
 # ---------- 关键信息提取 ----------
 class TestKeyInfo:

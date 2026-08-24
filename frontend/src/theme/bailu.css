@@ -66,6 +66,9 @@
   --bailu-bg-gradient: linear-gradient(180deg, rgba(46,64,66,0.92) 0%, rgba(42,59,61,0.9) 100%);
   --bailu-header-bg: rgba(46, 64, 66, 0.85);
   --bailu-card-shadow: 0 6px 24px rgba(20, 30, 31, 0.35);
+  --study-card-border: #e5e7eb;     /* Tailwind gray-200 */
+  --study-shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.06);
+  --study-shadow-hover: 0 4px 12px rgba(15, 23, 42, 0.09);
   --bailu-text-deep: #F5F0E8;      /* 侧边栏/页头浅色标题 */
   --bailu-accent: #C2A285;          /* 侧边栏强调（暖赭） */
   --bailu-main-text: #333333;       /* 主内容深色文字 */
@@ -78,16 +81,33 @@ body {
   font-family: "Microsoft YaHei", "PingFang SC", "STSong", "SimSun", serif;
 }
 
-/* —— 纸质感卡片（极细微边框 + 柔和阴影） —— */
+/* —— 纸质感卡片（border-gray-200 + shadow-sm） —— */
+:where(
+  .el-card,
+  .agent-card,
+  .chat-card,
+  .kt-card,
+  .mobile-paper-card,
+  .pr-ann-card,
+  .preview-card,
+  .selection-card,
+  .settings-card,
+  .setup-card,
+  .side-card,
+  .source-card,
+  .task-card,
+  .task-item
+) {
+  border: 1px solid var(--study-card-border) !important;
+  box-shadow: var(--study-shadow-sm) !important;
+}
 .el-card {
   border-radius: 12px;
-  border: 1px solid #e5e0d8;
   background: var(--el-bg-color);
-  box-shadow: 0 1px 3px rgba(20, 30, 31, 0.08), 0 1px 2px rgba(20, 30, 31, 0.04);
-  transition: box-shadow 0.25s ease, transform 0.25s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 .el-card.is-hover-shadow:hover, .el-card:hover {
-  box-shadow: 0 4px 16px rgba(20, 30, 31, 0.12);
+  box-shadow: var(--study-shadow-hover) !important;
 }
 .el-card__header {
   border-bottom: 1px solid var(--el-border-color-lighter);
@@ -135,21 +155,48 @@ body {
 .el-menu-item:hover { background: rgba(245, 240, 232, 0.1); color: #F5F0E8; }
 
 /* —— 按钮（hover 反馈动画） —— */
-.el-button {
+.el-button,
+button {
   border-radius: 10px;
-  transition: all 0.2s ease;
+  transition:
+    transform 0.16s ease,
+    box-shadow 0.16s ease,
+    border-color 0.16s ease,
+    background-color 0.16s ease,
+    color 0.16s ease;
 }
-.el-button:hover {
+.el-button:not(.is-disabled):hover,
+button:not(:disabled):hover {
   transform: translateY(-1px);
 }
-.el-button:active {
+.el-button:not(.is-disabled):active,
+button:not(:disabled):active {
   transform: translateY(0) scale(0.97);
+  transition-duration: 0.08s;
+}
+.el-button.is-disabled,
+button:disabled {
+  transform: none;
 }
 .el-button--primary {
   box-shadow: 0 3px 12px rgba(139, 90, 43, 0.3);
 }
 .el-button--primary:hover {
   box-shadow: 0 6px 18px rgba(139, 90, 43, 0.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .el-card,
+  .el-button,
+  button {
+    transition-duration: 0.01ms !important;
+  }
+  .el-button:hover,
+  .el-button:active,
+  button:hover,
+  button:active {
+    transform: none !important;
+  }
 }
 .el-radio-button__inner,
 .el-input__wrapper,

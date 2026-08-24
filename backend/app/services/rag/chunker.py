@@ -26,10 +26,15 @@ def build_chapters(toc: list[TocItem], total_pages: int) -> list[dict]:
     chapters: list[dict] = []
     stack: list[dict] = []  # (level, id_in_list)
 
-    # 归一化 level：若首项 level>1，整体下移
+    # 归一化 level：若所有标题都从更深层开始，整体下移。随后逐段压实层级，
+    # 防止 OCR 漏掉“节”后出现 L1→L3/L4，生成无父级根节点。
     min_level = min(t.level for t in toc)
     for i, t in enumerate(toc):
         level = max(1, t.level - min_level + 1)
+        if not stack:
+            level = 1
+        else:
+            level = min(level, stack[-1]["level"] + 1)
         node = {
             "title": t.title,
             "level": level,
@@ -144,23 +149,35 @@ def _make_chunk_def(chapter_id: int | None, buf: list[str], buf_pages: list[int]
 
 
 def build_chapter_pages(chapters: list[dict], total_pages: int) -> list[tuple[int | None, int, int]]:
-    """章节区间列表；无章节覆盖的页区间归为 chapter_id=None。"""
-    intervals: list[tuple[int | None, int, int]] = []
-    for i, ch in enumerate(chapters):
-        intervals.append((i, ch["start_page"], ch["end_page"]))
+    """生成互不重叠的页区间，每页只归属当页最后出现的最深标题。
 
-    # 补漏：起始页之前 / 章节之间的空白页
-    covered = sorted(intervals, key=lambda x: x[1])
-    cursor = 1
-    merged: list[tuple[int | None, int, int]] = []
-    for ch_id, s, e in covered:
-        if cursor < s:
-            merged.append((None, cursor, s - 1))
-        merged.append((ch_id, s, e))
-        cursor = max(cursor, e + 1)
-    if cursor <= total_pages:
-        merged.append((None, cursor, total_pages))
-    return merged
+    旧实现把父章、子节和小标题各自的完整页区间都送去切片，同一页会被写入多次，
+    造成索引膨胀、AI 重复总结和内存浪费。没有行坐标时，选择当页最后一个标题是
+    最保守的单一归属；Markdown 的行级切分由 deep_analysis 单独处理。
+    """
+    if total_pages <= 0:
+        return []
+    ordered = sorted(enumerate(chapters), key=lambda x: (
+        int(x[1].get("start_page") or 1), int(x[1].get("order_index") or x[0])
+    ))
+    owners: list[int | None] = [None] * total_pages
+    current: int | None = None
+    pos = 0
+    for page in range(1, total_pages + 1):
+        while pos < len(ordered) and int(ordered[pos][1].get("start_page") or 1) <= page:
+            current = ordered[pos][0]
+            pos += 1
+        owners[page - 1] = current
+
+    intervals: list[tuple[int | None, int, int]] = []
+    start = 1
+    owner = owners[0]
+    for page in range(2, total_pages + 1):
+        if owners[page - 1] != owner:
+            intervals.append((owner, start, page - 1))
+            start, owner = page, owners[page - 1]
+    intervals.append((owner, start, total_pages))
+    return intervals
 
 
 # ---------- 中文分词（jieba） ----------

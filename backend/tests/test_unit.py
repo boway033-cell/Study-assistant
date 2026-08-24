@@ -43,6 +43,36 @@ class TestParser:
         assert chapters[0]["start_page"] == 1
         assert chapters[0]["end_page"] == 100
 
+    def test_build_chapters_compacts_missing_intermediate_levels(self):
+        from backend.app.services.parser import TocItem
+        from backend.app.services.rag.chunker import build_chapters
+
+        toc = [
+            TocItem("第一章", 1, 1),
+            TocItem("一、概念", 3, 2),
+            TocItem("（一）定义", 4, 2),
+            TocItem("第二章", 1, 5),
+        ]
+        chapters = build_chapters(toc, total_pages=8)
+        assert [item["level"] for item in chapters] == [1, 2, 3, 1]
+        assert chapters[1]["parent_id"] == chapters[0]["order_index"]
+        assert chapters[2]["parent_id"] == chapters[1]["order_index"]
+
+    def test_nested_chapter_page_ranges_never_overlap(self):
+        from backend.app.services.rag.chunker import build_chapter_pages
+
+        chapters = [
+            {"start_page": 1, "end_page": 10, "order_index": 0, "level": 1},
+            {"start_page": 1, "end_page": 5, "order_index": 1, "level": 2},
+            {"start_page": 1, "end_page": 2, "order_index": 2, "level": 3},
+            {"start_page": 3, "end_page": 5, "order_index": 3, "level": 3},
+            {"start_page": 6, "end_page": 10, "order_index": 4, "level": 2},
+        ]
+        intervals = build_chapter_pages(chapters, 10)
+        covered = [page for _, start, end in intervals for page in range(start, end + 1)]
+        assert covered == list(range(1, 11))
+        assert len(covered) == len(set(covered))
+
     def test_split_pages_into_chunks(self):
         from backend.app.services.rag.chunker import split_pages_into_chunks
 

@@ -16,11 +16,17 @@ from sqlalchemy import select
 
 from backend.app.core.config import settings
 from backend.app.core.database import SessionLocal
-from backend.app.models import Book, BookAnalysis, Chapter, Chunk
+from backend.app.models import Book, BookAnalysis, Chapter, Chunk, PaperProfile
 from backend.app.services.rag.chunker import build_chapter_pages, build_chapters, split_pages_into_chunks
 from backend.app.services.rag.fts import delete_book_index, index_chunk
 from backend.app.services.parser import ParseError, parse_document
-from backend.app.services.parser.ocr import detect_scanned, has_ocr_engine, ocr_pdf
+from backend.app.services.parser.ocr import (
+    detect_scanned,
+    has_ocr_engine,
+    ocr_pdf,
+    pages_requiring_ocr,
+    release_ocr_engine,
+)
 from backend.app.worker.tasks import TaskRecord, update_progress
 
 
@@ -56,8 +62,13 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         result = parse_document(file_path)
 
         # 1b. OCR：扫描版检测（仅 PDF；docx/pptx 必有文本层，跳过避免误判）
-        if book.file_type == "pdf" and result.pages and detect_scanned(result.pages):
-            if not has_ocr_engine():
+        if book.file_type == "pdf" and result.pages:
+            weak_pages = set(pages_requiring_ocr(
+                result.pages, threshold=settings.ocr_page_threshold
+            ))
+            whole_document_scanned = detect_scanned(result.pages)
+            # 混合 PDF 只补识别弱文本页；纯扫描件没有 OCR 时才阻断导入。
+            if whole_document_scanned and not has_ocr_engine():
                 # 无 OCR 引擎：标记 needs_ocr（非 failed），保留原文件供阅读器直接查看
                 book.status = "needs_ocr"
                 book.error_msg = (
@@ -68,15 +79,35 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                 db.commit()
                 return {"book_id": book.id, "status": "needs_ocr",
                         "message": "扫描版 PDF，需安装 OCR 引擎"}
-            update_progress(record, 0.15, "ocr", "检测到扫描版，正在 OCR 识别...")
-            # OCR 逐页回调：页级进度细化（0.15 → 0.30 区间），支持断点续跑（缓存命中）
-            def _ocr_progress(page_no: int, total: int, cached: bool) -> None:
-                frac = 0.15 + 0.15 * (page_no / max(total, 1))
-                tag = "（命中缓存）" if cached else ""
-                update_progress(record, min(frac, 0.30), "ocr",
-                                f"OCR 识别中 {page_no}/{total}{tag}")
-            result.pages = ocr_pdf(file_path, on_progress=_ocr_progress)
-            result.total_pages = len(result.pages)
+            if weak_pages and has_ocr_engine():
+                update_progress(record, 0.15, "ocr", "检测到弱文本页，正在按页 OCR...")
+                # OCR 逐页回调：页级进度细化（0.15 → 0.30），支持断点续跑。
+                completed = 0
+                weak_total = len(weak_pages)
+
+                def _ocr_progress(page_no: int, total: int, cached: bool) -> None:
+                    nonlocal completed
+                    completed += 1
+                    frac = 0.15 + 0.15 * (completed / max(weak_total, 1))
+                    tag = "（命中缓存）" if cached else ""
+                    update_progress(record, min(frac, 0.30), "ocr",
+                                    f"OCR 识别页 {completed}/{weak_total}（PDF 第 {page_no} 页）{tag}")
+
+                try:
+                    result.pages = ocr_pdf(
+                        file_path,
+                        on_progress=_ocr_progress,
+                        page_numbers=weak_pages,
+                        base_pages=result.pages,
+                    )
+                finally:
+                    release_ocr_engine()
+                result.total_pages = len(result.pages)
+                if result.structured is not None:
+                    from backend.app.services.parser.structured import replace_pages_with_ocr
+                    result.structured = replace_pages_with_ocr(
+                        result.structured, result.pages, weak_pages
+                    )
 
         if not result.pages or all(not p.strip() for p in result.pages):
             raise ParseError("未能从文档中提取到文本（可能是扫描版 PDF）")
@@ -89,10 +120,43 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         if book.file_type == "pdf":
             update_progress(record, 0.25, "layout", "正在分析版面结构...")
             try:
-                from backend.app.services.analyzer.layout import analyze_pdf
-                layout = analyze_pdf(file_path)
+                from backend.app.services.analyzer.layout import analyze_pdf, analyze_structured
+                if settings.layout_backend in {"ppstructure", "pp-doclayout-m"}:
+                    from backend.app.services.analyzer.pp_doclayout import (
+                        LayoutEnhancementUnavailable,
+                        apply_layout_roles,
+                        run_pp_doclayout,
+                    )
+                    if result.structured is not None:
+                        update_progress(record, 0.25, "layout", "正在按需启动 PP-DocLayout-M...")
+                        try:
+                            payloads = run_pp_doclayout(
+                                file_path,
+                                settings.structured_dir / "pp-layout" / (book.file_hash or str(book.id)),
+                            )
+                            result.structured = apply_layout_roles(result.structured, payloads)
+                        except LayoutEnhancementUnavailable as exc:
+                            update_progress(
+                                record, 0.25, "layout",
+                                f"版面增强暂不可用，已回退轻量分析：{exc}",
+                            )
+                layout = (
+                    analyze_structured(result.structured)
+                    if result.structured is not None else analyze_pdf(file_path)
+                )
             except Exception:  # noqa: BLE001
                 layout = None  # 版面分析失败不阻塞导入
+
+        # 结构证据按文件哈希原子保存；Markdown、目录和后续修复均可重复派生。
+        if result.structured is not None:
+            try:
+                structured_path = settings.structured_dir / f"{book.file_hash or book.id}.json"
+                result.structured.save_json(structured_path)
+            except OSError:
+                pass
+            finally:
+                # 版面结果和证据 JSON 已落盘，后续阶段不再常驻完整坐标树。
+                result.structured = None
 
         # 3. 文本清洗（去页眉页脚、去重、修复残缺）
         update_progress(record, 0.32, "cleaning", "正在清洗文本...")
@@ -103,38 +167,53 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         cleaned_pages = [
             clean_text(p, header_lines, footer_lines) for p in result.pages
         ]
+        result.pages = []  # 清洗完成后释放重复的原始页文本副本。
+
+        # 3b. 文献归档元数据（仅本地文件/前几页，不联网）
+        try:
+            from backend.app.services.archive import extract_metadata
+            meta = extract_metadata(file_path, cleaned_pages)
+            profile = db.get(PaperProfile, book.id) or PaperProfile(book_id=book.id)
+            for key in ("authors", "journal", "published_year", "doi", "arxiv_id",
+                        "language", "access_route", "provenance_json"):
+                value = meta.get(key)
+                if value is not None and not getattr(profile, key, None):
+                    setattr(profile, key, value)
+            db.add(profile)
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
 
         # 4. 关键信息提取
         update_progress(record, 0.40, "keyinfo", "正在提取关键信息...")
         from backend.app.services.analyzer.keyinfo import analyze_book_text
         keyinfo = analyze_book_text(cleaned_pages)
 
-        # 5. 章节树（目录书签 → 启发式「第X章」→ 版面标题块 → LLM 手动兜底）
+        # 5. 章节树：书签 + 全文编号标题 + 版面标题块融合。
+        # 书签提供稳定骨架，文本/版面来源补足“一、（一）、1.1”等子标题。
         update_progress(record, 0.5, "chapters", "正在构建章节树...")
-        if not result.toc:
-            # 5a. 启发式：扫描「第X章/第X节」标题（零成本）
-            update_progress(record, 0.5, "chapters", "未检测到书签目录，正在启发式提取章节...")
-            try:
-                from backend.app.services.rag.toc_heuristic import extract_toc_heuristic
-                heu_toc = extract_toc_heuristic(cleaned_pages)
-                if heu_toc:
-                    from backend.app.services.parser import TocItem
-                    result.toc = [TocItem(title=t["title"], level=t["level"], page=t["page"])
-                                  for t in heu_toc]
-            except Exception:  # noqa: BLE001
-                pass
-
-        # 5b. 版面分析标题块作为第二来源（当书签和正则都失败时）
-        if not result.toc and layout:
-            try:
-                from backend.app.services.rag.toc_heuristic import extract_toc_from_layout
-                layout_toc = extract_toc_from_layout(layout)
-                if layout_toc:
-                    from backend.app.services.parser import TocItem
-                    result.toc = [TocItem(title=t["title"], level=t["level"], page=t["page"])
-                                  for t in layout_toc]
-            except Exception:  # noqa: BLE001
-                pass
+        try:
+            from backend.app.services.parser import TocItem
+            from backend.app.services.rag.toc_heuristic import (
+                extract_toc_from_layout,
+                extract_toc_heuristic,
+                merge_toc_sources,
+            )
+            bookmark_toc = [
+                {"title": t.title, "level": t.level, "page": t.page}
+                for t in result.toc
+            ]
+            text_toc = extract_toc_heuristic(cleaned_pages)
+            layout_toc = extract_toc_from_layout(layout) if layout else []
+            merged_toc = merge_toc_sources(bookmark_toc, text_toc, layout_toc)
+            if merged_toc:
+                result.toc = [
+                    TocItem(title=t["title"], level=t["level"], page=t["page"])
+                    for t in merged_toc
+                ]
+        except Exception:  # noqa: BLE001
+            # 任一增强来源失败时仍保留原始书签，导入不被阻塞。
+            pass
         # 注：目录提取不再在导入时自动调用云端 LLM（隐私：教材正文不静默上传）。
         # 启发式+版面未识别出目录时，用户可在「深度分析」中手动触发 LLM 补全。
 
@@ -198,6 +277,18 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
             if i % 20 == 0:
                 update_progress(record, 0.75 + 0.15 * (i + 1) / total, "indexing",
                                 f"索引中 {i + 1}/{total}")
+
+        # 每个文本块的稳定来源映射，供精读、引用核验和阅读卡复用。
+        try:
+            from backend.app.services.archive import build_source_map
+            profile = db.get(PaperProfile, book.id) or PaperProfile(book_id=book.id)
+            profile.source_map_json = build_source_map(
+                book.id, chunk_rows, {c.id: c.title for c in chapters}
+            )
+            db.add(profile)
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
 
         # 7b. 向量化（可选，settings.vector_search 开启时）
         from backend.app.services.rag import vector

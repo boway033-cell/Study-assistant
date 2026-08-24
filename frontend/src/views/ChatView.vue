@@ -94,13 +94,14 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { listBooks, chatStream, chatHistory, getChunkOriginal, getBook, bookFileUrl } from '../api'
 import PdfReader from '../components/PdfReader.vue'
 import { sanitizeHtml } from '../utils/markdown'
 
 const router = useRouter()
+const route = useRoute()
 const books = ref([])
 const bookId = ref(null)
 const model = ref('flash')
@@ -250,8 +251,10 @@ const formatTime = (t) => (t || '').replace('T', ' ').slice(5, 16)
 
 onMounted(async () => {
   try {
-    const resp = await listBooks({ page_size: 100 })
-    books.value = resp.items.filter((b) => b.status === 'ready')
+      const resp = await listBooks({ page_size: 100 })
+      books.value = resp.items.filter((b) => b.status === 'ready')
+      const requestedBook = Number(route.query.bookId)
+      if (requestedBook && books.value.some((book) => book.id === requestedBook)) bookId.value = requestedBook
   } catch { /* ignore */ }
   loadHistory()
 })

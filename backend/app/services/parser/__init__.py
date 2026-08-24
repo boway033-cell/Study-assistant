@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 @dataclass
@@ -26,6 +27,7 @@ class ParseResult:
     pages: list[str] = field(default_factory=list)   # pages[i] = 第 i+1 页文本
     toc: list[TocItem] = field(default_factory=list)  # 有序目录
     total_pages: int = 0
+    structured: Any | None = None  # StructuredDocument；Any 避免非 PDF 路径加载可选依赖
 
 
 class ParseError(Exception):
@@ -52,8 +54,19 @@ def _parse_pdf(p: Path) -> ParseResult:
     except ImportError as e:  # pragma: no cover
         raise ParseError("PyMuPDF 未安装，请运行 pip install pymupdf") from e
 
+    from backend.app.services.parser.structured import extract_structured_pdf
+
+    from backend.app.core.config import settings
+
+    structured = extract_structured_pdf(
+        p, prefer_pdftext=settings.pdf_text_backend.lower() == "pdftext"
+    )
     doc = fitz.open(p)
-    result = ParseResult(total_pages=doc.page_count)
+    result = ParseResult(
+        total_pages=doc.page_count,
+        pages=structured.page_texts(),
+        structured=structured,
+    )
 
     # 1. 书签目录
     raw_toc = doc.get_toc(simple=True)  # [(level, title, page), ...]
@@ -61,10 +74,6 @@ def _parse_pdf(p: Path) -> ParseResult:
         title = title.strip()
         if title:
             result.toc.append(TocItem(title=title, level=level, page=page))
-
-    # 2. 逐页文本
-    for page in doc:
-        result.pages.append(page.get_text("text"))
 
     doc.close()
     return result

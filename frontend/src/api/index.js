@@ -30,6 +30,7 @@ export const deleteBook = (id) => http.delete(`/books/${id}`)
 export const renameBook = (id, title) => http.patch(`/books/${id}`, { title })
 export const searchBooks = (params) => http.get('/search', { params })
 export const getTask = (id) => http.get(`/tasks/${id}`)
+export const listTasks = (params = {}) => http.get('/tasks', { params })
 
 // ===== 原文定位 =====
 export const getChunkOriginal = (bookId, chunkId) => http.get(`/books/${bookId}/chunk/${chunkId}`)
@@ -37,6 +38,9 @@ export const getPageText = (bookId, pageNo) => http.get(`/books/${bookId}/page/$
 export const bookFileUrl = (bookId) => `/api/books/${bookId}/file`
 export const getBookDocument = (bookId) => http.get(`/books/${bookId}/document`)
 export const renameChapter = (id, title) => http.patch(`/chapters/${id}`, { title })
+export const getArchiveProfile = (bookId) => http.get(`/books/${bookId}/archive`)
+export const updateArchiveProfile = (bookId, data) => http.patch(`/books/${bookId}/archive`, data)
+export const getSourceMap = (bookId) => http.get(`/books/${bookId}/source-map`)
 
 // ===== 问答 =====
 export const chatStream = async (body, onEvent) => {
@@ -101,7 +105,10 @@ export const getActivity = (days) => http.get('/stats/activity', { params: { day
 export const getWeakness = () => http.get('/stats/weakness')
 
 // ===== 知识树 =====
-export const getKnowledgeTree = () => http.get('/knowledge/tree')
+const repeatedParams = { indexes: null }
+export const getKnowledgeTree = (bookIds = []) => http.get('/knowledge/tree', {
+  params: bookIds.length ? { book_ids: bookIds } : {}, paramsSerializer: repeatedParams,
+})
 export const createKnowledgeNode = (data) => http.post('/knowledge/nodes', data)
 export const updateKnowledgeNode = (id, data) => http.patch(`/knowledge/nodes/${id}`, data)
 export const deleteKnowledgeNode = (id) => http.delete(`/knowledge/nodes/${id}`)
@@ -136,9 +143,25 @@ export const getSettings = () => http.get('/settings')
 export const updateSettings = (data) => http.put('/settings', data)
 export const probeSettings = () => http.get('/settings/probe')
 
+// ===== 文献汇报与合法全文获取 =====
+export const generatePresentation = (data) => http.post('/presentations/generate', data)
+export const listPresentations = (bookId) => http.get('/presentations', { params: bookId ? { book_id: bookId } : {} })
+export const getPresentation = (id) => http.get(`/presentations/${id}`)
+export const presentationDownloadUrl = (id) => `/api/presentations/${id}/download`
+export const getLiteratureConfig = () => http.get('/literature/config')
+export const updateLiteratureConfig = (data) => http.put('/literature/config', data)
+export const resolveLiterature = (data) => http.post('/literature/resolve', data, { timeout: 90000 })
+export const importOpenAccess = (data) => http.post('/literature/import', data, { timeout: 180000 })
+export const openLibraryHandoff = (data) => http.post('/literature/library-handoff', data)
+export const listLiteratureAttempts = () => http.get('/literature/attempts')
+
 // ===== 知识图谱 =====
-export const getGraph = () => http.get('/graph')
-export const getConceptSources = (name) => http.get(`/graph/concept/${encodeURIComponent(name)}/sources`)
+export const getGraph = (bookIds) => http.get('/graph', {
+  params: { book_ids: bookIds }, paramsSerializer: repeatedParams,
+})
+export const getConceptSources = (name, bookIds) => http.get(`/graph/concept/${encodeURIComponent(name)}/sources`, {
+  params: { book_ids: bookIds }, paramsSerializer: repeatedParams,
+})
 
 // ===== 学习计划 =====
 export const getPlan = () => http.get('/plan')

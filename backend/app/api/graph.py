@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -37,10 +37,11 @@ def _valid(t: str) -> bool:
     return True
 
 
-def _collect_concepts(db: Session) -> dict[str, set[int]]:
+def _collect_concepts(db: Session, book_ids: list[int]) -> dict[str, set[int]]:
     """从所有书籍分析结果提取概念：关键词 + 定理名（定义句是句子片段，质量差，弃用）。"""
     concepts: dict[str, set[int]] = {}
-    for a in db.scalars(select(BookAnalysis)).all():
+    stmt = select(BookAnalysis).where(BookAnalysis.book_id.in_(book_ids))
+    for a in db.scalars(stmt).all():
         terms: list[str] = []
         try:
             for kw in json.loads(a.keywords_json or "[]"):
@@ -62,9 +63,12 @@ def _collect_concepts(db: Session) -> dict[str, set[int]]:
 
 
 @router.get("")
-def get_graph(db: Session = Depends(get_db)):
-    """全局图谱：概念节点 + 同书关键词共现边。"""
-    concepts = _collect_concepts(db)
+def get_graph(book_ids: list[int] = Query(...), db: Session = Depends(get_db)):
+    """按用户显式选择的单本或多本文献生成图谱，绝不隐式混入其他书。"""
+    scope = sorted({int(x) for x in book_ids if int(x) > 0})
+    if not scope:
+        return {"nodes": [], "edges": [], "total": 0, "book_ids": []}
+    concepts = _collect_concepts(db, scope)
     # 节点按出现书籍数降序，取前 N
     sorted_concepts = sorted(concepts.items(), key=lambda kv: (-len(kv[1]), kv[0]))
     top = sorted_concepts[:_MAX_NODES]
@@ -73,7 +77,7 @@ def get_graph(db: Session = Depends(get_db)):
 
     # 边：同书内关键词两两共现（仅限 top 概念）
     edge_counter: Counter = Counter()
-    for a in db.scalars(select(BookAnalysis)).all():
+    for a in db.scalars(select(BookAnalysis).where(BookAnalysis.book_id.in_(scope))).all():
         try:
             kws = [k.strip() for k in json.loads(a.keywords_json or "[]") if isinstance(k, str) and k.strip()]
         except (ValueError, TypeError):
@@ -83,10 +87,12 @@ def get_graph(db: Session = Depends(get_db)):
             for j in range(i + 1, len(kws)):
                 edge_counter[(kws[i], kws[j])] += 1
     edges = [{"source": a, "target": b, "weight": w} for (a, b), w in edge_counter.items()]
-    return {"nodes": nodes, "edges": edges, "total": len(nodes)}
+    return {"nodes": nodes, "edges": edges, "total": len(nodes), "book_ids": scope}
 
 
 @router.get("/concept/{name}/sources")
-def concept_sources(name: str, limit: int = 30, db: Session = Depends(get_db)):
+def concept_sources(name: str, book_ids: list[int] = Query(...), limit: int = 30,
+                    db: Session = Depends(get_db)):
     """点概念反查所有出处：全文检索该概念出现的章节/页码。"""
-    return search(name, top_k=limit)
+    scope = sorted({int(x) for x in book_ids if int(x) > 0})
+    return search(name, book_ids=scope, top_k=limit) if scope else {"total": 0, "items": []}

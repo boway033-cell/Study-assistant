@@ -1,7 +1,7 @@
 # 项目交接文档 · Study assistant（学习助手）
 
 > **用途**：供新对话/新协作者快速接管项目。阅读本文件 + 启动项目即可继续开发。
-> **最后更新**：架构加固（数据层/任务持久化/知识事实层/检索重排/服务注册）+ AI 绘图工具 + UI/UX 优化 + Markdown 精读版修复之后
+> **最后更新**：Nature 文献工作流本地化（结构补缺/source map/证据卡片/归档阅读/中文 PPTX/合法全文入口）+ 阅读工作台 UI 重构之后
 
 ---
 
@@ -21,9 +21,29 @@
 3. **AI 接入**（增值）：问答（RAG）、深度分析（精读总结）、出题、研读报告、AI 绘图——全部基于知识库内容，云端只收提问+检索片段
 4. **复习闭环**（留存）：知识树、知识图谱、刷题、学习计划、统计——把知识库变成主动复习工具
 
-**当前完成度**：1/2 已扎实（OCR 支持扫描版、目录识别含中英文样式、FTS+RRF 混合检索、页码定位精确）；3 已打通（DeepSeek 问答/总结/出题/绘图 + Qwen-VL 视觉）；4 已具备基础（知识树/图谱/刷题/计划/统计）。
+**当前完成度**：1/2 已扎实（OCR 支持扫描版、目录识别含中英文样式、FTS+RRF 混合检索、页码定位精确）；3 已打通（DeepSeek 问答/总结/出题/绘图 + Qwen-VL 视觉）；4 已具备基础（知识树/图谱/刷题/计划/统计）；文献工作台已支持合法全文接入与中文 PPTX 汇报。
 
-**后续优化方向**：检索效果评测（引用核验已埋点）；增量更新与失败重试（任务已持久化）；大库性能（SQLite 迁移策略）；前端首屏体积（主 JS ~2.9MB，可代码分割）。
+**后续优化方向**：检索效果评测（引用核验已埋点）；增量更新与失败重试（任务已持久化）；大库性能（SQLite 迁移策略）；Element Plus 进一步按需导入。
+
+### 第一阶段可靠性收口（2026-08-24）
+
+- 删除资料改为显式外键顺序的集合操作，覆盖导入任务、答题记录、知识节点跨书引用、汇报文件和标签关系；数据库提交后才删除磁盘文件。
+- 重解析只清除可再生内容，保留笔记、题目和知识节点并解除旧章节 ID，避免外键失败和用户内容误删。
+- 版本状态迁入独立 `app_metadata` 键值表，FTS 版本可稳定回读；FTS 重建按 250 条流式读取、批量写入，不再一次加载全部 chunks。
+- SQLite 备份改用在线 Backup API（每批 256 页）并执行完整性检查，兼容 WAL；恢复采用校验后的临时库原子替换。
+- 上传文件以 1 MB 固定缓冲边读边写并同步计算 SHA-256，不再拼接完整文件；3 MB 回归样本的新增峰值被约束在 4 MB 内。
+- AI 绘图 SVG 同时采用颜色白名单、XML 完整转义和 DOMPurify SVG profile；测试/CI 已统一为标准命令，并覆盖 Windows/Python 3.14 与 Node 22。
+
+### 第二阶段知识库体验重构（2026-08-24）
+
+- 产品信息架构改为“文献知识库优先”：文献知识库、文献工作台、知识库问答、知识树、知识图谱和综合研读构成主导航，刷题/绘图/计划/统计收纳为更多工具。
+- 应用侧栏支持折叠和移动端抽屉，页头显示当前知识工作语境；古籍节气色彩、字体和背景风格保持不变。
+- 新增持久化全局任务中心，统一显示文献导入/OCR、重新解析、结构精读和 PPTX 生成；任务按 FIFO 串行，页面隐藏时停止前端轮询。
+- 上传、精读和 PPTX 提交后不再锁定页面等待，可继续阅读与检索；已结束任务会释放执行闭包，内存仅保留最近 128 条，历史从 SQLite 读取。
+- 资料详情改为抽屉，移动端使用文献卡片；阅读器新增“围绕本文提问”，选段可直接带入 PPTX 工作台。
+- PPTX 工作台形成“选择证据—设置语境—后台生成”三步路径，开放获取导入也进入统一任务中心。
+- 全部页面改为路由懒加载，并拆分 Element Plus、ECharts、PDF.js 和内容渲染依赖；浏览器实测知识库首屏 JavaScript 由约 2.94 MB 降至 1.21 MB，PDF.js 仅在打开原文时加载。
+- 卡片视觉令牌统一为 `border-gray-200`（`#E5E7EB`）与 shadow-sm；覆盖 Element Plus 卡片以及任务、来源、批注、设置等自定义卡片。按钮统一提供 hover 上移、active 回落缩放、disabled 静止反馈，并支持 `prefers-reduced-motion`。
 
 **体验目标**：本地部署（无网可用核心功能）、流畅（解析/检索毫秒级、大任务后台化）、功能完备（学-练-测-复盘全流程）。
 
@@ -90,9 +110,34 @@
 ### 3.10 刷题与统计
 - AI 生成题目、自动判分 + 简答自评、错题本、掌握度、薄弱章节排行、作答趋势
 
-### 3.11 主题（古籍学术风）
+### 3.11 文献归档与证据型阅读（2026-08 新增）
+- 本地提取作者、期刊、年份、DOI、arXiv ID 和语言；保存阅读状态、收藏、评分与阅读进度
+- 为每个 chunk 建立稳定 source ID，并映射章节与 PDF 页码
+- 目录融合 PDF 书签、全文编号与版面字号三类来源，支持同页多标题及“一、/（一）/1.1/1.1.1/英文 section”
+- 深度分析对缺号和扁平目录执行 AI 复核，只允许从带页码的原文候选补缺
+- 固定 01–16 节 Paper Card，区分作者陈述、AI 分析和研究假设，并执行来源审计
+- 阅读器统一为“原版阅读 / 结构精读 / 证据卡片”，资料库增加归档筛选和状态管理
+- 设计说明：`docs/nature-literature-workflow.md`
+
+### 3.12 文献工作台（2026-08 新增）
+- 可选整篇、章节或用户选段，先按发现/方法/资源/临床/材料/综述六类路由，再按“主张—证据—边界”生成中文可编辑 PPTX
+- PPTX 默认 16:9，事实页写入 chunk/page 来源及演讲者备注；可提取来源页主要内嵌图像，并执行页数、越界、文字密度和来源审计
+- 无 DeepSeek Key 时使用本地证据提纲，不虚构研究结果；有 Key 时只发送选中来源片段生成证据链
+- 支持开放获取地址、arXiv、Unpaywall DOI 解析，以及学校图书馆/CARSI 的当前 Chrome 交接入口
+- 补充材料必须显式选择；不绕过付费墙/DRM/2FA，不读取 Cookie、密码、localStorage 或 Chrome 会话文件
+- Provider registry、来源 manifest、PaperProfile provenance 和独立获取记录表为知识库来源扩展预留稳定接口
+
+### 3.13 主题（古籍学术风）
 - 深青灰绿底 `#2A3B3D`、纸色卡片 `#F5F0E8`、棕褐强调 `#8B5A2B`、暗青侧边栏 `#2E4042`
 - 侧边栏/页头动态展示「节气名 + 年月日」（`frontend/src/utils/solarTerm.js`）
+
+### 3.14 轻量文档解析链（2026-08-24 新增）
+- PDF 优先保留块、行、坐标和字体证据（PDFText，失败自动回退 PyMuPDF），原子保存为 `data/structured/<file_hash>.json`
+- RapidOCR/ONNX 仅识别弱文本页，缓存判断先于页面渲染，PDF 位图按页生成并立即释放，不再整本驻留内存
+- Markdown 从结构证据恢复段落、跨页断句、标题、列表、表格与图注，不能把 OCR/PDF 每行直接输出为一段
+- 目录候选按书签、编号语义、版面、句式负证据评分；AI 只能引用候选 ID 并调整层级，不能新增或改写标题
+- PP-DocLayout-M 为显式可选增强：直接调用 ONNX `LayoutDetection` 单模块，子进程临时启动、至少 3 GB 可用内存，只给原文块增加角色；不启动 PP-StructureV3，不可用时回退内置分析
+- MinerU 不进入标准安装和默认导入链；部署决策和资源边界见 `docs/LIGHTWEIGHT_DOCUMENT_PIPELINE.md`
 
 ## 4. 技术架构速览
 
@@ -105,14 +150,28 @@
   │   ├─ rag/          chunker/semantic_chunker/fts/retriever/vector/toc_*
   │   ├─ llm/          DeepSeekProvider(flash/pro) + parse_json_response + crypto 解密
   │   ├─ vision.py     QwenVLProvider(视觉分析) + crypto 解密
-  │   └─ deep_analysis.py  三级标题/核对/补全/逐章总结/Markdown
+  │   └─ deep_analysis.py  四级标题/连续性核对/证据约束补全/逐章总结/Markdown
   ├─ core/        config.py / database.py / crypto.py(Fernet Key 加密)
   ├─ worker/      tasks.py(FIFO 串行) + import_task.py(导入流水线；无自动云端)
   └─ models/      books/chapters/chunks/quizzes/attempts/annotations/knowledge_nodes/
                   book_deep/study_reports/settings/book_analysis/study_plans/check_ins
 ```
 
-## 5. 安全与隐私（本轮重点加固）
+## 5. 第三阶段专项修复（2026-08-24）
+
+- **知识来源隔离**：知识图谱必须传 `book_ids`；知识树导入与 AI 生成支持多选，但逐本建立独立根树；AI 绘图仅注入用户所选书目的摘要上下文。图谱出处查询继续沿用同一书目范围。
+- **《行政管理学夏书章》回归样本**：目录从旧深度分析的 36 个残缺条目恢复为 524 个四级标题候选，层级为“章 → 节 → 一、 →（一）”。处理汉字间异常空格、跨行标题、错误“目录”书签容器、截断标题与书签层级压平。
+- **连续性审计**：除章号和 `1.1` 外，新增每章“第 N 节”、中文“一/二/三”及“（一）（二）”的父级范围内连续性检查；AI 仅能补入可回查原文的标题。
+- **Markdown/索引去重**：页面不再同时写入父章、子节和小标题的重叠区间；每页只进入一次检索切片。Markdown 同页按标题行切段，无法定位时才回退到最近标题。
+- **PDF 阅读器**：双页改为封面单页、随后 `2–3 / 4–5` 横向跨页；修复上一页方向、虚拟滚动偏移与模式切换。单页/双页仅保留当前页面 DOM，页面尺寸按需读取，不再启动时预取整本页面对象。
+- **稳定入口**：VBS 漏反斜杠和固定绝对路径已修复；BAT/VBS/PowerShell 均改用脚本自身目录。启动器以 `/api/health` 判定就绪，8000 被其他程序占用时在 8001–8010 选择可用端口，未就绪不打开拒绝连接页面。
+- **自定义协议（已注册）**：当前用户已注册 `study-assistant://open`；支持如 `study-assistant://open/reader/6?page=21` 的白名单深链。WMI 启动独立 `pythonw + server_runner.py`，协议处理器退出后服务仍存活；`uninstall_protocol.ps1` 可撤销。
+- **真实书目已重解析**：《行政管理学夏书章》（book_id=6）已于 2026-08-24 重建为 529 个章节节点（16/55/141/317 四级分布）和 416 个非重叠文本块；旧 `book_deep` 已失效清除。回退快照：`backend/data/backups/before_reparse_book6_20260824_153812.db`。
+- **MinerU 决策**：本机 15.7 GB RAM、RTX 4050 6 GB、D 盘 63.6 GB 可尝试按需 pipeline，但须独立 Python 3.12；当前空闲 RAM 约 5 GB，预检不通过。详见 `docs/MINERU_DEPLOYMENT.md` 和 `scripts/mineru_preflight.ps1`。
+- **验证**：后端 78 项测试通过；前端生产构建与 5 项单测通过（含 SVG 安全与主题视觉令牌）；8010 实启后 `/api/health`、书目范围图谱、书目范围知识树和静态首页均返回 200。
+- **全库目录重解析（2026-08-24）**：10 本全部 `ready`，目录父子异常为 0；修复“第三部门/第三部”“第一部分”断词、层级断档、教材章名页眉重复、论文作者/页码/统计量误识别。完整结果与遗留问题见 `docs/TOC_AUDIT_20260824.md`；全库回退快照为 `backend/data/backups/before_full_toc_reparse_20260824_155547.db`。
+
+## 6. 安全与隐私（本轮重点加固）
 
 | 项 | 措施 |
 |---|---|
@@ -127,18 +186,19 @@
 
 **已知安全边界**（SECURITY.md 已声明）：本地单用户工具，不防「同权限本机程序」（它们可直接读 SQLite/内存）；未做登录鉴权，勿改绑 `0.0.0.0` 暴露公网。
 
-## 6. 测试情况
+## 7. 测试情况
 
 | 测试 | 位置 | 结果 |
 |---|---|---|
-| 单元测试 | `backend/tests/`（test_unit/enhance/semantic/toc_heuristic + conftest.py） | 34 项全过（conftest 初始化 FTS，CI 全新环境也能过） |
+| 单元/架构测试 | `backend/tests/`（含 reliability_phase1 + literature_workbench） | 78 项全过（新增弱页 OCR、缓存前置、单页惰性渲染、OCR 任务后释放、结构化 Markdown、目录/AI 证据硬约束、PP-DocLayout-M 单模块与原文保护） |
+| 前端单测 | `frontend/tests/` | 5 项全过（SVG 颜色属性注入、XML 转义、卡片视觉令牌与按钮交互反馈） |
 | UI 测试 | `backend/tests/ui_test.py`（Playwright） | 18 项全过（需先起后端） |
 | CI | `.github/workflows/ci.yml` | push/PR 自动跑单测 + 前端构建 |
 | Release | `.github/workflows/release.yml` | 打 `v*` 标签自动 build 前端 + 打包 zip 上传 Release |
 
-运行：`.venv/Scripts/python -m pytest backend/tests/test_unit.py backend/tests/test_enhance.py backend/tests/test_semantic.py backend/tests/test_toc_heuristic.py -q`
+标准运行：`.venv/Scripts/python -m pytest -q`；前端运行：`cd frontend && npm run test:unit && npm run build`
 
-## 7. 关键踩坑记录（新对话必读）
+## 8. 关键踩坑记录（新对话必读）
 
 1. **FastAPI sync 端点线程池**：`asyncio.get_event_loop()` 崩溃 → 独立后台线程 + `run_coroutine_threadsafe`
 2. **SQLite 锁冲突**：FTS 写入与 ORM 同事务冲突 → 先批量 commit 再写索引
@@ -165,24 +225,29 @@
 23. **cryptography 加密存储**：旧明文 key 向后兼容（decrypt 对无 `enc:` 前缀原样返回）；用迁移脚本把旧明文加密
 24. **vite 5→6 + echarts 5→6 升级**：breaking change 但项目配置简单，build 正常，echarts graph API 兼容；升级后 npm audit 归零
 25. **上传流式读取**：`UploadFile.read()` 一次读入内存，改 `read(chunk)` 循环 + 魔数/压缩炸弹校验
+26. **OCR 任务无进展卡死**：152 MB 扫描 PDF 曾停在缓存 `1/174` 约 53 分钟；重启后任务自动恢复。需补页级心跳、无进展超时和可取消检查点，不能只显示笼统“版面分析”。
+27. **章名页眉污染目录**：教材隔页重复章名会生成数十个根节点；仅对有编号的一级章/部分标题做全书去重，普通按章重复的小结标题不可全局去重。
 
-## 8. 已知边界
+## 9. 已知边界
 
 - OCR 后端（tesseract/paddle）代码就绪未安装，扫描版 PDF 会提示
 - 向量检索默认关（省内存），开启需加载 fastembed 模型
 - 思维训练会话为内存态（重启后端后会话丢失；上限 100 个，超了删最旧）
 - 知识图谱概念来自 `book_analysis`（需资料做过智能分析才有节点）
 - 深度分析/综合阅读/问答依赖 DeepSeek Key；视觉依赖 Qwen-VL Key
-- 主 JS 约 2.8MB（gzip 953KB），本地 localhost 首屏可接受，未做代码分割（按需可优化）
+- 知识库首屏 JavaScript 实测约 1.21MB（解压后）；ECharts、PDF.js 与各工具页均按需加载，Element Plus 仍可继续做组件级导入
+- PPTX 已支持主要内嵌图像提取；复杂多面板智能裁剪、矢量图重绘和低置信度公式原图保留仍待实现
+- DOI/OA/arXiv 与馆藏浏览器交接已接入；出版社授权 API 仍作为 provider 扩展点，未实现也不会模拟绕过
+- Paper Card 与 PPTX 导出已接入；周期性文献订阅尚未实现
 
-## 9. 开源发布状态
+## 10. 开源发布状态
 
 - 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，tag v1.0.0）
 - 许可证 MIT、PRIVACY.md、SECURITY.md、CHANGELOG.md、CONTRIBUTING.md、.gitattributes
 - CI（ci.yml）+ Release 自动打包（release.yml）
 - 分享给朋友：下载 Release 的 zip（含前端产物，不装 Node 也能用），或 git clone 后 `cd frontend && npm i && npm run build`
 
-## 10. 快速上手命令
+## 11. 快速上手命令
 
 ```bash
 cd D:/86153/Documents/study-assistant

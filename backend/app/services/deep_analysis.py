@@ -132,46 +132,9 @@ def _norm_key(title: str, level: int) -> str:
 
 
 def extract_titles_3level(pages: list[str], min_items: int = 2) -> list[dict]:
-    """从每页前几行提取 三级标题。返回 [{title, level, page}]（页序）。"""
-    results: list[dict] = []
-    for pno, text in enumerate(pages, start=1):
-        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-        if not lines:
-            continue
-        for line in lines[:4]:
-            if re.search(r"[.．·]{4,}", line):
-                break  # 目录页
-            m3 = _L3_RE.match(line)
-            if m3 and len(_clean(m3.group(4))) <= 28:
-                t = _clean(m3.group(4))
-                results.append({"title": f"{m3.group(1)}.{m3.group(2)}.{m3.group(3)} {t}", "level": 3, "page": pno})
-                break
-            m1 = _L1_RE.match(line)
-            if m1 and len(_clean(m1.group(1))) <= 28:
-                num = re.search(r"第\s*([一二三四五六七八九十百千万0-9]+)", line)
-                if num:
-                    results.append({"title": "第" + num.group(1) + "章 " + _clean(m1.group(1)), "level": 1, "page": pno})
-                    break
-            m2 = _L2_RE.match(line)
-            if m2 and len(_clean(m2.group(3))) <= 28:
-                if m2.group(1) and m2.group(2):  # 数字.数字 编号
-                    results.append({"title": f"{m2.group(1)}.{m2.group(2)} {_clean(m2.group(3))}", "level": 2, "page": pno})
-                else:
-                    num = re.search(r"第\s*([一二三四五六七八九十百千万0-9]+)", line)
-                    results.append({"title": "第" + (num.group(1) if num else "?") + "节 " + _clean(m2.group(3)), "level": 2, "page": pno})
-                break
-    if len(results) < min_items:
-        return []
-    # 归一化去重（保留首次出现）
-    seen_keys: set[str] = set()
-    dedup: list[dict] = []
-    for r in results:
-        k = _norm_key(r["title"], r["level"])
-        if k in seen_keys:
-            continue
-        seen_keys.add(k)
-        dedup.append(r)
-    return dedup
+    """扫描全文标题而非只看页首，允许同一页出现多个分标题。"""
+    from backend.app.services.rag.toc_heuristic import extract_toc_heuristic
+    return extract_toc_heuristic(pages, min_pages=1) if len(pages) else []
 
 
 # ---------- 2. 核对完整性 ----------
@@ -193,7 +156,7 @@ def verify_toc(toc: list[dict]) -> dict:
             if i not in ch_nums:
                 issues.append({"type": "missing_chapter", "ref": f"第{i}章", "level": 1})
 
-    # 节编号：每章 X.Y 连续性
+    # 节编号：每章内同时支持“第一节”和 X.Y；不能只检查阿拉伯小数编号。
     sec_nums: dict[int, set[int]] = {}
     for t in sections:
         m = re.match(r"(\d{1,2})\.(\d{1,2})", t["title"])
@@ -204,6 +167,26 @@ def verify_toc(toc: list[dict]) -> dict:
         for i in range(1, max(secs) + 1):
             if i not in secs:
                 issues.append({"type": "missing_section", "ref": f"{ch}.{i}", "level": 2})
+
+    current_chapter = "全书"
+    numbered_sections: list[int] = []
+    for item in toc + [{"title": "__END__", "level": 1}]:
+        if item["level"] == 1:
+            if numbered_sections:
+                for i in range(1, max(numbered_sections) + 1):
+                    if i not in numbered_sections:
+                        issues.append({
+                            "type": "missing_section",
+                            "ref": f"{current_chapter}缺少第{i}节",
+                            "level": 2,
+                        })
+            current_chapter = item["title"]
+            numbered_sections = []
+            continue
+        if item["level"] == 2:
+            m = re.match(r"第([一二三四五六七八九十百千万0-9]+)节", item["title"])
+            if m:
+                numbered_sections.append(_cn2int(m.group(1)))
 
     # 小节编号连续性（简化：按 章.节 聚合）
     sub_nums: dict[tuple[int, int], set[int]] = {}
@@ -217,6 +200,39 @@ def verify_toc(toc: list[dict]) -> dict:
             if i not in ss:
                 issues.append({"type": "missing_subsection", "ref": f"{key[0]}.{key[1]}.{i}", "level": 3})
 
+    # 中文序号连续性：分别在最近的上级标题范围内检查“一、二、三”和“（一）（二）”。
+    for target_level, marker_re in (
+        (3, re.compile(r"^([一二三四五六七八九十]+)、")),
+        (4, re.compile(r"^（([一二三四五六七八九十]+)）")),
+    ):
+        groups: dict[str, list[int]] = {}
+        parents: list[str] = []
+        for item in toc:
+            if item["level"] < target_level:
+                parents = parents[:item["level"] - 1] + [item["title"]]
+            if item["level"] != target_level:
+                continue
+            match = marker_re.match(item["title"])
+            if match:
+                parent_key = " / ".join(parents)
+                groups.setdefault(parent_key, []).append(_cn2int(match.group(1)))
+        for parent, nums in groups.items():
+            if not nums:
+                continue
+            for number in range(1, max(nums) + 1):
+                if number not in nums:
+                    issues.append({
+                        "type": "missing_chinese_sequence",
+                        "ref": f"{parent} 下缺少第 {number} 个 {target_level} 级标题",
+                        "level": target_level,
+                    })
+
+    # 结构质量告警：不是凭空补标题，而是提示 AI 对原文标题候选做一次完整复核。
+    if chapters and not sections:
+        issues.append({"type": "flat_structure", "ref": "仅识别到一级标题，请复核“一、/（一）/1.1”等分标题", "level": 2})
+    if len(toc) == 1:
+        issues.append({"type": "sparse_structure", "ref": "目录过少，请从全文标题候选中复核", "level": 2})
+
     return {
         "ok": len(issues) == 0,
         "issues": issues[:30],
@@ -229,29 +245,51 @@ def verify_toc(toc: list[dict]) -> dict:
 # ---------- 3. AI 补全缺失标题 ----------
 async def complete_with_ai(provider, toc: list[dict], issues: list[dict], pages: list[str],
                            max_items: int = 60) -> list[dict]:
-    """把缺失项与相关页文本交给 AI，返回补齐后的完整目录（与现有合并，按页序）。"""
+    """让 AI 审核本地结构；代码层只接受可回查候选 ID，不信任提示词自律。"""
     if not issues:
         return toc
-    # 取缺失项相关页（首页 + 缺失章节附近页）作为线索
-    sample_pages: list[str] = []
-    for pno in range(min(6, len(pages))):
-        sample_pages.append(f"[第{pno + 1}页]\n{pages[pno][:400]}")
-    # 再取中部若干页（标题样式线索）
-    for pno in range(len(pages) // 2, min(len(pages), len(pages) // 2 + 6)):
-        sample_pages.append(f"[第{pno + 1}页]\n{pages[pno][:400]}")
+    import json
+    from backend.app.services.rag.toc_heuristic import classify_heading
+    from backend.app.services.rag.toc_evidence import build_review_packet, validate_ai_review
 
-    current = "\n".join(f"{t['level']}级|第{t['page']}页|{t['title']}" for t in toc[:max_items])
-    missing = "、".join(i["ref"] for i in issues[:20])
+    candidates: list[dict] = []
+    page_excerpts: dict[int, str] = {}
+    seen: set[tuple[str, int]] = set()
+    for pno, page in enumerate(pages, start=1):
+        lines = [ln.strip() for ln in page.splitlines() if ln.strip()]
+        page_excerpts[pno] = "\n".join(lines[:20])[:600]
+        for line in lines:
+            heading = classify_heading(line)
+            if heading is None:
+                continue
+            title, level = heading
+            key = (_norm_key(title, level), pno)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append({
+                "title": title,
+                "level": level,
+                "page": pno,
+                "source_priority": 1,
+            })
+            if len(candidates) >= max_items * 4:
+                break
+        if len(candidates) >= max_items * 4:
+            break
+    if not candidates:
+        return toc
+    packet = build_review_packet(candidates, issues, page_excerpts)
 
     prompt = [
         {"role": "system", "content": (
-            "你是教材结构分析助手。下面是已提取的标题目录和缺失的编号，以及部分页文本。"
-            "请找出缺失标题的准确名称（大标题=章、中标题=节、小标题=小节）。"
-            "只输出 JSON 数组，格式：[{\"title\":\"标题\",\"level\":1|2|3,\"page\":页码}]。"
-            "找不到的项返回 {\"title\":null,\"level\":0,\"page\":0}。不要输出解释。"
+            "你是学术文献结构审校助手。只能选择给定 candidate_id；标题必须原样复制，"
+            "只能调整 1-4 级层级，不能新增、改写或推断标题。"
+            "只输出需要采用或纠正的 JSON 数组："
+            "[{\"candidate_id\":0,\"title\":\"候选原文\",\"level\":1}]；找不到就输出 []。"
         )},
         {"role": "user", "content": (
-            f"已提取目录：\n{current}\n\n缺失编号：{missing}\n\n页文本样本：\n" + "\n".join(sample_pages)
+            "候选证据包：\n" + json.dumps(packet, ensure_ascii=False)
         )},
     ]
     answer = ""
@@ -263,15 +301,19 @@ async def complete_with_ai(provider, toc: list[dict], issues: list[dict], pages:
     except Exception:  # noqa: BLE001
         return toc
 
-    filled: list[dict] = []
-    if isinstance(data, list):
-        for item in data:
-            title = str(item.get("title") or "").strip()
-            level = int(item.get("level") or 0)
-            page = int(item.get("page") or 0)
-            if title and level in (1, 2, 3) and 1 <= page <= len(pages):
-                filled.append({"title": _clean(title), "level": level, "page": page})
-    return _order_toc(_dedup_toc(toc + filled))
+    accepted = validate_ai_review(candidates, data if isinstance(data, list) else [])
+    merged = [dict(item) for item in toc]
+    for item in accepted:
+        replacement = {key: item[key] for key in ("title", "level", "page")}
+        existing = next((entry for entry in merged if (
+            _clean(entry["title"]) == _clean(item["title"])
+            and int(entry.get("page") or 1) == item["page"]
+        )), None)
+        if existing is not None:
+            existing.update(replacement)
+        else:
+            merged.append(replacement)
+    return _order_toc(_dedup_toc(merged))
 
 
 # ---------- 4. 按目录逐章 AI 详细总结 ----------
@@ -316,6 +358,65 @@ async def summarize_by_toc(provider, book_title: str, toc: list[dict],
     return out
 
 
+async def build_paper_card(provider, book_title: str, toc: list[dict], chunks,
+                           max_chars: int = 26000) -> str:
+    """生成固定 01-16 节的来源约束阅读卡。
+
+    每个 source ID 都映射到数据库 chunk 和 PDF 页码；来源不足必须明确标记，
+    不允许把模型推断伪装成作者结论。
+    """
+    sources: list[str] = []
+    used = 0
+    for chunk in chunks:
+        locator = (
+            f"PDF第{chunk.page_start}-{chunk.page_end}页"
+            if chunk.page_start and chunk.page_end and chunk.page_end != chunk.page_start
+            else f"PDF第{chunk.page_start}页" if chunk.page_start else "结构定位"
+        )
+        block = f"[B{chunk.book_id}-C{chunk.id}|{locator}]\n{chunk.content.strip()}\n"
+        if used + len(block) > max_chars:
+            break
+        sources.append(block)
+        used += len(block)
+    toc_text = "\n".join(f"{t['level']}级 PDF第{t['page']}页 {t['title']}" for t in toc[:100])
+    prompt = [
+        {"role": "system", "content": (
+            "你是科研文献精读助手。请基于给定原文生成中文 Markdown 阅读卡，固定包含并按顺序使用"
+            "“## 01”至“## 16”十六个章节：书目信息、研究定位、研究问题、背景路线、"
+            "现有痛点、核心洞见、方法总览、模块逻辑、关键公式、实验设计、结论-证据矩阵、"
+            "结论边界、作者局限、批判性分析、知识连接、可检验研究想法。"
+            "作者陈述、AI 分析、研究假设必须明确区分。所有关键判断在句末引用提供的"
+            "[B书籍ID-C文本块ID]；无法由材料支持时写“材料不足，无法判断”，不得编造页码、"
+            "实验、数字、引用或新颖性。研究想法只能写成待验证假设。"
+        )},
+        {"role": "user", "content": (
+            f"题名：《{book_title}》\n\n已识别目录：\n{toc_text}\n\n来源块：\n"
+            + "\n".join(sources)
+        )},
+    ]
+    answer = ""
+    try:
+        async for delta in provider.stream_chat(prompt):
+            answer += delta
+    except Exception:  # noqa: BLE001
+        return ""
+    return answer.strip()
+
+
+def audit_paper_card(card: str) -> dict:
+    """轻量结构与来源审计，结果供 UI 明示而不是静默掩盖。"""
+    missing = [i for i in range(1, 17) if not re.search(rf"^##\s+0?{i}\b", card, re.M)]
+    source_refs = re.findall(r"\[B\d+-C\d+\]", card)
+    unsupported_markers = card.count("材料不足，无法判断")
+    return {
+        "ok": not missing and bool(source_refs),
+        "missing_sections": missing,
+        "source_reference_count": len(source_refs),
+        "not_assessable_count": unsupported_markers,
+        "warnings": ([] if source_refs else ["阅读卡缺少文本块来源引用"]),
+    }
+
+
 # ---------- 5. Markdown 转换 ----------
 def _downgrade_headers(md_text: str, levels: int = 2) -> str:
     """把 AI 总结内部的 Markdown 标题降级，避免与章节标题层级冲突。
@@ -332,8 +433,8 @@ def _downgrade_headers(md_text: str, levels: int = 2) -> str:
 def to_markdown(book_title: str, toc: list[dict], summaries: list[dict],
                 section_texts: dict[str, str]) -> str:
     """生成 Markdown：目录 + 逐章 AI 总结 + 各节正文。"""
-    md: list[str] = [f"# 《{book_title}》", "", "> 由 Study Assistant 深度分析生成（标题目录 + AI 精读总结 + 正文）", ""]
-    md.append("## 📑 目录")
+    md: list[str] = [f"# 《{book_title}》", "", "> 结构化阅读版：保留原文、PDF 页码与 AI 内容边界。", ""]
+    md.append("## 目录")
     for t in toc:
         indent = "  " * (t["level"] - 1)
         md.append(f"{indent}- {t['title']}")
@@ -351,7 +452,7 @@ def to_markdown(book_title: str, toc: list[dict], summaries: list[dict],
 
     def walk(items, depth):
         for t in items:
-            prefix = "#" * min(6, 2 + t["level"])
+            prefix = "#" * min(6, 1 + t["level"])
             md.append(prefix + " " + t["title"])
             md.append("")
             if t["level"] == 1:
@@ -359,7 +460,7 @@ def to_markdown(book_title: str, toc: list[dict], summaries: list[dict],
                 if summary and summary != "（该章无正文内容）":
                     # AI 总结独立折叠卡片，与原文明显分开（用户可点击展开/收起）
                     md.append("<details>")
-                    md.append("<summary>💡 AI 精读总结（点击展开/收起）</summary>")
+                    md.append("<summary>AI 精读总结（点击展开/收起）</summary>")
                     md.append("")
                     md.append(_downgrade_headers(summary))
                     md.append("")
@@ -371,7 +472,7 @@ def to_markdown(book_title: str, toc: list[dict], summaries: list[dict],
             if body:
                 # 仅一级章节显示"章节原文"标题（与 AI 总结分隔）；小节正文直接跟随标题
                 if t["level"] == 1:
-                    md.append("### 📄 章节原文")
+                    md.append("### 章节原文")
                     md.append("")
                 md.append(body)
                 md.append("")
@@ -389,20 +490,39 @@ def build_section_texts(chunks_by_page: list[tuple[int, str]], toc: list[dict]) 
     """
     if not toc:
         return {}
-    titles_sorted = sorted(toc, key=lambda x: (x["page"], x["level"]))
-    page_to_title: dict[int, str] = {}
-    for t in titles_sorted:
-        page_to_title[t["page"]] = t["title"]
-
-    section_texts: dict[str, str] = {}
-    cur = None
+    from backend.app.services.analyzer.textclean import reflow_paragraphs
+    titles_sorted = list(toc)
+    section_texts: dict[str, str] = {t["title"]: "" for t in titles_sorted}
     for page, text in chunks_by_page:
-        if page in page_to_title:
-            cur = page_to_title[page]
-        if cur:
-            section_texts.setdefault(cur, "")
+        page_titles = [t for t in titles_sorted if t["page"] == page]
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        located: list[tuple[int, dict]] = []
+        used_lines: set[int] = set()
+        for title in page_titles:
+            key = _norm_key(title["title"], title["level"]).split("|", 1)[1]
+            for idx, line in enumerate(lines):
+                if idx in used_lines:
+                    continue
+                line_key = re.sub(r"[\s\u3000，。、|｜.．:：—-]+", "", line)
+                if line_key.startswith(key) or key.startswith(line_key):
+                    located.append((idx, title))
+                    used_lines.add(idx)
+                    break
+        located.sort(key=lambda x: x[0])
+        if located:
+            for pos, (line_idx, title) in enumerate(located):
+                end = located[pos + 1][0] if pos + 1 < len(located) else len(lines)
+                body = reflow_paragraphs("\n".join(lines[line_idx:end]))
+                if body:
+                    existing = section_texts.get(title["title"], "")
+                    section_texts[title["title"]] = (existing + "\n\n" + body).strip()
+            continue
+        # 无法行级定位时才回退到最近标题，且每个文本块只写入一次。
+        eligible = [t for t in titles_sorted if t["page"] <= page]
+        if eligible:
+            cur = eligible[-1]["title"]
+            body = reflow_paragraphs(text)
             existing = section_texts.get(cur, "")
-            if text.strip() and text.strip() not in existing:
-                # 段落间用空行分隔，保证 Markdown 渲染时段落隔断
-                section_texts[cur] = (existing + "\n\n" + text).strip()
+            if body and body not in existing:
+                section_texts[cur] = (existing + "\n\n" + body).strip()
     return section_texts

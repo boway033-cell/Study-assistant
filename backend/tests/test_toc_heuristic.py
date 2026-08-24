@@ -44,6 +44,111 @@ class TestTocHeuristic:
         levels = {t["level"] for t in toc}
         assert 1 in levels and 2 in levels
 
+    def test_multilevel_headings_on_same_page(self):
+        from backend.app.services.rag.toc_heuristic import extract_toc_heuristic
+
+        pages = [
+            "第一章 总论\n\n一、研究背景\n\n（一）问题提出\n\n正文内容。",
+            "第二章 方法\n\n2.1 数据来源\n\n2.1.1 样本筛选\n\n正文内容。",
+        ]
+        toc = extract_toc_heuristic(pages)
+        assert [x["level"] for x in toc] == [1, 3, 4, 1, 2, 3]
+        assert toc[1]["title"] == "一、研究背景"
+        assert toc[2]["title"] == "（一）问题提出"
+
+    def test_whitespace_and_decimal_regex(self):
+        from backend.app.services.rag.toc_heuristic import classify_heading
+
+        assert classify_heading("第 2 节 研究设计")[1] == 2
+        assert classify_heading("3.2 Results")[1] == 2
+
+    def test_ocr_part_and_department_are_distinguished(self):
+        from backend.app.services.rag.toc_heuristic import classify_heading
+
+        assert classify_heading("第一部 分：基础知识") == ("第一部分 基础知识", 1)
+        assert classify_heading("第三部 门是介于政府与市场之间的组织") is None
+        # 纯数字前缀只在版面分析明确标成 title 时采用，不能把题库正文全升为目录。
+        assert classify_heading("２文献综述") is None
+        assert classify_heading("21 治理的定义") is None
+        assert classify_heading("（2）118－128．") is None
+
+    def test_plain_number_is_accepted_only_with_layout_title_evidence(self):
+        from types import SimpleNamespace
+        from backend.app.services.rag.toc_heuristic import extract_toc_from_layout
+
+        def block(text, size, page=1):
+            return SimpleNamespace(
+                text=text, size=size, page=page, block_type="title"
+            )
+
+        layout = SimpleNamespace(
+            body_size=10,
+            pages=[[block("论文题名", 20), block("1问题提出", 12)],
+                   [block("2文献综述", 12, 2), block("（2）118－128．", 12, 2)]],
+        )
+        toc = extract_toc_from_layout(layout)
+        assert [(x["title"], x["level"]) for x in toc] == [
+            ("论文题名", 1), ("1 问题提出", 2), ("2 文献综述", 2)
+        ]
+
+    def test_repeated_numbered_running_header_is_not_a_new_chapter(self):
+        from backend.app.services.rag.toc_heuristic import extract_toc_heuristic
+
+        pages = [
+            "第一章 导论\n1.1 研究对象",
+            "第一章 导论\n正文",
+            "第二章 方法\n2.1 数据来源",
+        ]
+        toc = extract_toc_heuristic(pages, min_pages=1)
+        assert [x["title"] for x in toc].count("第一章 导论") == 1
+
+    def test_decimal_measure_is_not_a_heading(self):
+        from backend.app.services.rag.toc_heuristic import classify_heading
+
+        assert classify_heading("24.6 亿人次，分别是此前的两倍") is None
+
+    def test_chinese_textbook_spacing_and_wrapped_titles(self):
+        from backend.app.services.rag.toc_heuristic import extract_toc_heuristic
+
+        pages = [
+            "第一章　行政和行政管理学\n第一节　行政管理学的对象、\n内容和特点\n一、什么是行政",
+            "第 三 节 建 设 有 中 国 特 色 社 会\n主义的行政管理学\n"
+            "一、建设有中国特色社会主义行政管理学的深厚基础\n（一）行政管理的二重性",
+        ]
+        toc = extract_toc_heuristic(pages, min_pages=1)
+        assert [(x["title"], x["level"]) for x in toc] == [
+            ("第一章 行政和行政管理学", 1),
+            ("第一节 行政管理学的对象、内容和特点", 2),
+            ("一、什么是行政", 3),
+            ("第三节 建设有中国特色社会主义的行政管理学", 2),
+            ("一、建设有中国特色社会主义行政管理学的深厚基础", 3),
+            ("（一）行政管理的二重性", 4),
+        ]
+
+    def test_semantic_levels_override_flat_bookmarks_and_drop_toc_root(self):
+        from backend.app.services.rag.toc_heuristic import merge_toc_sources
+
+        bookmarks = [
+            {"title": "目 录", "level": 1, "page": 1},
+            {"title": "第一章 行政和行政管理学", "level": 2, "page": 1},
+            {"title": "第一节 对象和特点", "level": 2, "page": 1},
+        ]
+        merged = merge_toc_sources(bookmarks)
+        assert [x["level"] for x in merged] == [1, 2]
+        assert all("目录" not in x["title"].replace(" ", "") for x in merged)
+
+    def test_verify_chinese_number_continuity_within_parent(self):
+        from backend.app.services.deep_analysis import verify_toc
+
+        toc = [
+            {"title": "第一章 总论", "level": 1, "page": 1},
+            {"title": "第一节 概念", "level": 2, "page": 1},
+            {"title": "一、起源", "level": 3, "page": 1},
+            {"title": "三、发展", "level": 3, "page": 2},
+        ]
+        audit = verify_toc(toc)
+        assert any(i["type"] == "missing_chinese_sequence" and i["level"] == 3 for i in audit["issues"])
+
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

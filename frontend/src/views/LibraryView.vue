@@ -1,16 +1,31 @@
 <template>
-  <div>
-    <el-row :gutter="16">
-      <el-col :span="16">
+  <div class="library-page">
+    <section class="library-hero">
+      <div>
+        <div class="eyebrow">LOCAL RESEARCH LIBRARY</div>
+        <h1>文献知识库</h1>
+        <p>导入、校正结构、归档、精读与回溯来源，在一个连续工作流中完成。</p>
+      </div>
+      <div class="hero-stats">
+        <div><strong>{{ books.length }}</strong><span>全部资料</span></div>
+        <div><strong>{{ books.filter(b => b.deep_status === 'done').length }}</strong><span>已精读</span></div>
+        <div><strong>{{ books.filter(b => b.reading_status === 'read').length }}</strong><span>已读完</span></div>
+      </div>
+    </section>
+    <div class="library-workspace">
+      <section>
         <el-card shadow="never">
           <template #header>
             <div class="card-header">
-              <span>我的资料</span>
+              <div class="header-title">
+                <span>我的资料</span>
+                <small>{{ filteredBooks.length }} / {{ books.length }}</small>
+              </div>
+              <div class="header-actions">
               <el-button type="success" plain :loading="classifying" @click="classifyAll">🤖 自动分类</el-button>
               <el-upload
                 :show-file-list="false"
                 :before-upload="handleUpload"
-                multiple
                 accept=".pdf,.docx,.pptx"
                 :disabled="uploading"
               >
@@ -20,20 +35,46 @@
               </el-upload>
               <el-upload
                 :show-file-list="false"
-                :before-upload="handleBatchUpload"
+                :auto-upload="false"
+                :on-change="handleBatchSelect"
                 multiple
                 accept=".pdf,.docx,.pptx"
                 :disabled="uploading"
               >
                 <el-button type="warning" plain :loading="uploading">
-                  {{ uploading ? '批量上传中…' : '📁 批量上传' }}
+                  {{ uploading ? '批量上传中…' : '📁 选择批量文件' }}
                 </el-button>
               </el-upload>
+              <el-button v-if="batchFiles.length" type="warning" @click="submitBatch">
+                开始导入 {{ batchFiles.length }} 篇
+              </el-button>
+              </div>
             </div>
           </template>
 
-          <el-table :data="books" v-loading="loading" empty-text="还没有资料，点击右上角上传">
-            <el-table-column prop="title" label="书名" min-width="160" show-overflow-tooltip />
+          <div class="library-filters">
+            <el-input v-model="libraryQ" clearable placeholder="检索题名、作者、期刊或 DOI" />
+            <el-select v-model="libraryCategory" clearable placeholder="全部分类">
+              <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
+            </el-select>
+            <el-select v-model="readingFilter" clearable placeholder="阅读状态">
+              <el-option label="未读" value="unread" />
+              <el-option label="阅读中" value="reading" />
+              <el-option label="已读完" value="read" />
+            </el-select>
+            <el-checkbox v-model="favoriteOnly">仅收藏</el-checkbox>
+          </div>
+
+          <el-table :data="filteredBooks" v-loading="loading" empty-text="还没有符合条件的资料">
+            <el-table-column label="" width="44">
+              <template #default="{ row }"><span class="star" :class="{ active: row.favorite }" @click="toggleFavorite(row)">★</span></template>
+            </el-table-column>
+            <el-table-column label="文献" min-width="230">
+              <template #default="{ row }">
+                <div class="paper-title">{{ row.title }}</div>
+                <div class="paper-meta">{{ [row.authors, row.journal, row.published_year].filter(Boolean).join(' · ') || '等待补充书目信息' }}</div>
+              </template>
+            </el-table-column>
             <el-table-column prop="file_type" label="类型" width="70">
               <template #default="{ row }">
                 <el-tag size="small">{{ row.file_type }}</el-tag>
@@ -50,6 +91,11 @@
               </template>
             </el-table-column>
             <el-table-column prop="total_pages" label="页数" width="70" />
+            <el-table-column label="阅读" width="86">
+              <template #default="{ row }">
+                <el-tag size="small" :type="readingTagType(row.reading_status)">{{ readingLabel(row.reading_status) }}</el-tag>
+              </template>
+            </el-table-column>
             <el-table-column label="分类" width="90">
               <template #default="{ row }">
                 <el-tag v-if="row.category" size="small" type="info" class="cat-tag" @click="editCategory(row)">{{ row.category }}</el-tag>
@@ -76,6 +122,14 @@
               </template>
             </el-table-column>
           </el-table>
+          <div class="mobile-paper-list">
+            <article v-for="row in filteredBooks" :key="row.id" class="mobile-paper-card">
+              <div class="mobile-paper-head"><span class="star" :class="{ active: row.favorite }" @click="toggleFavorite(row)">★</span><div><b>{{ row.title }}</b><small>{{ [row.authors, row.journal, row.published_year].filter(Boolean).join(' · ') || '等待补充书目信息' }}</small></div></div>
+              <div class="mobile-paper-tags"><el-tag size="small">{{ row.file_type }}</el-tag><el-tag size="small" :type="readingTagType(row.reading_status)">{{ readingLabel(row.reading_status) }}</el-tag><el-tag v-if="row.category" size="small" type="info">{{ row.category }}</el-tag></div>
+              <div class="mobile-paper-actions"><el-button type="primary" size="small" @click="readBook(row)">阅读</el-button><el-button size="small" @click="openBook(row)">详情</el-button><el-button size="small" @click="openWorkbench(row)">生成汇报</el-button></div>
+            </article>
+            <el-empty v-if="!filteredBooks.length && !loading" description="先导入一篇文献，开始建立个人知识库" :image-size="72" />
+          </div>
         </el-card>
 
         <el-card shadow="never" style="margin-top: 16px">
@@ -114,22 +168,37 @@
             </el-card>
           </div>
         </el-card>
-      </el-col>
+      </section>
 
-      <el-col :span="8">
-        <el-card v-if="currentBook" shadow="never">
-          <template #header>
-            <div class="card-header">
-              <span>{{ currentBook.title }}</span>
-              <el-button link type="primary" size="small" @click="currentBook = null">关闭</el-button>
-            </div>
-          </template>
+      <el-drawer v-model="detailVisible" size="min(520px, 94vw)" append-to-body class="paper-drawer">
+        <template #header><div><div class="drawer-eyebrow">KNOWLEDGE SOURCE</div><b>{{ currentBook?.title }}</b></div></template>
+        <div v-if="currentBook" class="paper-detail">
+          <div class="detail-actions">
+            <el-button type="primary" @click="readBook(currentBook)">进入阅读</el-button>
+            <el-button @click="openWorkbench(currentBook)">生成汇报</el-button>
+          </div>
+          <el-divider content-position="left">文献结构</el-divider>
           <el-tree
             :data="chapterTree"
             :props="{ label: 'title', children: 'children' }"
             default-expand-all
             empty-text="暂无章节"
           />
+          <template v-if="currentBook.archive">
+            <el-divider content-position="left">文献归档</el-divider>
+            <div class="archive-grid">
+              <label>作者<el-input v-model="currentBook.archive.authors" size="small" /></label>
+              <label>期刊<el-input v-model="currentBook.archive.journal" size="small" /></label>
+              <label>年份<el-input-number v-model="currentBook.archive.published_year" :min="1000" :max="3000" size="small" /></label>
+              <label>DOI<el-input v-model="currentBook.archive.doi" size="small" /></label>
+              <label>状态
+                <el-select v-model="currentBook.archive.reading_status" size="small">
+                  <el-option label="未读" value="unread" /><el-option label="阅读中" value="reading" /><el-option label="已读完" value="read" />
+                </el-select>
+              </label>
+            </div>
+            <el-button type="primary" plain size="small" style="width: 100%; margin-top: 10px" @click="saveArchive">保存归档信息</el-button>
+          </template>
           <el-alert v-if="currentBook.status === 'failed'" type="error" :title="'解析失败：' + (currentBook.error_msg || '')" style="margin-top: 12px" />
           <el-alert v-else-if="currentBook.status === 'needs_ocr'" type="warning" :closable="false" :title="currentBook.error_msg || '扫描版 PDF，需安装 OCR 引擎'" description="可点击「阅读」用内置阅读器直接查看原文件；如需检索/问答，请安装 OCR 引擎后重新解析" style="margin-top: 12px" />
 
@@ -160,22 +229,22 @@
               正文字号 {{ currentBook.analysis.body_size }} · 表格 {{ currentBook.analysis.table_pages?.length || 0 }} 处
             </div>
           </template>
-        </el-card>
-      </el-col>
-    </el-row>
+        </div>
+      </el-drawer>
+    </div>
 
     <!-- 原文定位面板 -->
-    <OriginalViewer ref="originalViewer" />
+    <component :is="originalViewerComponent" v-if="originalViewerComponent" ref="originalViewer" />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, shallowRef, computed, nextTick, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listBooks, uploadBook, uploadBookBatch, deleteBook, getBook, searchBooks, getTask, classifyAllBooks, setBookCategory, deepAnalyze } from '../api'
+import { listBooks, uploadBook, uploadBookBatch, deleteBook, getBook, searchBooks, classifyAllBooks, setBookCategory, deepAnalyze, updateArchiveProfile } from '../api'
 import { sanitizeHtml } from '../utils/markdown'
-import OriginalViewer from '../components/OriginalViewer.vue'
+import { notifyTaskSubmitted } from '../stores/taskCenter'
 
 const router = useRouter()
 const books = ref([])
@@ -187,9 +256,27 @@ const results = ref(null)
 const searching = ref(false)
 const searchCategory = ref(null)
 const categories = ref([])
+const libraryQ = ref('')
+const libraryCategory = ref(null)
+const readingFilter = ref(null)
+const favoriteOnly = ref(false)
 const currentBook = ref(null)
+const detailVisible = ref(false)
 const chapterTree = ref([])
 const originalViewer = ref(null)
+const originalViewerComponent = shallowRef(null)
+const filteredBooks = computed(() => {
+  const q = libraryQ.value.trim().toLowerCase()
+  return books.value.filter((b) => {
+    const hay = [b.title, b.authors, b.journal, b.doi].filter(Boolean).join(' ').toLowerCase()
+    return (!q || hay.includes(q))
+      && (!libraryCategory.value || b.category === libraryCategory.value)
+      && (!readingFilter.value || b.reading_status === readingFilter.value)
+      && (!favoriteOnly.value || b.favorite)
+  })
+})
+const readingLabel = (status) => ({ unread: '未读', reading: '阅读中', read: '已读完' }[status] || '未读')
+const readingTagType = (status) => ({ unread: 'info', reading: 'warning', read: 'success' }[status] || 'info')
 
 const loadBooks = async () => {
   loading.value = true
@@ -214,9 +301,9 @@ const handleUpload = async (file) => {
       ElMessage.warning(resp.message || '文件已存在')
     } else {
       ElMessage.success(`已上传，开始解析：${resp.title}`)
-      await pollTask(resp.task_id)
+      notifyTaskSubmitted()
     }
-    loadBooks()
+    await loadBooks()
   } catch (e) {
     ElMessage.error('上传失败：' + e.message)
   } finally {
@@ -250,7 +337,8 @@ const submitBatch = async () => {
     const fail = results.filter(r => r.error).length
     ElMessage.success(`批量上传完成：${ok} 个解析中，${dup} 个重复跳过，${fail} 个失败`)
     batchFiles.value = []
-    loadBooks()
+    notifyTaskSubmitted()
+    await loadBooks()
   } catch (e) {
     ElMessage.error('批量上传失败：' + e.message)
   } finally {
@@ -258,26 +346,11 @@ const submitBatch = async () => {
   }
 }
 
-const pollTask = async (taskId) => {
-  for (let i = 0; i < 120; i++) {
-    await new Promise((r) => setTimeout(r, 1000))
-    const t = await getTask(taskId)
-    if (t.status === 'done') {
-      ElMessage.success('解析完成！')
-      return
-    }
-    if (t.status === 'failed') {
-      ElMessage.error('解析失败：' + (t.message || t.error || '未知错误'))
-      return
-    }
-  }
-}
-
 const removeBook = async (row) => {
   try {
     await deleteBook(row.id)
     ElMessage.success('已删除')
-    if (currentBook.value?.id === row.id) currentBook.value = null
+    if (currentBook.value?.id === row.id) { currentBook.value = null; detailVisible.value = false }
     loadBooks()
   } catch (e) {
     ElMessage.error(e.message)
@@ -313,6 +386,7 @@ const runDeep = async (row) => {
   try {
     const resp = await deepAnalyze(row.id)
     ElMessage.success('深度分析已启动')
+    notifyTaskSubmitted()
     loadBooks()
   } catch (e) {
     ElMessage.error(e.message)
@@ -320,7 +394,31 @@ const runDeep = async (row) => {
 }
 
 const readBook = (row) => {
+  if (row.reading_status === 'unread') updateArchiveProfile(row.id, { reading_status: 'reading' }).catch(() => {})
   router.push('/reader/' + row.id)
+}
+
+const openWorkbench = (row) => router.push({ path: '/literature-workbench', query: { bookId: row.id } })
+
+const toggleFavorite = async (row) => {
+  try {
+    const next = !row.favorite
+    await updateArchiveProfile(row.id, { favorite: next })
+    row.favorite = next
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+const saveArchive = async () => {
+  try {
+    const a = currentBook.value.archive
+    currentBook.value.archive = await updateArchiveProfile(currentBook.value.id, {
+      authors: a.authors || null, journal: a.journal || null,
+      published_year: a.published_year || null, doi: a.doi || null,
+      reading_status: a.reading_status,
+    })
+    ElMessage.success('归档信息已保存')
+    loadBooks()
+  } catch (e) { ElMessage.error(e.message) }
 }
 
 const openBook = async (row) => {
@@ -328,6 +426,7 @@ const openBook = async (row) => {
     const detail = await getBook(row.id)
     currentBook.value = detail
     chapterTree.value = detail.chapters
+    detailVisible.value = true
   } catch (e) {
     ElMessage.error(e.message)
   }
@@ -353,10 +452,14 @@ const searchKeyword = (kw) => {
   doSearch()
 }
 
-const viewOriginal = (item) => {
+const viewOriginal = async (item) => {
   const book = books.value.find((b) => b.id === item.book_id)
   const ps = item.page_start || item.page || null
   const pe = item.page_end || item.page || null
+  if (!originalViewerComponent.value) {
+    originalViewerComponent.value = (await import('../components/OriginalViewer.vue')).default
+    await nextTick()
+  }
   originalViewer.value?.open({
     bookId: item.book_id,
     chunkId: item.chunk_id,
@@ -371,7 +474,26 @@ onMounted(loadBooks)
 </script>
 
 <style scoped>
-.card-header { display: flex; justify-content: space-between; align-items: center; }
+.library-page { max-width: 1680px; margin: 0 auto; }
+.library-workspace{min-width:0}.drawer-eyebrow{margin-bottom:5px;font-size:9px;letter-spacing:2px;color:#9a7a58}.paper-detail{padding-bottom:28px}.detail-actions{position:sticky;top:0;z-index:2;display:flex;padding:2px 0 14px;background:#fff}.paper-detail :deep(.el-tree){padding:8px 4px 16px;border-radius:10px;background:#f7f3ea}
+.library-hero { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding: 20px 24px; margin-bottom: 14px; color: #f5f0e8; background: linear-gradient(120deg, rgba(28,52,54,.96), rgba(67,85,72,.9)); border: 1px solid rgba(245,240,232,.16); border-radius: 16px; box-shadow: 0 12px 32px rgba(10,24,25,.2); }
+.library-hero h1 { margin: 4px 0 6px; font-family: Georgia, 'STSong', serif; font-size: 28px; letter-spacing: 2px; }
+.library-hero p { color: rgba(245,240,232,.72); }
+.eyebrow { color: #d3b58f; font-size: 10px; letter-spacing: 2.5px; }
+.hero-stats { display: flex; gap: 28px; }
+.hero-stats div { display: flex; flex-direction: column; text-align: right; }
+.hero-stats strong { font: 700 24px Georgia, serif; color: #f5f0e8; }
+.hero-stats span { font-size: 11px; color: rgba(245,240,232,.58); }
+.card-header, .header-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.header-title { display: flex; align-items: baseline; gap: 8px; font-weight: 700; }
+.header-title small { color: var(--el-text-color-secondary); font-weight: 400; }
+.library-filters { display: grid; grid-template-columns: minmax(220px, 1fr) 130px 120px auto; gap: 10px; align-items: center; margin-bottom: 12px; }
+.paper-title { font-weight: 650; color: var(--el-text-color-primary); line-height: 1.35; }
+.paper-meta { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.star { cursor: pointer; color: #c8c2b7; font-size: 18px; transition: .2s; }
+.star.active { color: #c08a3e; }
+.archive-grid { display: grid; gap: 9px; }
+.archive-grid label { display: grid; grid-template-columns: 42px 1fr; gap: 8px; align-items: center; color: var(--el-text-color-secondary); font-size: 12px; }
 .search-filters { display: flex; gap: 8px; margin-bottom: 4px; }
 .batch-bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 6px 10px; background: var(--el-fill-color-lighter); border-radius: 6px; }
 .batch-tip { font-size: 12px; color: var(--el-text-color-secondary); }
@@ -393,4 +515,13 @@ onMounted(loadBooks)
 .keyword-chip:hover { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
 .analysis-item { font-size: 13px; line-height: 1.6; margin-bottom: 4px; color: var(--el-text-color-primary); }
 .analysis-meta { font-size: 12px; color: var(--el-text-color-secondary); }
+.mobile-paper-list{display:none}.mobile-paper-card{padding:14px 0;border-bottom:1px solid var(--el-border-color-lighter)}.mobile-paper-head{display:flex;gap:9px;align-items:flex-start}.mobile-paper-head>div{min-width:0;display:flex;flex-direction:column}.mobile-paper-head b{line-height:1.4;color:#353730}.mobile-paper-head small{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8a8175}.mobile-paper-tags,.mobile-paper-actions{display:flex;gap:6px;margin-top:10px}.mobile-paper-actions{justify-content:flex-end}
+@media (max-width: 900px) {
+  .library-hero { align-items: flex-start; flex-direction: column; }
+  .hero-stats { width: 100%; justify-content: space-between; }
+  .hero-stats div { text-align: left; }
+  .library-filters { grid-template-columns: 1fr 1fr; }
+  .header-actions{width:100%;justify-content:flex-start}.library-page :deep(.el-table){font-size:12px}
+}
+@media (max-width: 620px){.library-hero{padding:16px}.library-hero h1{font-size:23px}.library-filters{grid-template-columns:1fr}.hero-stats{gap:12px}.hero-stats strong{font-size:20px}.header-actions :deep(.el-button){margin-left:0}.paper-meta{max-width:220px}.library-page :deep(.el-table){display:none}.mobile-paper-list{display:block}}
 </style>

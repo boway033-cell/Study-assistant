@@ -149,21 +149,23 @@ const errorMsg = ref('')
 const showTocPanel = ref(false)
 const pageList = ref([])
 
-// In double mode, only render the visible pair. In other modes, render all (lazy render by visibleRange).
+// 非连续模式只保留当前页/跨页 DOM，避免数百页空 canvas 常驻内存。
 const renderPageList = computed(() => {
   if (!numPages.value) return []
   if (mode.value === 'double') {
-    const r = visibleRange()
+    const r = { start: pairStartOf(page.value), end: pairEndOf(page.value) }
     const list = []
     for (let p = r.start; p <= r.end; p++) list.push(p)
     return list
   }
+  if (mode.value === 'single') return [page.value]
   return pageList.value
 })
 const mode = ref('scroll')
 const baseHeights = {}   // scale=1 时的页高缓存（缩放不重算）
 const baseWidths = {}
 const pageHeights = ref({})
+const pageMetricsVersion = ref(0)
 const rendered = ref({})
 const annotations = ref([])
 const showAnnPanel = ref(false)
@@ -199,8 +201,8 @@ const aiResultHtml = computed(() => {
 })
 
 // ===== 页高/页宽（缩放按比例，不重算）=====
-const pageH = (p) => Math.round((baseHeights[p] || 800) * scale.value)
-const pageWidthPx = (p) => Math.round((baseWidths[p] || 595) * scale.value)
+const pageH = (p) => { void pageMetricsVersion.value; return Math.round((baseHeights[p] || 800) * scale.value) }
+const pageWidthPx = (p) => { void pageMetricsVersion.value; return Math.round((baseWidths[p] || 595) * scale.value) }
 const pageOffset = (p) => {
   let acc = 0
   if (mode.value === 'double') {
@@ -230,14 +232,14 @@ const loadPdf = async () => {
     pdfDoc = doc
     numPages.value = doc.numPages
     pageList.value = Array.from({ length: doc.numPages }, (_, i) => i + 1)
-    // 预取前 N 页高度（保证首屏滚动位置正确），其余惰性补全
+    // 只读取第一页尺寸作为默认值；实际渲染时惰性修正，避免导入 400+ 页对象。
     const HEIGHTS = {}
     const WIDTHS = {}
+    const firstPage = await doc.getPage(1)
+    const firstViewport = firstPage.getViewport({ scale: 1 })
     for (let i = 1; i <= doc.numPages; i++) {
-      const pg = await doc.getPage(i)
-      const vp1 = pg.getViewport({ scale: 1 })
-      HEIGHTS[i] = vp1.height
-      WIDTHS[i] = vp1.width
+      HEIGHTS[i] = firstViewport.height
+      WIDTHS[i] = firstViewport.width
     }
     Object.assign(baseHeights, HEIGHTS)
     Object.assign(baseWidths, WIDTHS)
@@ -305,29 +307,11 @@ const visibleRange = () => {
     }
     return { start: Math.max(1, start - 1), end: Math.min(numPages.value, end + 1) }
   }
-  // 单页/双页：只渲染当前页（或当前跨页）
+  // 单页/双页没有虚拟长列表，当前页就是唯一渲染范围。
   if (mode.value === 'double') {
-    let acc = 0
-    let row = 1
-    while (row <= numPages.value) {
-      const s = pairStartOf(row)
-      const e = pairEndOf(s)
-      const h = Math.max(pageH(s), e > s ? pageH(e) : 0)
-      if (acc + h > st) break
-      acc += h
-      row = e + 1
-    }
-    const cur = Math.min(row, numPages.value)
-    return { start: pairStartOf(cur), end: pairEndOf(cur) }
+    return { start: pairStartOf(page.value), end: pairEndOf(page.value) }
   }
-  let cur = 1
-  let acc = 0
-  for (let p = 1; p <= numPages.value; p++) {
-    const h = pageH(p)
-    if (acc + h > st) { cur = p; break }
-    acc += h
-  }
-  return { start: cur, end: cur }
+  return { start: page.value, end: page.value }
 }
 
 const renderVisible = async () => {
@@ -349,6 +333,12 @@ const renderPage = async (p) => {
   try {
     if (renderTasks[p]) { try { await renderTasks[p].cancel() } catch {} delete renderTasks[p] }
     const pdfPage = await pdfDoc.getPage(p)
+    const vp1 = pdfPage.getViewport({ scale: 1 })
+    if (baseWidths[p] !== vp1.width || baseHeights[p] !== vp1.height) {
+      baseWidths[p] = vp1.width
+      baseHeights[p] = vp1.height
+      pageMetricsVersion.value++
+    }
     const vp = pdfPage.getViewport({ scale: scale.value })
     const cv = canvasRefs[p]
     if (!cv) return
@@ -390,14 +380,12 @@ const clearPage = (p) => {
 }
 
 const onScroll = () => {
+  if (mode.value !== 'scroll') return
   renderVisible()
   const r = visibleRange()
   // 连续模式：页码=视口顶部页（渲染缓冲只影响渲染，不影响页码）
   if (mode.value === 'scroll') {
     page.value = currentPageAt(scroller.value.scrollTop)
-  } else if (mode.value === 'double') {
-    const cur = r.start
-    page.value = pairStartOf(cur)
   }
   notifyPageChange()
   savePosDebounced()
@@ -424,7 +412,7 @@ const goPage = (delta) => {
   }
   if (mode.value === 'double') {
     const s = pairStartOf(page.value)
-    const next = s === 1 ? 2 : s + 2
+    const next = delta > 0 ? (s === 1 ? 2 : s + 2) : (s <= 2 ? 1 : s - 2)
     const p = Math.min(numPages.value, Math.max(1, next))
     scrollToPage(p)
     return
@@ -439,11 +427,12 @@ const onPageInput = (val) => {
 const scrollToPage = (p, smooth = true) => {
   if (!scroller.value) return
   const target = Math.min(numPages.value, Math.max(1, p))
-  page.value = target
+  page.value = mode.value === 'double' ? pairStartOf(target) : target
   // 单页/双页用瞬时跳转（避免平滑滚动中途 onScroll 把页码回弹）
   const useSmooth = smooth && mode.value === 'scroll'
-  scroller.value.scrollTo({ top: pageOffset(target) + 2, behavior: useSmooth ? 'smooth' : 'auto' })
-  renderVisible()
+  const top = mode.value === 'scroll' ? pageOffset(target) + 2 : 0
+  scroller.value.scrollTo({ top, behavior: useSmooth ? 'smooth' : 'auto' })
+  nextTick(renderVisible)
   notifyPageChange()
 }
 
@@ -456,7 +445,8 @@ const zoomBy = (d) => {
 const fitWidth = () => {
   if (!scroller.value || !numPages.value) return
   const w = scroller.value.clientWidth - 30
-  const base = baseWidths[page.value] || 595
+  const pairFactor = mode.value === 'double' && pairEndOf(page.value) > pairStartOf(page.value) ? 2 : 1
+  const base = (baseWidths[page.value] || 595) * pairFactor + (pairFactor === 2 ? 12 : 0)
   scale.value = Math.max(0.5, Math.min(2, w / base))
   renderVisible()
 }
@@ -464,7 +454,8 @@ const fitPage = () => {
   if (!scroller.value || !numPages.value) return
   const w = scroller.value.clientWidth - 30
   const h = scroller.value.clientHeight - 30
-  const bw = baseWidths[page.value] || 595
+  const pairFactor = mode.value === 'double' && pairEndOf(page.value) > pairStartOf(page.value) ? 2 : 1
+  const bw = (baseWidths[page.value] || 595) * pairFactor + (pairFactor === 2 ? 12 : 0)
   const bh = baseHeights[page.value] || 800
   scale.value = Math.max(0.5, Math.min(2, Math.min(w / bw, h / bh)))
   renderVisible()
@@ -809,7 +800,7 @@ onBeforeUnmount(() => {
 .pr-toc-item.active { background: var(--el-color-primary-light-8); color: var(--el-color-primary); font-weight: 600; }
 .pr-body { position: relative; flex: 1; overflow: auto; padding: 10px 14px; background: #525659; }
 .pr-body.pr-mode-scroll, .pr-body.pr-mode-single { text-align: center; }
-.pr-body.pr-mode-double { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.pr-body.pr-mode-double { text-align: center; white-space: nowrap; }
 .pr-page { position: relative; box-shadow: 0 2px 10px rgba(0,0,0,.4); background: #fff; }
 .pr-mode-scroll .pr-page, .pr-mode-single .pr-page { display: block; margin: 0 auto 10px; }
 .pr-mode-double .pr-page { display: inline-block; vertical-align: top; margin: 0 4px; }

@@ -27,6 +27,16 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    chunkSizeWarningLimit: 1500
+    chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('pdfjs-dist')) return 'pdfjs'
+          if (id.includes('echarts')) return 'echarts'
+          if (id.includes('element-plus')) return 'element-plus'
+          if (id.includes('marked') || id.includes('dompurify')) return 'content-tools'
+        },
+      },
+    },
   }
 })

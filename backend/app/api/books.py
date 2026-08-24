@@ -4,11 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
-from backend.app.models import Book, Chapter, Chunk, Note, Quiz
+from backend.app.models import Book, Chapter, Chunk, Note, PaperProfile, Quiz
 from backend.app.schemas import (
     BookDetailResp,
     BookListItem,
@@ -18,12 +18,14 @@ from backend.app.schemas import (
     NoteCreateReq,
     NoteResp,
     NoteUpdateReq,
+    PaperProfileResp,
+    PaperProfileUpdateReq,
     SearchResultItem,
     SearchResp,
     TaskResp,
 )
 from backend.app.services.rag import fts
-from backend.app.worker.import_task import run_import, save_upload
+from backend.app.worker.import_task import run_import
 from backend.app.worker.tasks import get_task, submit
 
 router = APIRouter(prefix="/api", tags=["books"])
@@ -77,6 +79,11 @@ def list_books(
         select(ImportTask.book_id, ImportTask.message)
         .where(ImportTask.status.in_(["pending", "running"]))
     ).all())
+    profiles = {
+        p.book_id: p for p in db.scalars(
+            select(PaperProfile).where(PaperProfile.book_id.in_([b.id for b in books]))
+        ).all()
+    } if books else {}
     items = [
         BookListItem(
             id=b.id, title=b.title, file_type=b.file_type, status=b.status,
@@ -84,6 +91,13 @@ def list_books(
             quiz_count=quiz_counts.get(b.id, 0), category=b.category,
             deep_status=deep_statuses.get(b.id, "none"),
             task_message=task_msgs.get(b.id),
+            authors=profiles[b.id].authors if b.id in profiles else None,
+            journal=profiles[b.id].journal if b.id in profiles else None,
+            published_year=profiles[b.id].published_year if b.id in profiles else None,
+            doi=profiles[b.id].doi if b.id in profiles else None,
+            reading_status=profiles[b.id].reading_status if b.id in profiles else "unread",
+            favorite=bool(profiles[b.id].favorite) if b.id in profiles else False,
+            progress_page=profiles[b.id].progress_page if b.id in profiles else 1,
             created_at=b.created_at,
         )
         for b in books
@@ -100,11 +114,76 @@ def get_book(book_id: int, db: Session = Depends(get_db)):
         select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.order_index)
     ).all()
     analysis = _get_analysis(db, book_id)
+    profile = db.get(PaperProfile, book_id)
+    if not profile:
+        profile = PaperProfile(book_id=book_id)
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
     return BookDetailResp(
         id=book.id, title=book.title, file_type=book.file_type, status=book.status,
         total_pages=book.total_pages, error_msg=book.error_msg,
         chapters=_build_chapter_tree(chapters), analysis=analysis,
+        archive=_profile_resp(profile),
     )
+
+
+def _profile_resp(profile: PaperProfile) -> PaperProfileResp:
+    return PaperProfileResp(
+        book_id=profile.book_id, authors=profile.authors, journal=profile.journal,
+        published_year=profile.published_year, doi=profile.doi, arxiv_id=profile.arxiv_id,
+        language=profile.language, abstract=profile.abstract, source_url=profile.source_url,
+        access_route=profile.access_route or "local_upload",
+        reading_status=profile.reading_status or "unread", favorite=bool(profile.favorite),
+        rating=profile.rating, progress_page=profile.progress_page or 1,
+        last_read_at=profile.last_read_at,
+    )
+
+
+@router.get("/books/{book_id}/archive", response_model=PaperProfileResp)
+def get_archive_profile(book_id: int, db: Session = Depends(get_db)):
+    if not db.get(Book, book_id):
+        raise HTTPException(404, "书籍不存在")
+    profile = db.get(PaperProfile, book_id)
+    if not profile:
+        profile = PaperProfile(book_id=book_id)
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+    return _profile_resp(profile)
+
+
+@router.patch("/books/{book_id}/archive", response_model=PaperProfileResp)
+def update_archive_profile(book_id: int, req: PaperProfileUpdateReq, db: Session = Depends(get_db)):
+    if not db.get(Book, book_id):
+        raise HTTPException(404, "书籍不存在")
+    profile = db.get(PaperProfile, book_id) or PaperProfile(book_id=book_id)
+    values = req.model_dump(exclude_unset=True)
+    if "reading_status" in values and values["reading_status"] not in ("unread", "reading", "read"):
+        raise HTTPException(400, "reading_status 仅支持 unread/reading/read")
+    for key, value in values.items():
+        setattr(profile, key, int(value) if key == "favorite" and value is not None else value)
+    if "progress_page" in values or "reading_status" in values:
+        from datetime import datetime
+        profile.last_read_at = datetime.now()
+    db.add(profile)
+    db.commit()
+    db.refresh(profile)
+    return _profile_resp(profile)
+
+
+@router.get("/books/{book_id}/source-map")
+def get_source_map(book_id: int, db: Session = Depends(get_db)):
+    import json
+    if not db.get(Book, book_id):
+        raise HTTPException(404, "书籍不存在")
+    profile = db.get(PaperProfile, book_id)
+    if not profile or not profile.source_map_json:
+        return {"version": 1, "book_id": book_id, "locator_mode": "unavailable", "blocks": []}
+    try:
+        return json.loads(profile.source_map_json)
+    except (ValueError, TypeError):
+        return {"version": 1, "book_id": book_id, "locator_mode": "unavailable", "blocks": []}
 
 
 def _get_analysis(db: Session, book_id: int):
@@ -132,9 +211,10 @@ def _get_analysis(db: Session, book_id: int):
     }
 
 
-def _validate_upload_file(content: bytes, file_type: str) -> None:
+def _validate_upload_path(path: Path, file_type: str) -> None:
     """文件签名校验（防改扩展名伪装）+ 压缩炸弹检查。"""
-    head = content[:16]
+    with path.open("rb") as stream:
+        head = stream.read(16)
     if file_type == "pdf":
         if not head.lstrip().startswith(b"%PDF-"):
             raise HTTPException(400, "文件内容不是有效的 PDF（缺少 PDF 签名）")
@@ -144,34 +224,53 @@ def _validate_upload_file(content: bytes, file_type: str) -> None:
         _pk7 = b"PK" + bytes([7, 8])
         if not (head.startswith(_pk) or head.startswith(_pk5) or head.startswith(_pk7)):
             raise HTTPException(400, f"文件内容不是有效的 {file_type.upper()}（缺少 ZIP 结构）")
-        import io as _io
         import zipfile as _zip
         try:
-            with _zip.ZipFile(_io.BytesIO(content)) as z:
-                unpacked = sum(i.file_size for i in z.infolist())
+            with _zip.ZipFile(path) as z:
+                entries = z.infolist()
+                if len(entries) > 10000:
+                    raise HTTPException(400, "压缩包文件项过多，已拒绝导入")
+                unpacked = sum(i.file_size for i in entries)
                 if unpacked > 500 * 1024 * 1024:
                     raise HTTPException(400, "文件解压后过大，疑似压缩炸弹")
         except _zip.BadZipFile:
             raise HTTPException(400, f"文件内容不是有效的 {file_type.upper()}（ZIP 结构损坏）")
 
 
-async def _read_upload_file(file: UploadFile) -> bytes:
-    """流式读取上传文件，限制 200MB。"""
+async def _store_validated_upload(file: UploadFile, file_type: str) -> tuple[Path, str, int]:
+    """以固定 1MB 缓冲落盘并计算哈希，不在内存中保留整份文献。"""
+    import hashlib
+    from backend.app.core.config import settings as _settings
+
     MAX_SIZE = 200 * 1024 * 1024
-    chunks: list[bytes] = []
+    safe_name = Path(file.filename or f"upload.{file_type}").name
+    path = _settings.uploads_dir / safe_name
+    stem, suffix = path.stem, path.suffix
+    index = 1
+    while path.exists():
+        path = _settings.uploads_dir / f"{stem}_{index}{suffix}"
+        index += 1
+
     total = 0
-    while True:
-        chunk = await file.read(1024 * 1024)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > MAX_SIZE:
-            raise HTTPException(400, "文件超过 200MB 限制")
-        chunks.append(chunk)
-    content = b"".join(chunks)
-    if not content:
-        raise HTTPException(400, "文件为空")
-    return content
+    digest = hashlib.sha256()
+    try:
+        with path.open("xb") as destination:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_SIZE:
+                    raise HTTPException(400, "文件超过 200MB 限制")
+                destination.write(chunk)
+                digest.update(chunk)
+        if not total:
+            raise HTTPException(400, "文件为空")
+        _validate_upload_path(path, file_type)
+        return path, digest.hexdigest(), total
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _check_duplicate(db: Session, file_hash: str) -> "Book | None":
@@ -185,10 +284,7 @@ async def upload_book(file: UploadFile, db: Session = Depends(get_db)):
     if file_type not in ("pdf", "docx", "pptx"):
         raise HTTPException(400, f"不支持的文件类型: {file_type}，仅支持 pdf/docx/pptx")
 
-    content = await _read_upload_file(file)
-    _validate_upload_file(content, file_type)
-
-    path, file_hash = save_upload(file.filename, content)
+    path, file_hash, file_size = await _store_validated_upload(file, file_type)
 
     # 去重：相同哈希的文件已存在则跳过解析
     existing = _check_duplicate(db, file_hash)
@@ -205,7 +301,7 @@ async def upload_book(file: UploadFile, db: Session = Depends(get_db)):
         title=Path(file.filename).stem,
         file_path=path.name,
         file_type=file_type,
-        file_size=len(content),
+        file_size=file_size,
         file_hash=file_hash,
         status="pending",
     )
@@ -228,9 +324,7 @@ async def upload_books_batch(files: list[UploadFile], db: Session = Depends(get_
             results.append({"filename": file.filename, "error": f"不支持的文件类型: {file_type}"})
             continue
         try:
-            content = await _read_upload_file(file)
-            _validate_upload_file(content, file_type)
-            path, file_hash = save_upload(file.filename, content)
+            path, file_hash, file_size = await _store_validated_upload(file, file_type)
 
             existing = _check_duplicate(db, file_hash)
             if existing:
@@ -249,7 +343,7 @@ async def upload_books_batch(files: list[UploadFile], db: Session = Depends(get_
                 title=Path(file.filename).stem,
                 file_path=path.name,
                 file_type=file_type,
-                file_size=len(content),
+                file_size=file_size,
                 file_hash=file_hash,
                 status="pending",
             )
@@ -337,30 +431,26 @@ def get_page_original(book_id: int, page_no: int, db: Session = Depends(get_db))
 
 @router.delete("/books/{book_id}", status_code=204)
 def delete_book(book_id: int, db: Session = Depends(get_db)):
+    from backend.app.core.config import settings as _settings
+    from backend.app.services.book_lifecycle import delete_book_records
+
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
     file_path = book.file_path
-    # 级联清理所有外键关联（Book 模型未挂级联的表需显式删除）
-    from backend.app.models import (
-        Annotation,
-        BookAnalysis,
-        BookDeep,
-        ChatLog,
-        KnowledgeNode,
-        Note,
-    )
-    for model in (Annotation, BookDeep, ChatLog, Note):
-        db.query(model).filter(model.book_id == book_id).delete(synchronize_session=False)
-    db.query(KnowledgeNode).filter(KnowledgeNode.book_id == book_id).delete(synchronize_session=False)
-    ba = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book_id))
-    if ba:
-        db.delete(ba)
-        db.flush()
-    db.delete(book)
-    db.commit()
+    try:
+        deck_files = delete_book_records(db, book_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    # 数据库提交后再删文件，避免事务失败造成不可恢复的数据丢失。
+    for deck_file in deck_files:
+        try:
+            (_settings.presentations_dir / Path(deck_file).name).unlink(missing_ok=True)
+        except OSError:
+            pass
     # 删除上传文件与 FTS 索引（仅项目 data 目录内）
-    from backend.app.core.config import settings as _settings
     f = _settings.uploads_dir / file_path
     try:
         if f.exists():
@@ -384,16 +474,9 @@ def reparse_book(book_id: int, db: Session = Depends(get_db)):
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
-    # 清空旧章节/chunks/分析/向量/深度分析
-    from backend.app.models import BookAnalysis, BookDeep
-    ba = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book_id))
-    if ba:
-        db.delete(ba)
-    bd = db.scalar(select(BookDeep).where(BookDeep.book_id == book_id))
-    if bd:
-        db.delete(bd)
-    db.query(Chunk).filter(Chunk.book_id == book_id).delete()
-    db.query(Chapter).filter(Chapter.book_id == book_id).delete()
+    # 清空可再生解析产物；笔记/题目/知识节点保留，仅解除旧章节关联。
+    from backend.app.services.book_lifecycle import prepare_book_for_reparse
+    prepare_book_for_reparse(db, book_id)
     try:
         from backend.app.services.rag import vector
         vector.delete_book_vectors(book_id)
@@ -491,6 +574,49 @@ def get_task_status(task_id: str):
         stage=record.stage, message=record.message, error=record.error,
         result=record.result,
     )
+
+
+@router.get("/tasks")
+def list_task_statuses(
+    active_only: bool = Query(default=False),
+    limit: int = Query(default=30, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """全局任务中心：读取持久化任务，刷新或重启后仍可查看。"""
+    from backend.app.models import ImportTask
+
+    query = (
+        select(ImportTask, Book.title)
+        .outerjoin(Book, Book.id == ImportTask.book_id)
+        .order_by(
+            case((ImportTask.status.in_(["pending", "running"]), 0), else_=1),
+            ImportTask.updated_at.desc(),
+            ImportTask.created_at.desc(),
+        )
+        .limit(limit)
+    )
+    if active_only:
+        query = query.where(ImportTask.status.in_(["pending", "running"]))
+    rows = db.execute(query).all()
+    return {
+        "items": [
+            {
+                "task_id": task.id,
+                "book_id": task.book_id,
+                "book_title": title or "",
+                "name": task.name,
+                "status": task.status,
+                "progress": task.progress or 0.0,
+                "stage": task.stage or "",
+                "message": task.message or "",
+                "error": task.error,
+                "retry_count": task.retry_count or 0,
+                "created_at": task.created_at,
+                "updated_at": task.updated_at,
+            }
+            for task, title in rows
+        ]
+    }
 
 
 @router.get("/books/{book_id}/document")

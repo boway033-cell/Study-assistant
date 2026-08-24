@@ -20,7 +20,7 @@
 **前置**：[Python 3.12+](https://www.python.org/downloads/)（安装时勾选 Add to PATH）。
 
 ```bat
-:: ① 首次：构建前端（需 Node.js 18+；已有 dist/ 可跳过）
+:: ① 首次：构建前端（需 Node.js 22+；已有 dist/ 可跳过）
 cd frontend && npm install && npm run build && cd ..
 
 :: ② 双击 start.bat（首次自动装 Python 依赖并启动）
@@ -75,7 +75,7 @@ npm run build      # 构建产物由后端自动托管
 | **架构加固** | ✅ 完成 | 数据层版本管理/损坏检测/自动备份、任务重试与断点恢复、知识事实层统一缓存、检索重排与引用核验、服务注册表解耦 |
 | 设置 | ✅ 完成 | DeepSeek API Key、flash/pro 模型切换、连接探测、数据健康状态 |
 
-**测试情况**：单元测试 40/40 通过（含架构加固模块测试）· Playwright 浏览器 UI 测试 18/18 通过。
+**测试情况**：后端单元/架构测试 60/60 通过，前端安全单测 3/3 通过；Playwright 浏览器 UI 测试需启动服务后按需运行。
 
 ## 📚 文档
 
@@ -113,7 +113,12 @@ npm run build      # 构建产物由后端自动托管
 
 ```bash
 # 单元测试
-.venv/Scripts/python -m pytest backend/tests/ -q
+.venv/Scripts/python -m pytest -q
+
+# 前端安全单测与构建
+cd frontend
+npm run test:unit
+npm run build
 
 # 浏览器 UI 测试（需先启动后端）
 .venv/Scripts/python -m playwright install chromium

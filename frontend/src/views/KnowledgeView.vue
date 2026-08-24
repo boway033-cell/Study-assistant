@@ -25,6 +25,10 @@
             <el-tag size="small" type="warning">🟡 模糊 {{ statFuzzy }}</el-tag>
             <el-tag size="small" type="danger">🔴 未掌握 {{ statMiss }}</el-tag>
           </div>
+          <el-select v-model="scopeBookIds" multiple collapse-tags filterable clearable
+            placeholder="筛选一本或多本知识树（不选择则显示全部）" style="width: 100%; margin-bottom: 8px" @change="loadTree">
+            <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
+          </el-select>
           <el-input v-model="treeFilter" size="small" placeholder="搜索节点…" clearable style="margin-bottom: 8px" prefix-icon="Search" />
           <div class="gen-buttons">
             <el-button size="small" type="success" plain @click="showImport = true">📚 从章节导入</el-button>
@@ -183,16 +187,11 @@
     <el-dialog v-model="showImport" title="从书籍章节导入知识树骨架" width="480px">
       <el-form label-width="90px">
         <el-form-item label="选择书籍">
-          <el-select v-model="importBook" placeholder="选择已解析完成的书籍" style="width: 100%">
+          <el-select v-model="importBook" multiple collapse-tags filterable placeholder="选择一本或多本书籍" style="width: 100%">
             <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="导入位置">
-          <el-radio-group v-model="importMode">
-            <el-radio value="new">新建《书名》章节骨架树</el-radio>
-            <el-radio value="current">作为当前选中节点的子节点</el-radio>
-          </el-radio-group>
-        </el-form-item>
+        <div class="form-tip">每本书会生成一棵独立知识树，避免不同书目的目录与概念混在一起。</div>
       </el-form>
       <template #footer>
         <el-button @click="showImport = false">取消</el-button>
@@ -204,16 +203,11 @@
     <el-dialog v-model="showAi" title="AI 生成课程知识框架" width="480px">
       <el-form label-width="90px">
         <el-form-item label="选择书籍">
-          <el-select v-model="aiBook" placeholder="选择已解析完成的书籍" style="width: 100%">
+          <el-select v-model="aiBook" multiple collapse-tags filterable placeholder="选择一本或多本书籍" style="width: 100%">
             <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="生成位置">
-          <el-radio-group v-model="aiMode">
-            <el-radio value="new">新建《书名》AI 框架树</el-radio>
-            <el-radio value="current">作为当前选中节点的子节点</el-radio>
-          </el-radio-group>
-        </el-form-item>
+        <div class="form-tip">AI 按书逐本分析、逐本建树；多选不会把来源压成一棵混合树。</div>
         <div class="form-tip" v-if="aiRunning">🤖 DeepSeek 正在分析教材章节与关键词… {{ aiStage }}</div>
       </el-form>
       <template #footer>
@@ -248,6 +242,7 @@ const allNodeOptions = ref([])
 const reviewDialog = ref(false)
 const reviewText = ref('')
 const tree = ref([])
+const scopeBookIds = ref([])
 const books = ref([])
 const nodeAnns = ref([])
 const viewMode = ref('outline')
@@ -260,12 +255,10 @@ const sourceLoading = ref(false)
 const sourceView = ref('text')
 const pdfBookType = ref('')
 const showImport = ref(false)
-const importBook = ref(null)
-const importMode = ref('new')
+const importBook = ref([])
 const importing = ref(false)
 const showAi = ref(false)
-const aiBook = ref(null)
-const aiMode = ref('new')
+const aiBook = ref([])
 const aiRunning = ref(false)
 const aiStage = ref('')
 
@@ -289,7 +282,7 @@ const filteredTree = computed(() => {
 
 const loadTree = async () => {
   try {
-    const resp = await getKnowledgeTree()
+    const resp = await getKnowledgeTree(scopeBookIds.value)
     tree.value = resp.items
     updateStats()
   } catch (e) {
@@ -548,15 +541,15 @@ const handleDrop = async (draggingNode, dropNode, dropType) => {
 }
 
 const doImport = async () => {
-  if (!importBook.value) {
+  if (!importBook.value.length) {
     ElMessage.warning('请选择书籍')
     return
   }
   importing.value = true
   try {
     await importKnowledgeChapters({
-      book_id: importBook.value,
-      parent_node_id: importMode.value === 'current' ? (current.value?.id ?? null) : null,
+      book_ids: importBook.value,
+      parent_node_id: null,
     })
     ElMessage.success('章节骨架已导入')
     showImport.value = false
@@ -569,15 +562,15 @@ const doImport = async () => {
 }
 
 const doAiGenerate = async () => {
-  if (!aiBook.value) {
+  if (!aiBook.value.length) {
     ElMessage.warning('请选择书籍')
     return
   }
   aiRunning.value = true
   try {
     const resp = await aiGenerateKnowledge({
-      book_id: aiBook.value,
-      parent_node_id: aiMode.value === 'current' ? (current.value?.id ?? null) : null,
+      book_ids: aiBook.value,
+      parent_node_id: null,
     })
     ElMessage.success('AI 正在分析教材结构…')
     // 轮询任务

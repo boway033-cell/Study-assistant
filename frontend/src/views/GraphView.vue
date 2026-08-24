@@ -5,10 +5,17 @@
         <template #header>
           <div class="graph-header">
             <span>📊 知识图谱（{{ nodes.length }} 个概念 · {{ edges.length }} 条关联）</span>
-            <el-button size="small" @click="loadGraph">刷新</el-button>
+            <div class="scope-actions">
+              <el-select v-model="selectedBookIds" multiple collapse-tags filterable
+                placeholder="选择一本或多本文献" style="width: 320px" @change="loadGraph">
+                <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
+              </el-select>
+              <el-button size="small" :disabled="!selectedBookIds.length" @click="loadGraph">生成 / 刷新</el-button>
+            </div>
           </div>
         </template>
-        <div ref="chart" class="chart-box" v-loading="loading"></div>
+        <el-empty v-if="!selectedBookIds.length" description="先选择一本或多本文献；图谱只使用所选来源" />
+        <div v-else ref="chart" class="chart-box" v-loading="loading"></div>
       </el-card>
     </div>
     <div class="graph-side">
@@ -37,7 +44,7 @@
 <script setup>
 import { ref, onMounted, nextTick, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
-import { getGraph, getConceptSources } from '../api'
+import { getGraph, getConceptSources, listBooks } from '../api'
 import { sanitizeHtml } from '../utils/markdown'
 
 const loading = ref(false)
@@ -46,13 +53,16 @@ const nodes = ref([])
 const edges = ref([])
 const selectedConcept = ref('')
 const sources = ref([])
+const books = ref([])
+const selectedBookIds = ref([])
 const chart = ref(null)
 let chartInstance = null
 
 const loadGraph = async () => {
+  if (!selectedBookIds.value.length) { nodes.value = []; edges.value = []; return }
   loading.value = true
   try {
-    const data = await getGraph()
+    const data = await getGraph(selectedBookIds.value)
     nodes.value = data.nodes
     edges.value = data.edges
     await nextTick()
@@ -101,7 +111,7 @@ const selectConcept = async (name) => {
   sources.value = []
   loadingSources.value = true
   try {
-    const data = await getConceptSources(name)
+    const data = await getConceptSources(name, selectedBookIds.value)
     sources.value = data.items || []
   } catch (e) {
     sources.value = []
@@ -112,7 +122,10 @@ const selectConcept = async (name) => {
 
 const resize = () => { if (chartInstance) chartInstance.resize() }
 
-onMounted(() => { loadGraph(); window.addEventListener('resize', resize) })
+onMounted(async () => {
+  try { books.value = (await listBooks({ page_size: 100 })).items.filter(b => b.status === 'ready') } catch {}
+  window.addEventListener('resize', resize)
+})
 onBeforeUnmount(() => { window.removeEventListener('resize', resize); if (chartInstance) chartInstance.dispose() })
 </script>
 
@@ -126,4 +139,10 @@ onBeforeUnmount(() => { window.removeEventListener('resize', resize); if (chartI
 .source-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
 .source-snippet { font-size: 13px; line-height: 1.7; color: var(--el-text-color-primary); }
 .graph-header { display: flex; justify-content: space-between; align-items: center; }
+.scope-actions { display: flex; gap: 8px; align-items: center; }
+@media (max-width: 1000px) {
+  .graph-page { flex-direction: column; height: auto; }
+  .graph-side { width: 100%; }
+  .graph-header { align-items: flex-start; gap: 10px; flex-direction: column; }
+}
 </style>

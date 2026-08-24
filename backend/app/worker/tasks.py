@@ -24,6 +24,7 @@ _queue: asyncio.Queue | None = None
 _backend_loop: asyncio.AbstractEventLoop | None = None
 _worker_started = False
 _lock = threading.Lock()
+_MAX_COMPLETED_IN_MEMORY = 128
 
 
 @dataclass
@@ -39,6 +40,16 @@ class TaskRecord:
     retry_count: int = 0
     max_retries: int = 2  # 失败自动重试次数（网络抖动/限流场景）
     _coro: "Callable[[TaskRecord], Awaitable[Any]] | None" = field(default=None, repr=False)
+
+
+def _release_completed_tasks() -> None:
+    """释放已结束任务的闭包，仅在内存保留最近记录；完整历史仍在 SQLite。"""
+    completed = [
+        task_id for task_id, task in _task_registry.items()
+        if task.status in ("done", "failed")
+    ]
+    for task_id in completed[:-_MAX_COMPLETED_IN_MEMORY]:
+        _task_registry.pop(task_id, None)
 
 
 def _persist(record: TaskRecord) -> None:
@@ -124,6 +135,9 @@ async def _worker() -> None:
                 record.error = str(e)
                 _persist(record)
         finally:
+            if record.status in ("done", "failed"):
+                record._coro = None
+                _release_completed_tasks()
             _queue.task_done()
 
 
@@ -202,6 +216,10 @@ def recover_pending_tasks() -> list[str]:
                 select(ImportTask).where(ImportTask.status == "pending").order_by(ImportTask.created_at)
             ).all()
             for row in rows:
+                if row.name not in ("import", "reimport"):
+                    row.status = "failed"
+                    row.error = "服务重启，非导入任务需由用户重新提交"
+                    continue
                 book = db.get(Book, row.book_id)
                 if book is None or book.status == "ready":
                     # 书已删或已完成，标记任务完成

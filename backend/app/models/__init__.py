@@ -50,6 +50,31 @@ class Book(Base):
     tags: Mapped[list["Tag"]] = relationship(secondary=book_tags, back_populates="books")
 
 
+class PaperProfile(Base):
+    """文献归档档案：书目信息、来源可追溯性与阅读状态。"""
+
+    __tablename__ = "paper_profiles"
+
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"), primary_key=True)
+    authors: Mapped[str | None] = mapped_column(Text)
+    journal: Mapped[str | None] = mapped_column(String(255))
+    published_year: Mapped[int | None] = mapped_column(Integer)
+    doi: Mapped[str | None] = mapped_column(String(255), index=True)
+    arxiv_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    language: Mapped[str | None] = mapped_column(String(20))
+    abstract: Mapped[str | None] = mapped_column(Text)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    access_route: Mapped[str] = mapped_column(String(50), default="local_upload")
+    provenance_json: Mapped[str | None] = mapped_column(Text)
+    source_map_json: Mapped[str | None] = mapped_column(Text)
+    reading_status: Mapped[str] = mapped_column(String(20), default="unread")  # unread/reading/read
+    favorite: Mapped[int] = mapped_column(Integer, default=0)
+    rating: Mapped[float | None] = mapped_column(Float)
+    progress_page: Mapped[int] = mapped_column(Integer, default=1)
+    last_read_at: Mapped[datetime | None] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class Chapter(Base):
     __tablename__ = "chapters"
 
@@ -199,6 +224,8 @@ class BookDeep(Base):
     toc_json: Mapped[str | None] = mapped_column(Text)        # 完整三级标题目录 [{title,level,page}]
     summaries_json: Mapped[str | None] = mapped_column(Text)  # [{title, summary}]
     markdown: Mapped[str | None] = mapped_column(Text)        # Markdown 版本
+    paper_card: Mapped[str | None] = mapped_column(Text)      # 01-16 节证据型阅读卡
+    card_audit_json: Mapped[str | None] = mapped_column(Text) # 阅读卡结构/来源审计
     chapter_hashes_json: Mapped[str | None] = mapped_column(Text)  # 各章内容哈希（增量缓存用）
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/running/done/failed
     error_msg: Mapped[str | None] = mapped_column(Text)
@@ -293,5 +320,43 @@ class ImportTask(Base):
     error: Mapped[str | None] = mapped_column(Text)
     result_json: Mapped[str | None] = mapped_column(Text)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class PresentationDeck(Base):
+    """由指定章节/选段生成的可编辑文献汇报。"""
+
+    __tablename__ = "presentation_decks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    paper_type: Mapped[str | None] = mapped_column(String(30))
+    selection_json: Mapped[str | None] = mapped_column(Text)
+    options_json: Mapped[str | None] = mapped_column(Text)
+    outline_json: Mapped[str | None] = mapped_column(Text)
+    manifest_json: Mapped[str | None] = mapped_column(Text)
+    qa_json: Mapped[str | None] = mapped_column(Text)
+    file_path: Mapped[str | None] = mapped_column(String(500))
+    error_msg: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class LiteratureAccessAttempt(Base):
+    """合法全文获取记录；清单只保存来源与校验信息，不保存凭据。"""
+
+    __tablename__ = "literature_access_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    include_si: Mapped[int | None] = mapped_column(Integer)
+    route: Mapped[str | None] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    manifest_json: Mapped[str | None] = mapped_column(Text)
+    book_id: Mapped[int | None] = mapped_column(ForeignKey("books.id"), index=True)
+    error_msg: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

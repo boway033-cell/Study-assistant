@@ -1,35 +1,14 @@
 <template>
   <el-container class="layout">
-    <el-aside width="200px" class="aside">
+    <el-aside :width="sidebarCollapsed ? '76px' : '224px'" class="aside desktop-aside">
       <div class="logo">
         <span class="logo-dew">💧</span>
-        <div class="logo-text">
+        <div v-if="!sidebarCollapsed" class="logo-text">
           <span class="logo-title">Study assistant</span>
           <span class="logo-sub">{{ term.name }} · {{ dateStr }}</span>
         </div>
       </div>
-      <el-menu :default-active="$route.path" router class="menu">
-        <el-menu-item-group title="资料">
-          <el-menu-item index="/library"><el-icon><Folder /></el-icon>资料库</el-menu-item>
-        </el-menu-item-group>
-        <el-menu-item-group title="学习">
-          <el-menu-item index="/chat"><el-icon><ChatDotRound /></el-icon>AI 问答</el-menu-item>
-          <el-menu-item index="/study"><el-icon><MagicStick /></el-icon>综合研读</el-menu-item>
-          <el-menu-item index="/quiz"><el-icon><EditPen /></el-icon>刷题自测</el-menu-item>
-        </el-menu-item-group>
-        <el-menu-item-group title="知识结构">
-          <el-menu-item index="/knowledge"><el-icon><Share /></el-icon>知识树</el-menu-item>
-          <el-menu-item index="/graph"><el-icon><Connection /></el-icon>知识图谱</el-menu-item>
-          <el-menu-item index="/draw"><el-icon><EditPen /></el-icon>AI 绘图</el-menu-item>
-        </el-menu-item-group>
-        <el-menu-item-group title="进度">
-          <el-menu-item index="/plan"><el-icon><Calendar /></el-icon>学习计划</el-menu-item>
-          <el-menu-item index="/stats"><el-icon><DataAnalysis /></el-icon>学习统计</el-menu-item>
-        </el-menu-item-group>
-        <el-menu-item-group title="系统">
-          <el-menu-item index="/settings"><el-icon><Setting /></el-icon>设置</el-menu-item>
-        </el-menu-item-group>
-      </el-menu>
+      <AppNavigation :collapsed="sidebarCollapsed" />
       <div class="aside-footer">
         <div class="dew-dot" v-for="i in 3" :key="i" :style="{ left: 24 + i * 44 + 'px', animationDelay: i * 0.6 + 's' }"></div>
         <span class="aside-poem">{{ term.name }} · {{ dateStr }}</span>
@@ -37,16 +16,31 @@
     </el-aside>
     <el-container>
       <el-header class="header">
-        <span class="page-title">{{ $route.meta.title || '' }}</span>
-        <span class="header-slogan">{{ term.name }}三候 · {{ term.hou.join(' · ') }}</span>
+        <div class="header-leading">
+          <el-button text circle class="mobile-menu" aria-label="打开导航" @click="mobileNav = true"><el-icon><Menu /></el-icon></el-button>
+          <el-button text circle class="collapse-button" aria-label="折叠侧栏" @click="toggleSidebar"><el-icon><component :is="sidebarCollapsed ? Expand : Fold" /></el-icon></el-button>
+          <div><span class="page-title">{{ $route.meta.title || '' }}</span><span class="page-context">{{ $route.meta.context || '个人知识库' }}</span></div>
+        </div>
+        <div class="header-actions">
+          <span class="header-slogan">{{ term.name }}三候 · {{ term.hou.join(' · ') }}</span>
+          <el-badge :value="activeTaskCount" :hidden="!activeTaskCount" class="task-badge">
+            <el-button plain class="task-button" @click="taskDrawerOpen = true"><el-icon><Bell /></el-icon><span>任务</span></el-button>
+          </el-badge>
+        </div>
       </el-header>
       <el-main class="main">
         <router-view />
       </el-main>
     </el-container>
 
+    <el-drawer v-model="mobileNav" direction="ltr" size="280px" :with-header="false" class="mobile-drawer">
+      <div class="mobile-logo"><span>💧</span><div><b>Study assistant</b><small>个人文献知识库</small></div></div>
+      <AppNavigation @navigate="mobileNav = false" />
+    </el-drawer>
+    <GlobalTaskCenter v-model="taskDrawerOpen" />
+
     <!-- 首次使用引导：未配置 API Key 时提示 -->
-    <el-dialog v-model="showKeyGuide" title="欢迎使用 Study assistant 👋" width="520px" :close-on-click-modal="false" append-to-body>
+    <el-dialog v-model="showKeyGuide" title="可选：启用云端 AI 能力" width="520px" append-to-body @closed="rememberKeyGuide">
       <div class="guide-body">
         <p>本应用的 <b>AI 问答与分析</b> 基于 <b>DeepSeek 云端</b> 大模型；<b>文本解析 / 切块 / 检索等分析全部在本地完成</b>，仅将「提问 + 检索片段」发送到云端。</p>
         <p>使用前需要配置一个 <b>DeepSeek API Key</b>：</p>
@@ -66,14 +60,21 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Folder, ChatDotRound, Share, EditPen, DataAnalysis, Setting, MagicStick, Connection, Calendar } from '@element-plus/icons-vue'
+import { Menu, Fold, Expand, Bell } from '@element-plus/icons-vue'
 import { getSettings } from './api'
 import { getSolarTerm } from './utils/solarTerm'
+import AppNavigation from './components/AppNavigation.vue'
+import GlobalTaskCenter from './components/GlobalTaskCenter.vue'
+import { taskCenter, startTaskPolling, stopTaskPolling } from './stores/taskCenter'
 
 const router = useRouter()
 const showKeyGuide = ref(false)
+const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
+const mobileNav = ref(false)
+const taskDrawerOpen = ref(false)
+const activeTaskCount = computed(() => taskCenter.items.filter((task) => ['pending', 'running'].includes(task.status)).length)
 const term = getSolarTerm()
 const dateStr = (() => {
   const d = new Date()
@@ -81,19 +82,29 @@ const dateStr = (() => {
 })()
 
 const goSettings = () => {
+  rememberKeyGuide()
   showKeyGuide.value = false
   router.push('/settings')
 }
 
+const rememberKeyGuide = () => localStorage.setItem('aiKeyGuideSeen', 'true')
+
+const toggleSidebar = () => {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  localStorage.setItem('sidebarCollapsed', String(sidebarCollapsed.value))
+}
+
 onMounted(async () => {
+  startTaskPolling()
   // 首次使用引导：未配置 API Key 时弹窗提示
   try {
     const s = await getSettings()
-    if (!s.deepseek_configured) {
+    if (!s.deepseek_configured && localStorage.getItem('aiKeyGuideSeen') !== 'true') {
       showKeyGuide.value = true
     }
   } catch { /* 后端未启动等场景静默 */ }
 })
+onUnmounted(stopTaskPolling)
 </script>
 
 <style>
@@ -110,6 +121,7 @@ html, body, #app { height: 100%; }
   position: relative;
   overflow: hidden;
   height: 100vh;
+  transition: width .2s ease;
 }
 /* 侧边栏底部淡露纹 */
 .aside::after {
@@ -156,6 +168,7 @@ html, body, #app { height: 100%; }
   scrollbar-width: thin;
   scrollbar-color: rgba(194, 162, 133, 0.3) transparent;
 }
+.aside .menu:not(.el-menu--collapse) { width: 100%; }
 .menu::-webkit-scrollbar { width: 4px; }
 .menu::-webkit-scrollbar-track { background: transparent; }
 .menu::-webkit-scrollbar-thumb { background: rgba(194, 162, 133, 0.3); border-radius: 2px; }
@@ -209,6 +222,7 @@ html, body, #app { height: 100%; }
   background: var(--bailu-header-bg);
   padding: 0 20px;
 }
+.header-leading,.header-actions{display:flex;align-items:center;gap:10px}.header-leading>div{display:flex;flex-direction:column}.page-context{margin-top:2px;font-size:10px;letter-spacing:1px;color:#8f806e}.collapse-button{color:var(--bailu-text-deep)}.mobile-menu{display:none}.task-button{border-color:rgba(139,90,43,.22);background:rgba(245,240,232,.66);color:#6f4721}.task-button span{margin-left:5px}.mobile-logo{display:flex;align-items:center;gap:10px;padding:14px 10px 22px;color:#f5f0e8}.mobile-logo>span{font-size:24px}.mobile-logo div{display:flex;flex-direction:column}.mobile-logo small{margin-top:3px;color:rgba(245,240,232,.6)}
 .page-title { font-size: 17px; font-weight: 600; color: var(--bailu-text-deep); letter-spacing: 1px; }
 .header-slogan {
   font-size: 11px; color: rgba(245, 240, 232, 0.55);
@@ -216,6 +230,10 @@ html, body, #app { height: 100%; }
 }
 
 .main { background: var(--el-bg-color-page); overflow: auto; padding: 12px; }
+
+@media (max-width: 820px) {
+  .desktop-aside{display:none}.collapse-button,.header-slogan{display:none}.mobile-menu{display:inline-flex}.header{padding:0 10px}.main{padding:8px}.task-button{padding:7px 10px}.page-title{font-size:15px}.mobile-drawer .el-drawer__body{padding:0;background:var(--bailu-bg-gradient)}
+}
 
 /* —— Markdown 排版层级（H1 醒目 / 层级分明 / 行高舒适） —— */
 .markdown-body { color: #333333; line-height: 1.9; }

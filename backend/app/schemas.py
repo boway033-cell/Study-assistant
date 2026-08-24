@@ -18,6 +18,13 @@ class BookListItem(BaseModel):
     category: str | None = None
     deep_status: str = "none"
     task_message: str | None = None
+    authors: str | None = None
+    journal: str | None = None
+    published_year: int | None = None
+    doi: str | None = None
+    reading_status: str = "unread"
+    favorite: bool = False
+    progress_page: int = 1
     created_at: datetime
 
 
@@ -45,6 +52,41 @@ class BookDetailResp(BaseModel):
     error_msg: str | None = None
     chapters: list[ChapterNode] = []
     analysis: "BookAnalysisResp | None" = None
+    archive: "PaperProfileResp | None" = None
+
+
+class PaperProfileResp(BaseModel):
+    book_id: int
+    authors: str | None = None
+    journal: str | None = None
+    published_year: int | None = None
+    doi: str | None = None
+    arxiv_id: str | None = None
+    language: str | None = None
+    abstract: str | None = None
+    source_url: str | None = None
+    access_route: str = "local_upload"
+    reading_status: str = "unread"
+    favorite: bool = False
+    rating: float | None = None
+    progress_page: int = 1
+    last_read_at: datetime | None = None
+
+
+class PaperProfileUpdateReq(BaseModel):
+    authors: str | None = None
+    journal: str | None = None
+    published_year: int | None = Field(default=None, ge=1000, le=3000)
+    doi: str | None = None
+    arxiv_id: str | None = None
+    language: str | None = None
+    abstract: str | None = None
+    source_url: str | None = None
+    access_route: str | None = None
+    reading_status: str | None = None
+    favorite: bool | None = None
+    rating: float | None = Field(default=None, ge=0, le=5)
+    progress_page: int | None = Field(default=None, ge=1)
 
 
 class BookAnalysisResp(BaseModel):
@@ -285,12 +327,12 @@ class KnowledgeMoveReq(BaseModel):
 
 
 class KnowledgeImportReq(BaseModel):
-    book_id: int
-    parent_node_id: int | None = None  # None = 新建一棵"《书名》章节骨架"根节点
+    book_ids: list[int] = Field(min_length=1, max_length=20)
+    parent_node_id: int | None = None
 
 
 class KnowledgeAiGenerateReq(BaseModel):
-    book_id: int
+    book_ids: list[int] = Field(min_length=1, max_length=8)
     parent_node_id: int | None = None
 
 

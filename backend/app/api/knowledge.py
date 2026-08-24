@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -57,13 +57,20 @@ def _collect_ids(node: KnowledgeNode, db: Session) -> list[int]:
 
 
 @router.get("/tree", response_model=KnowledgeTreeResp)
-def get_tree(db: Session = Depends(get_db)):
+def get_tree(book_ids: list[int] | None = Query(default=None), db: Session = Depends(get_db)):
     roots = db.scalars(
         select(KnowledgeNode).where(KnowledgeNode.parent_id.is_(None))
         .order_by(KnowledgeNode.order_index, KnowledgeNode.id)
     ).all()
-    total = db.scalar(select(func.count()).select_from(KnowledgeNode)) or 0
-    return KnowledgeTreeResp(total=total, items=[_to_resp(r, db) for r in roots])
+    items = [_to_resp(r, db) for r in roots]
+    scope = set(book_ids or [])
+    if scope:
+        def belongs(node: KnowledgeNodeResp) -> bool:
+            return node.book_id in scope or any(belongs(child) for child in node.children)
+        items = [item for item in items if belongs(item)]
+    def count_nodes(nodes: list[KnowledgeNodeResp]) -> int:
+        return sum(1 + count_nodes(n.children) for n in nodes)
+    return KnowledgeTreeResp(total=count_nodes(items), items=items)
 
 
 @router.post("/nodes", response_model=KnowledgeNodeResp, status_code=201)
@@ -175,51 +182,36 @@ def node_source(node_id: int, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/import-chapters", response_model=KnowledgeNodeResp, status_code=201)
+@router.post("/import-chapters", response_model=list[KnowledgeNodeResp], status_code=201)
 def import_chapters(req: KnowledgeImportReq, db: Session = Depends(get_db)):
-    """从书籍章节树一键导入知识树骨架（本地数据，无需 AI）。"""
-    book = db.get(Book, req.book_id)
-    if not book:
-        raise HTTPException(404, "书籍不存在")
-
-    # 确定父节点：指定了就用它，否则新建《书名》根节点
-    if req.parent_node_id is not None:
-        parent = _get_node(db, req.parent_node_id)
-        parent_id = parent.id
-        root_created = None
-    else:
-        root = KnowledgeNode(parent_id=None, title=f"《{book.title}》章节骨架", order_index=0)
+    """一次可选多本，但每本创建独立根树，来源不会彼此混合。"""
+    parent_id = _get_node(db, req.parent_node_id).id if req.parent_node_id is not None else None
+    created_roots: list[KnowledgeNode] = []
+    for root_order, book_id in enumerate(dict.fromkeys(req.book_ids)):
+        book = db.get(Book, book_id)
+        if not book:
+            raise HTTPException(404, f"书籍 {book_id} 不存在")
+        root = KnowledgeNode(parent_id=parent_id, title=f"《{book.title}》章节骨架",
+                             book_id=book.id, order_index=root_order)
         db.add(root)
         db.flush()
-        parent_id = root.id
-        root_created = root
-
-    chapters = db.scalars(
-        select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.order_index)
-    ).all()
-    # 按 parent_id 组装层级
-    by_parent: dict[int | None, list[Chapter]] = {}
-    for ch in chapters:
-        by_parent.setdefault(ch.parent_id, []).append(ch)
-
-    def build(parent_db_id: int, children: list[Chapter]) -> None:
-        for ch in children:
-            node = KnowledgeNode(
-                parent_id=parent_db_id, title=ch.title, book_id=book.id,
-                chapter_id=ch.id, order_index=ch.order_index,
-            )
-            db.add(node)
-            db.flush()
-            if ch.id in by_parent:
-                build(node.id, by_parent[ch.id])
-
-    build(parent_id, by_parent.get(None, []))
+        created_roots.append(root)
+        chapters = db.scalars(
+            select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.order_index)
+        ).all()
+        by_parent: dict[int | None, list[Chapter]] = {}
+        for ch in chapters:
+            by_parent.setdefault(ch.parent_id, []).append(ch)
+        def build(parent_db_id: int, children: list[Chapter]) -> None:
+            for ch in children:
+                node = KnowledgeNode(parent_id=parent_db_id, title=ch.title, book_id=book.id,
+                                     chapter_id=ch.id, order_index=ch.order_index)
+                db.add(node)
+                db.flush()
+                build(node.id, by_parent.get(ch.id, []))
+        build(root.id, by_parent.get(None, []))
     db.commit()
-    if root_created is not None:
-        db.refresh(root_created)
-        return _to_resp(root_created, db)
-    parent = _get_node(db, parent_id)
-    return _to_resp(parent, db)
+    return [_to_resp(root, db) for root in created_roots]
 
 
 @router.post("/ai-generate", status_code=202)
@@ -228,36 +220,27 @@ def ai_generate(req: KnowledgeAiGenerateReq, db: Session = Depends(get_db)):
     from backend.app.services.llm import LLMRouter, load_llm_config
     from backend.app.worker.tasks import submit
 
-    book = db.get(Book, req.book_id)
-    if not book:
-        raise HTTPException(404, "书籍不存在")
-    if book.status != "ready":
-        raise HTTPException(409, "书籍尚未解析完成")
+    books = [db.get(Book, book_id) for book_id in dict.fromkeys(req.book_ids)]
+    if any(book is None for book in books):
+        raise HTTPException(404, "所选书籍中存在已删除项目")
+    if any(book.status != "ready" for book in books):
+        raise HTTPException(409, "所选书籍中存在尚未解析完成的项目")
     if req.parent_node_id is not None:
         _get_node(db, req.parent_node_id)
 
-    chapters = db.scalars(
-        select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.order_index)
-    ).all()
-    if not chapters:
-        raise HTTPException(400, "书籍没有章节")
-
     from backend.app.models import BookAnalysis
     import json as _json
-
-    analysis = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book.id))
-    keywords = []
-    if analysis and analysis.keywords_json:
-        try:
-            keywords = _json.loads(analysis.keywords_json)[:40]
-        except (ValueError, TypeError):
-            keywords = []
-    chapter_titles = [f"{ch.order_index}. {ch.title}" for ch in chapters][:60]
-    material = {
-        "book_title": book.title,
-        "chapters": chapter_titles,
-        "keywords": keywords,
-    }
+    materials = []
+    for book in books:
+        chapters = db.scalars(select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.order_index)).all()
+        if not chapters:
+            raise HTTPException(400, f"《{book.title}》没有章节")
+        analysis = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book.id))
+        try: keywords = _json.loads(analysis.keywords_json or "[]")[:40] if analysis else []
+        except (ValueError, TypeError): keywords = []
+        materials.append({"book_id": book.id, "book_title": book.title,
+                          "chapters": [f"{ch.order_index}. {ch.title}" for ch in chapters][:60],
+                          "keywords": keywords})
 
     async def run(record):
         from backend.app.core.database import SessionLocal
@@ -269,7 +252,11 @@ def ai_generate(req: KnowledgeAiGenerateReq, db: Session = Depends(get_db)):
             cfg = load_llm_config(db2)
             cfg = {**cfg, "deepseek_model": "flash"}  # 批量生成固定用 flash
             provider = LLMRouter.get("auto", cfg)
-            prompt = [
+            total = 0
+            for material_index, material in enumerate(materials):
+                update_progress(record, 0.1 + 0.75 * material_index / len(materials), "ai",
+                                f"正在分析《{material['book_title']}》...")
+                prompt = [
                 {"role": "system", "content": (
                     "你是课程知识结构化助手。根据教材的章节目录和关键词，生成一份课程知识框架树"
                     "（帮助复习用的顶层结构，3 层以内）。只输出 JSON 数组，格式："
@@ -278,28 +265,22 @@ def ai_generate(req: KnowledgeAiGenerateReq, db: Session = Depends(get_db)):
                     "3) 覆盖全部关键词；4) 不要输出解释文字。"
                 )},
                 {"role": "user", "content": _json.dumps(material, ensure_ascii=False)},
-            ]
-            answer = ""
-            data = None
-            last_err = ""
-            for attempt in range(3):  # 限流/网络抖动自动重试
-                try:
-                    answer = ""
-                    async for delta in provider.stream_chat(prompt):
-                        answer += delta
-                    from backend.app.services.llm import parse_json_response
-                    data = parse_json_response(answer)
-                    if isinstance(data, list) and data:
-                        break
-                    last_err = "AI 返回内容无法解析为 JSON 数组"
-                except Exception as e:  # noqa: BLE001
-                    last_err = str(e)
-                await asyncio.sleep(2 * (attempt + 1))
-            if not isinstance(data, list) or not data:
-                raise RuntimeError("AI 生成失败：" + last_err + "，请稍后重试或改用手动/章节导入")
-
-            update_progress(record, 0.6, "ai", "正在写入知识树...")
-            total = _create_ai_tree(db2, req, data)
+                ]
+                data = None
+                last_err = ""
+                for attempt in range(3):
+                    try:
+                        answer = ""
+                        async for delta in provider.stream_chat(prompt): answer += delta
+                        from backend.app.services.llm import parse_json_response
+                        data = parse_json_response(answer)
+                        if isinstance(data, list) and data: break
+                        last_err = "AI 返回内容无法解析为 JSON 数组"
+                    except Exception as e: last_err = str(e)
+                    await asyncio.sleep(2 * (attempt + 1))
+                if not isinstance(data, list) or not data:
+                    raise RuntimeError(f"《{material['book_title']}》生成失败：{last_err}")
+                total += _create_ai_tree(db2, req.parent_node_id, data, material)
             update_progress(record, 1.0, "ai", "完成")
             return {"created": total}
         finally:
@@ -309,10 +290,13 @@ def ai_generate(req: KnowledgeAiGenerateReq, db: Session = Depends(get_db)):
     return {"task_id": record.id, "status": "running", "stage": "ai"}
 
 
-def _create_ai_tree(db: Session, req: KnowledgeAiGenerateReq, data: list[dict]) -> int:
+def _create_ai_tree(db: Session, parent_node_id: int | None, data: list[dict], material: dict) -> int:
     """把 AI 返回的 JSON 树写入 knowledge_nodes，返回创建数。"""
     total = 0
 
+    root = KnowledgeNode(parent_id=parent_node_id, title=f"《{material['book_title']}》AI 知识框架",
+                         book_id=material["book_id"], order_index=0)
+    db.add(root); db.flush(); total = 1
     def walk(items: list[dict], parent_id: int | None, depth: int) -> None:
         nonlocal total
         if depth > 3:
@@ -321,7 +305,7 @@ def _create_ai_tree(db: Session, req: KnowledgeAiGenerateReq, data: list[dict]) 
             title = str(item.get("title", "")).strip()
             if not title:
                 continue
-            node = KnowledgeNode(parent_id=parent_id, title=title, order_index=i)
+            node = KnowledgeNode(parent_id=parent_id, title=title, book_id=material["book_id"], order_index=i)
             db.add(node)
             db.flush()
             total += 1
@@ -329,7 +313,7 @@ def _create_ai_tree(db: Session, req: KnowledgeAiGenerateReq, data: list[dict]) 
             if isinstance(children, list) and children:
                 walk(children, node.id, depth + 1)
 
-    walk(data, req.parent_node_id, 0)
+    walk(data, root.id, 0)
     db.commit()
     return total
 
