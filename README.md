@@ -1,132 +1,173 @@
-# 学习助手（Study assistant）
+<div align="center">
 
-![Python](https://img.shields.io/badge/Python-3.12%2B-blue)
-![Vue](https://img.shields.io/badge/Vue-3-42b883)
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+# Study Assistant · 学习助手
+
+**把散落的 PDF、Word 与 PPT 变成可检索、可追溯、可汇报的个人文献知识库。**
+
+[![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-b28b54.svg)](LICENSE)
 
-一个本地部署的**个人知识库 + AI 学习助手**：把 PDF / Word / PPT 教材导入后自动建立
-可检索、可问答、可复习的**个人知识库**，并围绕知识库提供
-「AI 问答 + 知识树 + 知识图谱 + AI 绘图 + 自测刷题 + 深度分析 + AI 研读 + 学习计划」的完整学习闭环。
+本地优先 · 原文证据链 · 结构化阅读 · 知识树/图谱 · 中文 PPTX
 
-> 核心思路：**知识库优先**——导入即建库（解析/清洗/目录/切块/索引），检索即定位（文件/章节/页码），
-> AI 只做增值（基于库内内容问答、总结、出题），把「读资料」变成「主动回忆 + 自测 + 查漏补缺」。
->
-> **AI 策略**：文本解析/切块/检索全部在本地完成（不上传资料）；仅将「提问 + 检索片段」发送到 **DeepSeek 云端**生成回答。
-> **本地部署**：所有数据存于本机（SQLite + 上传文件 + 索引），无网也可用核心功能。
+</div>
 
-## 🚀 快速启动（从源码）
+![Study Assistant 产品界面示意图](docs/assets/readme-hero.svg)
 
-**前置**：[Python 3.12+](https://www.python.org/downloads/)（安装时勾选 Add to PATH）。
+Study Assistant 面向需要长期阅读教材、论文与讲义的学生和研究者。它不把资料堆成一个聊天框，而是围绕**个人知识库**组织导入、解析、阅读、检索、批注、研读与输出；每本或多本书的知识树、知识图谱和画图任务都由你明确选择范围，避免不同书目被无意混合。
 
-```bat
-:: ① 首次：构建前端（需 Node.js 22+；已有 dist/ 可跳过）
-cd frontend && npm install && npm run build && cd ..
+> 当前项目优先支持 Windows 本地部署。没有 AI Key 时，资料管理、原文阅读、目录编辑、全文检索、批注和本地知识组织仍可使用。
 
-:: ② 双击 start.bat（首次自动装 Python 依赖并启动）
+## 它解决什么问题
+
+| 阅读现场的困难 | Study Assistant 的处理方式 |
+|---|---|
+| 扫描 PDF 目录断层、序号不连续、正文被误判为标题 | 原生文本与 OCR 按页取证，结合编号连续性、版面和正文语义生成候选目录，并保留人工复核入口 |
+| Markdown 被 PDF 换行切碎，段落与句子次序混乱 | 按阅读顺序重建段落，修复跨行断句、页眉页脚和重复文本，再生成结构化 Markdown |
+| 问答有结论却找不到依据 | RAG 回答携带书目、章节和页码，可直接回到原文核对 |
+| 多本资料一股脑生成图谱，关系失真 | 知识树、图谱和 AI 绘图均先选择单本或多本书目，再独立生成与保存 |
+| 分析、OCR 和汇报生成耗时，不知道做到哪一步 | 全局任务中心统一展示导入、OCR、深度分析和 PPTX 进度，重任务串行调度以控制内存 |
+| 做完笔记后很难沉淀为汇报 | 可选择章节或选段生成中文、可编辑的 PPTX，并保留来源定位 |
+
+## 从文献到知识的工作流
+
+```mermaid
+flowchart LR
+    A[导入 PDF / DOCX / PPTX] --> B[结构解析与弱页 OCR]
+    B --> C[目录校核与段落重建]
+    C --> D[(本地个人知识库)]
+    D --> E[原文 / Markdown 阅读]
+    D --> F[全文检索与可追溯问答]
+    D --> G[按书目生成知识树 / 图谱]
+    E --> H[高亮、批注与文献卡片]
+    F --> I[深度研读]
+    G --> I
+    H --> I
+    I --> J[选章节 / 选段生成中文 PPTX]
 ```
 
-然后浏览器访问 `http://127.0.0.1:8000`，停止用 `stop.bat`。
+## 核心体验
 
-> 不想装 Node 的普通用户，可下载 GitHub Release 的预构建包（含前端产物）。
+### 1. 先把文献变成可靠的知识底座
 
-### 手动启动
+- 导入 PDF、DOCX、PPTX，自动归档并建立中文全文索引。
+- 解析层综合原生文本、OCR、页码、字体和编号序列；低置信度结果进入复核，而不是静默写入错误目录。
+- 原文、结构化 Markdown、目录、页码和知识片段保持映射，为后续问答与汇报提供证据链。
+- OCR 与可选 PP-DocLayout 版面增强按任务唤起，不作为常驻重进程；大型任务串行执行，降低峰值内存。MinerU 目前不进入默认安装与导入链。
 
-```bash
-# 后端
+### 2. 用适合长文献的阅读器工作
+
+- PDF 支持连续、单页、双页模式，以及目录跳转、缩放、深色阅读和位置记忆。
+- 原文版、Markdown 精读版与文献卡片可切换；四色高亮、批注和笔记均保存在本地。
+- 选中文字可解释、翻译、追问或加入研读范围；视觉模型可按需解读图表、公式与扫描页。
+
+### 3. 明确范围，再让 AI 组织知识
+
+- 知识树、知识图谱和 AI 绘图在生成前选择书目范围：单本研究保持边界，多本文献用于有意识的比较。
+- 问答从所选知识库检索证据，答案可定位到文件、章节和页码。
+- 综合研读、苏格拉底式训练、自动出题、错题与学习计划共同形成“阅读—理解—复习”闭环。
+
+### 4. 从原文章节生成中文文献汇报
+
+- 选择整篇、章节或任意选段作为 PPTX 的内容边界。
+- AI 提炼研究问题、论证脉络、关键证据与结论，输出可继续编辑的中文 deck。
+- 支持开放获取、arXiv、Unpaywall 与图书馆/Chrome 登录态交接等合法全文入口；不会绕过付费墙或访问控制。
+
+## 快速开始
+
+### Windows 源码运行
+
+前置环境：Python 3.12+；仅在需要重新构建前端时安装 Node.js 22+。
+
+```powershell
+git clone https://github.com/boway033-cell/Study-assistant.git
+cd Study-assistant
+
 python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt
-.venv/Scripts/python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
-# 前端（开发模式，可选）
+# 仓库已包含前端构建产物；修改前端后再执行：
 cd frontend
 npm install
-npm run dev        # http://localhost:5173
-npm run build      # 构建产物由后端自动托管
+npm run build
+cd ..
+
+# 启动并自动打开浏览器
+.\start.bat
 ```
 
-### 首次使用
+应用默认位于 `http://127.0.0.1:8000`，使用 `stop.bat` 停止。若只运行后端，也可以执行：
 
-1. 到 [DeepSeek 开放平台](https://platform.deepseek.com) 注册并创建 **API Key**
-2. 打开应用，按引导弹窗前往 **设置** 页粘贴 Key 并保存
-3. 设置页点击「重新检测」确认连接成功，即可开始 AI 问答
-4. 模型档位：**flash**（deepseek-v4-flash，快速）/ **pro**（deepseek-v4-pro，深度推理），设置页或问答页随时切换
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+```
 
-> 开发环境也可在项目根 `.env` 中配置 `DEEPSEEK_API_KEY`（不纳入版本控制）。
->
-> **PDF 原文阅读**：内置 pdf.js 阅读器（Mozilla 开源，Firefox 同内核），直接在页面内渲染教材 PDF，无需下载。
+### 注册网页唤醒入口（可选）
 
-## ✅ 当前状态
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install_protocol.ps1
+```
 
-| 模块 | 状态 | 说明 |
-|---|---|---|
-| 资料管理 | ✅ 完成 | PDF/DOCX/PPTX 上传、章节树、版面分析、智能分析、中文全文搜索（全部本地） |
-| **PDF 阅读器** | ✅ 完成 | 连续/单页/双页三种模式、目录/深色/位置记忆、四色高亮+批注卡片+导出（本地）；选中解释翻译/章节总结/视觉解读（AI 可选）；**Markdown 精读版** |
-| **深度分析** | ✅ 完成 | 导入后自动提取**三级标题目录**（章/节/小节）→ 核对缺失 → AI 补全 → **逐章 AI 精读总结** → 转 **Markdown** 存库（阅读器可切换查看） |
-| **AI 研读** | ✅ 完成 | **综合阅读报告**（主题脉络/文献定位/交叉知识点/学习路径）+ **思维训练**（出题批改追问/自由陪练，多轮） |
-| **文献分类** | ✅ 完成 | AI 自动分类（数学/管理学/…）存库，资料库分组展示、可手动改 |
-| AI 问答 | ✅ 完成 | RAG 检索 + DeepSeek 云端流式回答，答案带出处页码；右侧原文面板（pdf.js 阅读器）；flash/pro 切换 |
-| 知识树 | ✅ 完成 | 大纲/导图双视图、手动+章节导入+AI 生成框架、关联教材章节右侧看原文、节点笔记 |
-| **知识图谱** | ✅ 完成 | 自动抽概念 → 全局力导向图谱 → 点概念反查所有出处；批注自动回流知识树（全本地） |
-| 刷题自测 | ✅ 完成 | **AI 分析教材自动生成题目**（选书/章即可），自动判分 + 自评，错题本 |
-| 学习统计 | ✅ 完成 | 总览、章节掌握度（基于作答）、作答趋势、薄弱章节排行 |
-| **学习计划** | ✅ 完成 | 设定考试日期 → 按掌握度倒推每日任务 → 打卡日历（全本地） |
-| **AI 绘图** | ✅ 完成 | 自然语言描述 → DeepSeek 生成 draw.io 兼容 XML → SVG 实时预览 → 多轮对话修改图表 → 导出 XML/SVG |
-| **架构加固** | ✅ 完成 | 数据层版本管理/损坏检测/自动备份、任务重试与断点恢复、知识事实层统一缓存、检索重排与引用核验、服务注册表解耦 |
-| 设置 | ✅ 完成 | DeepSeek API Key、flash/pro 模型切换、连接探测、数据健康状态 |
+注册后可由网页或 Windows 运行框打开 `study-assistant://open`。协议处理器会先启动并完成健康检查，再打开浏览器，避免出现“拒绝连接”页面。
 
-**测试情况**：后端单元/架构测试 78/78 通过，前端单测 5/5 通过；Playwright 浏览器 UI 测试需启动服务后按需运行。
+### 启用 AI（可选）
 
-## 📚 文档
+在应用设置页填写 DeepSeek API Key，即可使用问答、深度研读、出题与 PPTX 生成；视觉分析另需配置 Qwen-VL。也可在根目录 `.env` 中设置 `DEEPSEEK_API_KEY`。Key 只在本机保存并以脱敏形式显示。
 
-| 文档 | 内容 |
+## 数据边界
+
+| 数据或操作 | 默认位置 / 去向 |
 |---|---|
-| [docs/README.md](docs/README.md) | 文档索引与维护规则 |
-| [docs/产品文档.md](docs/产品文档.md) | 当前产品定位、功能与视觉规范 |
-| [docs/PROJECT_HANDOVER.md](docs/PROJECT_HANDOVER.md) | 项目交接（含踩坑记录） |
-| [docs/LIGHTWEIGHT_DOCUMENT_PIPELINE.md](docs/LIGHTWEIGHT_DOCUMENT_PIPELINE.md) | 当前轻量文档解析管线 |
-| [docs/nature-literature-workflow.md](docs/nature-literature-workflow.md) | 文献研究与知识库工作流 |
-| [PRIVACY.md](PRIVACY.md) | 隐私说明（数据流向） |
-| [SECURITY.md](SECURITY.md) | 安全策略 |
-| [CHANGELOG.md](CHANGELOG.md) | 变更日志 |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
+| 原始文献、SQLite、全文索引、批注 | 本机 `backend/data/` |
+| 解析、切块、目录编辑、FTS5 检索 | 本机完成 |
+| AI 问答 | 提问与检索到的相关片段发送至已配置的 DeepSeek |
+| 深度分析、出题、研读、PPTX | 用户触发后，将所选范围的必要内容发送至 DeepSeek |
+| 页面视觉分析 | 用户触发后，将当前页面图像发送至 Qwen-VL |
 
-## 🔒 隐私与数据
+未配置对应 Key 时不会触发云端能力。完整说明见 [PRIVACY.md](PRIVACY.md)。备份可直接复制 `backend/data/`，或运行 `backup.bat`。
 
-- **原始文件 100% 保存在本地**：上传的 PDF/Word/PPT 只在本地解析、切块、建索引，文件本身从不上传到云端。
-- **本地处理**：文本解析、切块、全文检索（FTS5）全部在本地完成，不联网。
-- **云端传输（仅在启用 AI 功能且已配置 API Key 时发生）**，会发送的内容如下：
-  - AI 问答：你的提问 + 检索到的教材片段 → DeepSeek
-  - 深度分析：逐章正文（每章最多约 1.2 万字）→ DeepSeek
-  - 自动出题：教材片段 → DeepSeek
-  - 综合研读 / 思维训练：多份资料内容 → DeepSeek
-  - 知识树 AI 生成：章节目录 + 关键词 → DeepSeek
-  - 视觉分析：页面图像 → Qwen-VL（阿里百炼）
-  - 未配置对应 Key 时，这些云端功能不会触发，应用完全离线可用。
-- 所有数据在 `backend/data/`（SQLite + 上传文件 + 可选向量库），备份 = 复制该目录
-- API Key 保存在本地（`.env` 或数据库设置），设置页只显示脱敏值
-- 专业术语词典：`backend/data/userdict.txt`（每行一个词，重启后生效）
+## 技术架构
 
-## 🧪 测试
+```mermaid
+flowchart TB
+    UI[Vue 3 · Element Plus · pdf.js · ECharts]
+    API[FastAPI 服务]
+    JOB[全局任务调度器]
+    PARSE[PyMuPDF / pdftext / RapidOCR / 可选 PP-DocLayout]
+    STORE[(SQLite WAL · FTS5 · 本地文件)]
+    AI[可选 DeepSeek / Qwen-VL]
+    UI <--> API
+    API --> JOB
+    JOB --> PARSE
+    PARSE --> STORE
+    API <--> STORE
+    API -. 用户主动触发 .-> AI
+```
 
-```bash
-# 单元测试
-.venv/Scripts/python -m pytest -q
+## 项目状态
 
-# 前端安全单测与构建
+- 后端单元与架构测试：78 项。
+- 前端单元测试：5 项；另有按需运行的 Playwright 浏览器测试。
+- 当前版本：v1.0.0。项目处于持续迭代期，解析质量仍以“证据 + 置信度 + 人工复核”作为安全边界。
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
 cd frontend
 npm run test:unit
 npm run build
-
-# 浏览器 UI 测试（需先启动后端）
-.venv/Scripts/python -m playwright install chromium
-.venv/Scripts/python backend/tests/ui_test.py
 ```
 
-## 📦 备份与卸载
+## 文档与参与
 
-- **备份**：复制 `backend/data/` 目录，或运行 `backup.bat` 一键打包为 zip。
-- **卸载**：停止服务后直接删除项目目录即可（应用数据只写在项目目录内，不修改系统其它文件）。
+- [产品文档](docs/产品文档.md)：定位、功能范围与视觉交互规范
+- [项目交接](docs/PROJECT_HANDOVER.md)：开发状态、运行方式与已知边界
+- [轻量文档管线](docs/LIGHTWEIGHT_DOCUMENT_PIPELINE.md)：解析、OCR、目录证据与内存约束
+- [文献研究工作流](docs/nature-literature-workflow.md)：归档、文献卡片、PPTX 与合法全文路径
+- [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [变更记录](CHANGELOG.md)
+
+如果这个项目也解决了你的文献阅读问题，欢迎提交 Issue、改进解析样本或贡献代码。
 
 ---
-*版本 v1.0.0（见 CHANGELOG.md）*
+
+<div align="center">以原文为根，以知识为枝。</div>
