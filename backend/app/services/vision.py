@@ -50,7 +50,15 @@ class VisionProvider:
     async def check_available(self) -> tuple[bool, str]:
         if not self.api_key:
             return False, "未配置视觉 API Key"
-        return True, f"已配置（模型: {self.model}）"
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5)) as client:
+                resp = await client.get(f"{self.base_url}/models",
+                                        headers={"Authorization": f"Bearer {self.api_key}"})
+            if resp.status_code == 200:
+                return True, f"已连接（模型: {self.model}）"
+            return False, f"HTTP {resp.status_code}: {resp.text[:120]}"
+        except httpx.HTTPError as exc:
+            return False, f"连接失败: {type(exc).__name__}: {exc}"
 
 
 def load_vision_config(db) -> dict[str, str]:

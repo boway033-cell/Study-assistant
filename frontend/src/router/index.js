@@ -1,5 +1,5 @@
-import { createRouter, createWebHashHistory } from 'vue-router'
-// 使用 hash 模式：构建产物由 FastAPI 静态托管时无需服务端路由配置
+import { createRouter, createWebHistory } from 'vue-router'
+// FastAPI 对非 API 路径回退 index.html，因此可使用真实路径并支持协议深链。
 const routes = [
   { path: '/', redirect: '/library' },
   { path: '/library', name: 'library', component: () => import('../views/LibraryView.vue'), meta: { title: '文献知识库', context: '导入 · 归档 · 检索' } },
@@ -17,7 +17,7 @@ const routes = [
 ]
 
 const router = createRouter({
-  history: createWebHashHistory(),
+  history: createWebHistory(),
   routes,
 })
 

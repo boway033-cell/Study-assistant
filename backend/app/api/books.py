@@ -1,14 +1,16 @@
 """书籍/资料 API（docs/03-api.md §1）"""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
-from backend.app.models import Book, Chapter, Chunk, Note, PaperProfile, Quiz
+from backend.app.models import Book, Chapter, Chunk, Note, PaperProfile, Quiz, TocRevision, shelf_books
 from backend.app.schemas import (
     BookDetailResp,
     BookListItem,
@@ -29,6 +31,24 @@ from backend.app.worker.import_task import run_import
 from backend.app.worker.tasks import get_task, submit
 
 router = APIRouter(prefix="/api", tags=["books"])
+
+
+class TocEditItem(BaseModel):
+    client_key: str = Field(min_length=1, max_length=80)
+    id: int | None = None
+    parent_key: str | None = Field(default=None, max_length=80)
+    title: str = Field(min_length=1, max_length=255)
+    level: int = Field(ge=1, le=4)
+    start_page: int = Field(ge=1)
+
+
+class TocReplaceReq(BaseModel):
+    items: list[TocEditItem] = Field(min_length=1, max_length=1000)
+    note: str | None = Field(default=None, max_length=255)
+
+
+class TocRepairReq(BaseModel):
+    apply: bool = False
 
 
 def _build_chapter_tree(chapters: list[Chapter]) -> list[ChapterNode]:
@@ -54,11 +74,14 @@ def list_books(
     status: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    shelf_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     q = select(Book)
     if status:
         q = q.where(Book.status == status)
+    if shelf_id is not None:
+        q = q.join(shelf_books, shelf_books.c.book_id == Book.id).where(shelf_books.c.shelf_id == shelf_id)
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
     books = db.scalars(q.order_by(Book.created_at.desc()).offset((page - 1) * page_size).limit(page_size)).all()
 
@@ -84,6 +107,13 @@ def list_books(
             select(PaperProfile).where(PaperProfile.book_id.in_([b.id for b in books]))
         ).all()
     } if books else {}
+    shelf_map: dict[int, list[int]] = {b.id: [] for b in books}
+    if books:
+        for book_id, assigned_shelf_id in db.execute(
+            select(shelf_books.c.book_id, shelf_books.c.shelf_id)
+            .where(shelf_books.c.book_id.in_([b.id for b in books]))
+        ).all():
+            shelf_map.setdefault(book_id, []).append(assigned_shelf_id)
     items = [
         BookListItem(
             id=b.id, title=b.title, file_type=b.file_type, status=b.status,
@@ -98,6 +128,7 @@ def list_books(
             reading_status=profiles[b.id].reading_status if b.id in profiles else "unread",
             favorite=bool(profiles[b.id].favorite) if b.id in profiles else False,
             progress_page=profiles[b.id].progress_page if b.id in profiles else 1,
+            shelf_ids=shelf_map.get(b.id, []),
             created_at=b.created_at,
         )
         for b in books
@@ -394,6 +425,29 @@ def get_book_file(book_id: int, db: Session = Depends(get_db)):
                         content_disposition_type="inline")
 
 
+@router.get("/books/{book_id}/rendered-file")
+def get_rendered_book_file(book_id: int, db: Session = Depends(get_db)):
+    """DOCX/PPTX 的高保真原版 PDF；首次访问按需渲染，之后按哈希缓存。"""
+    from fastapi.responses import FileResponse
+    from backend.app.core.config import settings as _settings
+    from backend.app.services.office_render import render_office_pdf
+
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(404, "书籍不存在")
+    if book.file_type == "pdf":
+        path = _settings.uploads_dir / book.file_path
+    elif book.file_type in {"docx", "pptx"}:
+        try:
+            path = render_office_pdf(_settings.uploads_dir / book.file_path, book.file_type, book.file_hash)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise HTTPException(503, f"原版渲染暂不可用：{exc}") from exc
+    else:
+        raise HTTPException(400, "该格式不支持原版渲染")
+    return FileResponse(path, media_type="application/pdf", filename=f"{Path(book.file_path).stem}.pdf",
+                        content_disposition_type="inline")
+
+
 @router.get("/books/{book_id}/chunk/{chunk_id}")
 def get_chunk_original(chunk_id: int, book_id: int, db: Session = Depends(get_db)):
     """返回 chunk 全文 + 页码区间（供右侧原文定位面板）。"""
@@ -637,6 +691,16 @@ def get_document(book_id: int, db: Session = Depends(get_db)):
     by_chapter: dict[int | None, list[str]] = {}
     for c in chunks:
         by_chapter.setdefault(c.chapter_id, []).append(c.content)
+    fresh_pages: list[str] = []
+    if book.file_type in {"docx", "pptx"}:
+        try:
+            from backend.app.core.config import settings as _settings
+            from backend.app.services.parser import ParseError, parse_document
+            fresh = parse_document(_settings.uploads_dir / book.file_path)
+            if len(fresh.pages) == len(chapters):
+                fresh_pages = fresh.pages
+        except (OSError, RuntimeError, ValueError, ParseError):
+            fresh_pages = []
     return {
         "book_id": book.id,
         "title": book.title,
@@ -647,9 +711,12 @@ def get_document(book_id: int, db: Session = Depends(get_db)):
             for ch in chapters
         ],
         "sections": [
-            {"chapter_id": ch.id, "title": ch.title, "text": "\n\n".join(by_chapter.get(ch.id, []))}
-            for ch in chapters
+            {"chapter_id": ch.id, "title": ch.title,
+             "text": fresh_pages[index] if fresh_pages else "\n\n".join(by_chapter.get(ch.id, []))}
+            for index, ch in enumerate(chapters)
         ],
+        "source_view": "office_pdf" if book.file_type in {"docx", "pptx"} else "native_pdf",
+        "structure_source": "live_ooxml" if fresh_pages else "indexed_chunks",
     }
 
 
@@ -664,9 +731,92 @@ def rename_chapter(chapter_id: int, req: dict, db: Session = Depends(get_db)):
     title = (req.get("title") or "").strip()
     if not title:
         raise HTTPException(400, "标题不能为空")
+    from backend.app.services.archive import build_source_map
+    from backend.app.services.rag.toc_editor import chapter_snapshot
+    chapters = list(db.scalars(select(_Chapter).where(_Chapter.book_id == ch.book_id)
+                               .order_by(_Chapter.order_index)).all())
+    before = chapter_snapshot(chapters)
     ch.title = title
+    after = chapter_snapshot(chapters)
+    revision = TocRevision(book_id=ch.book_id, source="user", note="重命名目录标题",
+                           before_json=json.dumps(before, ensure_ascii=False),
+                           after_json=json.dumps(after, ensure_ascii=False))
+    db.add(revision)
+    chunks = list(db.scalars(select(Chunk).where(Chunk.book_id == ch.book_id)
+                             .order_by(Chunk.chunk_index)).all())
+    profile = db.get(PaperProfile, ch.book_id) or PaperProfile(book_id=ch.book_id)
+    profile.source_map_json = build_source_map(ch.book_id, chunks, {row.id: row.title for row in chapters})
+    db.add(profile)
     db.commit()
-    return {"id": ch.id, "title": ch.title}
+    return {"id": ch.id, "title": ch.title, "revision_id": revision.id}
+
+
+@router.get("/books/{book_id}/toc-review")
+def review_book_toc(book_id: int, db: Session = Depends(get_db)):
+    if not db.get(Book, book_id):
+        raise HTTPException(404, "书籍不存在")
+    chapters = list(db.scalars(select(Chapter).where(Chapter.book_id == book_id)
+                               .order_by(Chapter.order_index)).all())
+    from backend.app.services.rag.toc_editor import review_chapters
+    return review_chapters(chapters)
+
+
+@router.post("/books/{book_id}/toc-auto-repair")
+def auto_repair_book_toc(book_id: int, req: TocRepairReq, db: Session = Depends(get_db)):
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(404, "书籍不存在")
+    chapters = list(db.scalars(select(Chapter).where(Chapter.book_id == book_id)
+                               .order_by(Chapter.order_index)).all())
+    from backend.app.services.rag.toc_editor import replace_book_toc, review_chapters
+    audit = review_chapters(chapters)
+    if not req.apply or not audit["summary"]["safe_repairs"]:
+        return {"applied": False, "audit": audit}
+    from backend.app.services.rag.toc_logic import auto_repair_toc_rows
+    index_by_id = {chapter.id: index for index, chapter in enumerate(chapters)}
+    repaired, _ = auto_repair_toc_rows([
+        {"id": chapter.id, "title": chapter.title, "level": chapter.level,
+         "page": chapter.start_page or 1, "parent_index": index_by_id.get(chapter.parent_id)}
+        for chapter in chapters
+    ])
+    items = []
+    stack = []
+    for item in repaired:
+        level = item["level"]
+        while len(stack) >= level:
+            stack.pop()
+        parent = stack[level - 2] if level > 1 else None
+        items.append({"client_key": f"id:{item['id']}", "id": item["id"],
+                      "parent_key": f"id:{parent['id']}" if parent else None,
+                      "title": item["title"], "level": level, "start_page": item["page"]})
+        stack.append(item)
+    try:
+        result = replace_book_toc(db, book, items, "auto", "编号逻辑安全修正")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"applied": True, **result}
+
+
+@router.put("/books/{book_id}/toc")
+def replace_toc(book_id: int, req: TocReplaceReq, db: Session = Depends(get_db)):
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(404, "书籍不存在")
+    from backend.app.services.rag.toc_editor import replace_book_toc
+    try:
+        return replace_book_toc(db, book, [item.model_dump() for item in req.items], "user", req.note)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/books/{book_id}/toc-revisions")
+def list_toc_revisions(book_id: int, db: Session = Depends(get_db)):
+    if not db.get(Book, book_id):
+        raise HTTPException(404, "书籍不存在")
+    rows = db.scalars(select(TocRevision).where(TocRevision.book_id == book_id)
+                      .order_by(TocRevision.created_at.desc()).limit(30)).all()
+    return [{"id": row.id, "source": row.source, "note": row.note, "created_at": row.created_at}
+            for row in rows]
 
 
 @router.get("/books/{book_id}/notes", response_model=list[NoteResp])

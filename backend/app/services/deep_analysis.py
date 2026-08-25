@@ -233,12 +233,22 @@ def verify_toc(toc: list[dict]) -> dict:
     if len(toc) == 1:
         issues.append({"type": "sparse_structure", "ref": "目录过少，请从全文标题候选中复核", "level": 2})
 
+    from backend.app.services.rag.toc_logic import analyze_toc_rows
+    logic = analyze_toc_rows(toc)
+    existing_keys = {(issue["type"], issue.get("ref") or issue.get("message")) for issue in issues}
+    for issue in logic["issues"]:
+        key = (issue["type"], issue.get("message"))
+        if key not in existing_keys:
+            issues.append(issue)
+            existing_keys.add(key)
+
     return {
         "ok": len(issues) == 0,
         "issues": issues[:30],
         "chapters": len(chapters),
         "sections": len(sections),
         "subsections": len(subs),
+        "logic_summary": logic["summary"],
     }
 
 

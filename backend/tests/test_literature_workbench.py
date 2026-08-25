@@ -19,6 +19,15 @@ def test_private_network_urls_are_rejected(monkeypatch):
         validate_public_https_url("https://example.test/file.pdf")
 
 
+def test_proxy_fake_ip_allows_domain_but_not_literal(monkeypatch):
+    from backend.app.services.literature_access import validate_public_https_url
+
+    monkeypatch.setattr("socket.getaddrinfo", lambda *args, **kwargs: [(2, 1, 6, "", ("198.18.0.74", 443))])
+    assert validate_public_https_url("https://journal.example/article") == "https://journal.example/article"
+    with pytest.raises(ValueError, match="私有|本地|保留"):
+        validate_public_https_url("https://198.18.0.74/article")
+
+
 def test_library_handoff_does_not_embed_credentials(monkeypatch):
     from backend.app.services.literature_access import build_library_handoff
 
@@ -26,6 +35,44 @@ def test_library_handoff_does_not_embed_credentials(monkeypatch):
     url = build_library_handoff("https://library.example/search", "10.1000/test")
     assert "q=10.1000%2Ftest" in url
     assert "cookie" not in url.lower()
+
+
+def test_web_page_discovers_citation_pdf_and_relative_download(monkeypatch):
+    from backend.app.services.literature_access import discover_pdf_links
+
+    monkeypatch.setattr("socket.getaddrinfo", lambda *args, **kwargs: [(2, 1, 6, "", ("1.1.1.1", 443))])
+    source = '''<meta name="citation_pdf_url" content="/paper/full.pdf">
+                <a href="/download?id=7">download</a>'''
+    links = discover_pdf_links("https://journal.example/article/7", source)
+    assert "https://journal.example/paper/full.pdf" in links
+    assert "https://journal.example/download?id=7" in links
+
+
+def test_rdfybk_page_discovers_precise_pdf_handoff(monkeypatch):
+    from backend.app.services.literature_access import discover_pdf_links
+
+    monkeypatch.setattr("socket.getaddrinfo", lambda *args, **kwargs: [(2, 1, 6, "", ("1.1.1.1", 443))])
+    links = discover_pdf_links("https://www.rdfybk.com/qw/detail?id=926513", "<script>Set_ArtIntro()</script>")
+    assert links == ["https://www.rdfybk.com/qw/DownPdf?id=926513"]
+
+
+def test_rdfybk_keeps_precise_handoff_when_source_blocks_probe(monkeypatch):
+    import asyncio
+    from backend.app.services import literature_access
+
+    monkeypatch.setattr("socket.getaddrinfo", lambda *args, **kwargs: [(2, 1, 6, "", ("1.1.1.1", 443))])
+    async def blocked(*args, **kwargs):
+        raise OSError("blocked")
+    monkeypatch.setattr(literature_access, "_read_probe", blocked)
+    candidates = asyncio.run(literature_access._resolve_web_url("https://www.rdfybk.com/qw/detail?id=926513"))
+    assert candidates[0].url == "https://www.rdfybk.com/qw/DownPdf?id=926513"
+    assert candidates[0].direct_download is False
+
+
+def test_default_text_router_remains_deepseek():
+    from backend.app.services.llm import DeepSeekProvider, LLMRouter
+
+    assert isinstance(LLMRouter.get(), DeepSeekProvider)
 
 
 def test_local_outline_and_editable_pptx(tmp_path):
@@ -44,3 +91,129 @@ def test_local_outline_and_editable_pptx(tmp_path):
     assert len(prs.slides) == 8
     assert any(shape.has_text_frame for shape in prs.slides[1].shapes)
     assert audit_pptx(path, outline)["ok"] is True
+
+
+def test_claim_source_audit_flags_number_not_in_source():
+    from backend.app.services.presentation_deck import audit_claim_sources
+
+    sources = [{"source_id": "chunk:1", "chapter_id": 1, "page_start": 2,
+                "text": "该方法在测试集上提升了 12%。"}]
+    outline = [{"title": "封面", "kind": "cover", "claim": "", "bullets": [], "source_ids": []},
+               {"title": "结果", "kind": "evidence", "claim": "性能提升 30%",
+                "bullets": [], "source_ids": ["chunk:1"]}]
+    audit = audit_claim_sources(outline, sources)
+    assert audit["ok"] is False
+    assert audit["blocking_slides"] == [2]
+    assert "30%" in audit["items"][0]["missing_numbers"]
+
+
+def test_stratified_selection_covers_each_selected_chapter():
+    from backend.app.api.books import delete_book
+    from backend.app.core.database import SessionLocal
+    from backend.app.models import Book, Chapter, Chunk
+    from backend.app.services.presentation_deck import collect_selection
+
+    db = SessionLocal()
+    try:
+        book = Book(title="Coverage", file_path="missing.pdf", file_type="pdf", status="ready")
+        db.add(book); db.flush()
+        chapters = [Chapter(book_id=book.id, title=f"Chapter {i}", level=1, order_index=i) for i in range(2)]
+        db.add_all(chapters); db.flush()
+        for chapter in chapters:
+            db.add_all([Chunk(book_id=book.id, chapter_id=chapter.id, chunk_index=chapter.order_index * 10 + i,
+                              content=(f"章节{chapter.order_index}片段{i}。" * 120), page_start=i + 1, page_end=i + 1)
+                        for i in range(6)])
+        db.commit()
+        selection = collect_selection(db, book.id, [chapter.id for chapter in chapters], [], "", [], 8000)
+        assert selection["coverage"]["total_groups"] == 2
+        assert selection["coverage"]["covered_groups"] == 2
+        assert {source["chapter_id"] for source in selection["sources"]} == {chapter.id for chapter in chapters}
+        delete_book(book.id, db)
+    finally:
+        db.close()
+
+
+def test_bookshelf_is_virtual_and_multi_membership():
+    from backend.app.api.shelves import ShelfBooksWrite, ShelfWrite, create_shelf, delete_shelf, put_shelf_books
+    from backend.app.api.books import delete_book
+    from backend.app.core.database import SessionLocal
+    from backend.app.models import Book, Shelf, shelf_books
+    from sqlalchemy import select
+
+    db = SessionLocal()
+    try:
+        book = Book(title="Shelf item", file_path="same.pdf", file_type="pdf", status="ready")
+        db.add(book); db.commit(); db.refresh(book)
+        first = create_shelf(ShelfWrite(name="项目甲"), db)
+        second = create_shelf(ShelfWrite(name="课程乙"), db)
+        put_shelf_books(first["id"], ShelfBooksWrite(book_ids=[book.id]), db)
+        put_shelf_books(second["id"], ShelfBooksWrite(book_ids=[book.id]), db)
+        assert db.scalars(select(shelf_books.c.shelf_id).where(shelf_books.c.book_id == book.id)).all() == [first["id"], second["id"]]
+        delete_shelf(first["id"], db)
+        assert db.get(Book, book.id) is not None
+        delete_shelf(second["id"], db); delete_book(book.id, db)
+    finally:
+        db.close()
+
+
+def test_fallback_app_ports_can_create_shelves():
+    """启动器切换到备用端口后，本地写操作仍应通过 Origin 防护。"""
+    from backend.app.main import _ALLOWED_ORIGINS, health
+
+    assert "http://127.0.0.1:8000" in _ALLOWED_ORIGINS
+    assert "http://127.0.0.1:8010" in _ALLOWED_ORIGINS
+    assert "http://localhost:8010" in _ALLOWED_ORIGINS
+    assert all("0.0.0.0" not in origin for origin in _ALLOWED_ORIGINS)
+    payload = health()
+    assert payload["app"] == "study-assistant"
+    assert payload["api_revision"] >= 2
+    assert payload["capabilities"]["shelves_write"] is True
+
+
+def test_public_deck_excludes_unknown_rights_figures():
+    from backend.app.api.books import delete_book
+    from backend.app.core.database import SessionLocal
+    from backend.app.models import Book, LiteratureResource
+    from backend.app.services.presentation_deck import _rights_policy
+
+    db = SessionLocal()
+    try:
+        book = Book(title="Rights", file_path="rights.pdf", file_type="pdf", status="ready")
+        db.add(book); db.flush()
+        db.add(LiteratureResource(book_id=book.id, title="Main", role="main",
+                                  rights_status="not_evaluated", allow_reuse=0))
+        db.commit()
+        policy = _rights_policy(db, book.id, {"use_scope": "public", "include_figures": True,
+                                             "rights_acknowledged": True})
+        assert policy["allow_figures"] is False
+        assert policy["issues"]
+        delete_book(book.id, db)
+    finally:
+        db.close()
+
+
+def test_real_powerpoint_render_when_available(tmp_path, monkeypatch):
+    import hashlib
+    from backend.app.models import Book
+    from backend.app.services import office_render
+    from backend.app.services.powerpoint_render import powerpoint_available, render_powerpoint_preview
+    from backend.app.services.presentation_deck import _local_outline, render_pptx
+
+    if not powerpoint_available():
+        pytest.skip("Microsoft PowerPoint unavailable")
+    sources = [{"source_id": "chunk:1", "chunk_id": 1, "chapter_id": 1,
+                "page_start": 2, "page_end": 2, "text": "真实渲染测试来源。"}]
+    outline = _local_outline("真实渲染", "methods", sources, 6)
+    book = Book(id=991, title="真实渲染", file_path="missing.pdf", file_type="pdf", status="ready")
+    path = tmp_path / "powerpoint.pptx"
+    render_pptx(path, book, None, outline, sources, "methods",
+                {"include_figures": False, "audience": "课题组", "purpose": "测试", "slide_count": 6, "duration_minutes": 10})
+    result = render_powerpoint_preview(path, 991, timeout=60)
+    assert result["ok"] is True, result
+    assert result["engine"] == "microsoft-powerpoint"
+    assert result["slide_count"] == 6
+    monkeypatch.setattr(office_render.settings, "structured_dir", tmp_path / "structured")
+    rendered_pdf = office_render.render_office_pdf(
+        path, "pptx", hashlib.sha256(path.read_bytes()).hexdigest(), timeout=60,
+    )
+    assert rendered_pdf.read_bytes()[:5] == b"%PDF-"

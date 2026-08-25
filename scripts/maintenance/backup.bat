@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 setlocal
-cd /d %~dp0
+cd /d "%~dp0\..\.."
 
 if not exist "backend\data" (
     echo 未找到 backend\data 目录，无需备份。

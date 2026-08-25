@@ -65,7 +65,10 @@ def _compact_heading_spacing(raw: str) -> str:
 def classify_heading(line: str) -> tuple[str, int] | None:
     """返回规范标题及层级；正文句和目录点线返回 None。"""
     s = _compact_heading_spacing(line)
-    if not s or len(s) > 100 or _TOC_DOTS.search(s) or _SENTENCE_PUNCT.search(s):
+    if (
+        not s or len(s) > 100 or _TOC_DOTS.search(s) or _SENTENCE_PUNCT.search(s)
+        or (len(s) > 24 and len(re.findall(r"[，,]", s)) >= 3)
+    ):
         return None
     m = _PART_RE.match(s)
     if m:
@@ -313,6 +316,7 @@ def merge_toc_sources(*sources: list[dict]) -> list[dict]:
             if not classify_heading(row["title"]):
                 row["level"] = max(2, int(row.get("level") or 2))
     from backend.app.services.rag.toc_evidence import score_toc_rows
+    from backend.app.services.rag.toc_logic import auto_repair_toc_rows
     rows = score_toc_rows(rows)
     ordered = sorted(rows, key=lambda x: (
         int(x.get("page") or 1),
@@ -325,8 +329,10 @@ def merge_toc_sources(*sources: list[dict]) -> list[dict]:
         int(x.get("line", 1000000)),
         x["source_priority"], int(x.get("level") or 1)
     ))
-    return [
+    normalized = [
         {"title": x["title"], "level": max(1, min(4, int(x.get("level") or 1))),
-         "page": int(x.get("page") or 1)}
+         "page": int(x.get("page") or 1), "confidence": x.get("confidence")}
         for x in ordered
     ]
+    repaired, _audit = auto_repair_toc_rows(normalized)
+    return repaired

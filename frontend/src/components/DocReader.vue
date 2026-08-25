@@ -1,30 +1,30 @@
 <template>
   <div class="doc-reader" :class="{ 'dr-dark': dark }">
     <div class="dr-toolbar">
-      <el-button size="small" @click="showToc = !showToc">📑 目录</el-button>
-      <el-button size="small" :type="editingToc ? 'warning' : ''" @click="toggleTocEdit">
-        {{ editingToc ? '完成目录编辑' : '✏️ 编辑目录' }}
-      </el-button>
-      <el-button-group>
-        <el-button size="small" @click="fontSize--">A−</el-button>
+      <el-radio-group v-model="viewMode" size="small">
+        <el-radio-button value="original">原版页面</el-radio-button>
+        <el-radio-button value="structure">结构文本</el-radio-button>
+      </el-radio-group>
+      <el-button v-if="viewMode === 'structure'" size="small" @click="showToc = !showToc">目录</el-button>
+      <el-button-group v-if="viewMode === 'structure'">
+        <el-button size="small" :disabled="fontSize <= 12" @click="changeFont(-1)">A−</el-button>
         <span class="dr-font">{{ fontSize }}px</span>
-        <el-button size="small" @click="fontSize++">A＋</el-button>
+        <el-button size="small" :disabled="fontSize >= 24" @click="changeFont(1)">A＋</el-button>
       </el-button-group>
-      <el-button size="small" :type="dark ? 'primary' : ''" @click="dark = !dark">{{ dark ? '☀️' : '🌙' }}</el-button>
+      <el-button v-if="viewMode === 'structure'" size="small" :type="dark ? 'primary' : ''" @click="dark = !dark">{{ dark ? '浅色' : '深色' }}</el-button>
       <el-button size="small" @click="showAnnPanel = true">🖍 批注({{ annotations.length }})</el-button>
-      <span class="dr-info">{{ doc?.file_type?.toUpperCase() }} · {{ chapters.length }} {{ isPpt ? '幻灯片' : '章' }}</span>
-      <el-input-number v-if="isPpt" v-model="jumpSlide" :min="1" :max="sections.length" size="small" style="width: 120px" @change="jumpToSlide" />
-      <el-button v-if="isPpt" size="small" @click="jumpToSlide">跳转</el-button>
+      <span class="dr-info">{{ doc?.file_type?.toUpperCase() }} · {{ viewMode === 'original' ? 'Office 原版排版' : `${chapters.length} 个结构节点` }}</span>
+      <el-input-number v-if="viewMode === 'structure' && isPpt" v-model="jumpSlide" :min="1" :max="sections.length" size="small" style="width: 120px" @change="jumpToSlide" />
     </div>
-    <div class="dr-body">
+    <div v-if="viewMode === 'original'" class="dr-original">
+      <PdfReader :src="renderedBookFileUrl(bookId)" :book-id="bookId" :toc="flatChapters" show-toc show-ai />
+    </div>
+    <div v-else class="dr-body">
       <aside v-if="showToc" class="dr-toc">
         <div class="dr-toc-item" v-for="c in flatChapters" :key="c.id"
           :style="{ paddingLeft: (c.level - 1) * 14 + 8 + 'px' }"
           :class="{ active: activeChapter === c.id }" @click="jumpTo(c.id)">
-          <template v-if="editingToc">
-            <el-input v-model="c._title" size="small" @blur="saveChapterTitle(c)" @click.stop />
-          </template>
-          <template v-else>{{ c.title }}</template>
+          {{ c.title }}
         </div>
       </aside>
       <div ref="content" class="dr-content" :style="{ fontSize: fontSize + 'px' }" @scroll="onScroll" @mouseup="onMouseUp">
@@ -76,12 +76,14 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getBookDocument, listAnnotations, createAnnotation, deleteAnnotation, renameChapter, aiExplain } from '../api'
+import PdfReader from './PdfReader.vue'
+import { getBookDocument, listAnnotations, createAnnotation, deleteAnnotation, aiExplain, renderedBookFileUrl } from '../api'
 import { renderMarkdown, sanitizeHtml } from '../utils/markdown'
 
 const props = defineProps({ bookId: { type: Number, required: true } })
 
 const doc = ref(null)
+const viewMode = ref('original')
 const isPpt = computed(() => doc.value?.file_type === 'pptx')
 const jumpSlide = ref(1)
 
@@ -125,9 +127,9 @@ const chapters = ref([])
 const sections = ref([])
 const loading = ref(true)
 const showToc = ref(true)
-const editingToc = ref(false)
 const dark = ref(false)
 const fontSize = ref(15)
+const changeFont = (delta) => { fontSize.value = Math.max(12, Math.min(24, fontSize.value + delta)) }
 const activeChapter = ref(null)
 const content = ref(null)
 const secRefs = {}
@@ -181,30 +183,6 @@ const onScroll = () => {
     if (el && el.offsetTop <= st + 20) cur = sec.chapter_id
   }
   activeChapter.value = cur
-}
-
-const toggleTocEdit = () => {
-  editingToc.value = !editingToc.value
-  if (editingToc.value) {
-    for (const c of flatChapters.value) c._title = c.title
-  }
-}
-
-const saveChapterTitle = async (c) => {
-  const t = (c._title || '').trim()
-  if (!t || t === c.title) return
-  try {
-    await renameChapter(c.id, t)
-    c.title = t
-    ElMessage.success('标题已保存')
-    // 同步 sections 显示
-    const sec = sections.value.find(s => s.chapter_id === c.id)
-    if (sec) sec.title = t
-    // 重新加载目录
-    await loadDoc()
-  } catch (e) {
-    ElMessage.error(e.message)
-  }
 }
 
 const onMouseUp = () => {
@@ -295,6 +273,7 @@ onMounted(async () => {
 
 <style scoped>
 .doc-reader { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 400px; }
+.dr-original { flex:1; min-height:0; }
 .dr-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-wrap: wrap; background: var(--el-fill-color-lighter); border-radius: 8px 8px 0 0; border: 1px solid var(--el-border-color-extra-light); }
 .dr-font { font-size: 12px; color: var(--el-text-color-secondary); min-width: 40px; text-align: center; }
 .dr-info { font-size: 12px; color: var(--el-text-color-secondary); margin-left: auto; }

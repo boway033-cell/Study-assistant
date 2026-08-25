@@ -9,6 +9,7 @@
             {{ [book?.archive?.authors, book?.archive?.journal, book?.archive?.published_year].filter(Boolean).join(' · ') || '本地文献' }}
           </div>
         </div>
+        <el-button v-if="book" class="toc-review-btn" size="small" @click="openTocEditor">目录校正</el-button>
       </div>
       <el-radio-group v-model="mode" size="small" @change="onModeChange">
         <el-radio-button value="source">原版阅读</el-radio-button>
@@ -34,7 +35,7 @@
     <main class="reader-body" v-loading="!book">
       <template v-if="book && mode === 'source'">
         <DocReader v-if="book.file_type !== 'pdf'" :book-id="book.id" />
-        <PdfReader v-else :src="fileUrl" :book-id="book.id" :initial-page="initialPage"
+        <PdfReader v-else :key="pdfReaderKey" :src="fileUrl" :book-id="book.id" :initial-page="initialPage"
           :toc="tocFlat" show-toc show-ai :use-saved-pos="!hasQueryPage" @page-change="onPageChange" />
       </template>
 
@@ -81,18 +82,90 @@
         </article>
       </section>
     </main>
+
+    <el-dialog v-model="tocEditorOpen" title="目录结构工作台" width="min(1480px, 96vw)" destroy-on-close>
+      <div v-loading="tocEditorLoading" class="toc-editor">
+        <div class="toc-audit-bar">
+          <div>
+            <strong>{{ tocAudit.summary?.total || 0 }} 项目录</strong>
+            <span>高置信 {{ tocAudit.summary?.high || 0 }} · 需复核 {{ tocAudit.summary?.review || 0 }} · 低置信 {{ tocAudit.summary?.low || 0 }}</span>
+          </div>
+          <div class="toc-audit-actions">
+            <el-tag :type="tocAudit.ok ? 'success' : 'warning'">
+              {{ tocAudit.ok ? '编号链通过' : `${tocAudit.summary?.unresolved || 0} 项需人工判断` }}
+            </el-tag>
+            <el-button :disabled="!tocAudit.summary?.safe_repairs" @click="applySafeTocRepair">
+              安全自修正 {{ tocAudit.summary?.safe_repairs || 0 }} 项
+            </el-button>
+          </div>
+        </div>
+        <div class="toc-workspace-actions">
+          <span>选择左侧节点，在右侧修改；中间始终显示对应原页。AI 建议不会自动覆盖人工目录。</span>
+          <el-checkbox v-model="tocReviewOnly">仅看待复核</el-checkbox>
+          <el-button size="small" :disabled="!tocIssueItems.length" @click="selectNextTocIssue">下一处问题</el-button>
+          <el-button size="small" :disabled="!tocHistory.length" @click="undoToc">撤销</el-button>
+        </div>
+        <div class="toc-workspace">
+          <section class="toc-tree-panel">
+            <div class="toc-panel-title">目录树 <small>{{ visibleTocTreeCount }} 项</small></div>
+            <el-tree-v2 :data="tocVisibleTree" :props="tocTreeProps" :height="520" :item-size="36"
+              :current-node-key="selectedTocKey" highlight-current @node-click="selectTocNode">
+              <template #default="{ data }">
+                <div class="toc-tree-node" :class="`status-${data.review_status}`">
+                  <span class="toc-node-title">{{ data.title }}</span>
+                  <span class="toc-node-page">{{ data.start_page }}</span>
+                  <span v-if="data.edited" class="toc-node-edited">改</span>
+                </div>
+              </template>
+            </el-tree-v2>
+          </section>
+          <section class="toc-page-panel">
+            <div class="toc-panel-title">原页核对 <small v-if="selectedToc">第 {{ selectedToc.start_page }} 页</small></div>
+            <iframe v-if="selectedToc" :key="tocPreviewUrl" class="toc-page-frame" :src="tocPreviewUrl" title="目录原页预览" />
+            <el-empty v-else description="请从左侧选择目录节点" :image-size="70" />
+          </section>
+          <section class="toc-inspector-panel">
+            <div class="toc-panel-title">节点检查器</div>
+            <template v-if="selectedToc">
+              <div class="toc-breadcrumb">{{ selectedTocBreadcrumb }}</div>
+              <el-alert v-if="selectedToc.issueText" type="warning" :closable="false" :title="selectedToc.issueText" />
+              <el-form label-position="top" class="toc-inspector-form">
+                <el-form-item label="目录标题"><el-input v-model="selectedToc.title" type="textarea" :rows="2" @focus="checkpointToc" @input="selectedToc.edited = true" /></el-form-item>
+                <div class="toc-inspector-fields">
+                  <el-form-item label="层级"><el-input-number v-model="selectedToc.level" :min="1" :max="4" controls-position="right" @focus="checkpointToc" @change="changeSelectedLevel" /></el-form-item>
+                  <el-form-item label="页码"><el-input-number v-model="selectedToc.start_page" :min="1" :max="book?.total_pages || 99999" controls-position="right" @focus="checkpointToc" @change="selectedToc.edited = true" /></el-form-item>
+                </div>
+              </el-form>
+              <div class="toc-structure-actions">
+                <el-button @click="moveSelectedToc(-1)">上移整组</el-button><el-button @click="moveSelectedToc(1)">下移整组</el-button>
+                <el-button @click="shiftSelectedToc(1)">降为子级</el-button><el-button @click="shiftSelectedToc(-1)">提升一级</el-button>
+                <el-button @click="addSelectedToc">新增同级</el-button><el-button type="danger" plain :disabled="tocDraft.length === 1" @click="removeSelectedToc">删除</el-button>
+              </div>
+              <el-button class="toc-open-reader" plain @click="inspectTocPage(selectedToc)">在完整阅读器打开此页</el-button>
+            </template>
+            <el-empty v-else description="尚未选择节点" :image-size="70" />
+          </section>
+        </div>
+        <div v-if="tocRevisions.length" class="toc-revisions">最近修订：{{ tocRevisions.slice(0, 4).map(r => `${r.source === 'auto' ? '自修正' : '人工'} ${formatDate(r.created_at)}`).join(' · ') }}</div>
+      </div>
+      <template #footer>
+        <el-button @click="tocEditorOpen = false">取消</el-button>
+        <el-button type="primary" :loading="tocSaving" @click="saveTocEditor">保存并重建来源映射</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import PdfReader from '../components/PdfReader.vue'
 import DocReader from '../components/DocReader.vue'
 import {
-  getBook, bookFileUrl, getBookDeep, deepAnalyze,
+  getBook, bookFileUrl, renderedBookFileUrl, getBookDeep, deepAnalyze,
   getSourceMap, updateArchiveProfile,
+  getTocReview, autoRepairToc, replaceBookToc, listTocRevisions,
 } from '../api'
 import { renderMarkdown } from '../utils/markdown'
 import { notifyTaskSubmitted } from '../stores/taskCenter'
@@ -104,6 +177,7 @@ const tocFlat = ref([])
 const sourceMap = ref({ locator_mode: 'unavailable', blocks: [] })
 const hasQueryPage = ref(route.query.page != null)
 const initialPage = ref(parseInt(route.query.page) || 1)
+const pdfReaderKey = ref(0)
 const mode = ref(route.query.mode === 'card' ? 'card' : route.query.mode === 'deep' ? 'deep' : 'source')
 const readingStatus = ref('unread')
 const deepData = ref({ toc: [], markdown: '', paper_card: '' })
@@ -114,8 +188,49 @@ const focusMode = ref(false)
 const fontSize = ref(Number(localStorage.getItem('readerFontSize')) || 16)
 const wideText = ref(localStorage.getItem('readerWideText') === 'true')
 let progressTimer = null
+const tocEditorOpen = ref(false)
+const tocEditorLoading = ref(false)
+const tocSaving = ref(false)
+const tocAudit = ref({ items: [], issues: [], summary: {} })
+const tocDraft = ref([])
+const tocRevisions = ref([])
+const selectedTocKey = ref('')
+const tocReviewOnly = ref(false)
+const tocHistory = ref([])
+let tocTempId = 0
 
 const fileUrl = computed(() => book.value ? bookFileUrl(book.value.id) : '')
+const tocTreeProps = { children: 'children', label: 'title', value: 'client_key' }
+const selectedToc = computed(() => tocDraft.value.find(item => item.client_key === selectedTocKey.value) || null)
+const tocIssueItems = computed(() => tocDraft.value.filter(item => item.review_status !== 'high' || item.issueText))
+const makeTocTree = (items) => {
+  const roots = []; const stack = []
+  for (const item of items) {
+    const node = { ...item, children: [] }
+    while (stack.length >= node.level) stack.pop()
+    if (node.level > 1 && stack[node.level - 2]) stack[node.level - 2].children.push(node)
+    else roots.push(node)
+    stack[node.level - 1] = node
+  }
+  return roots
+}
+const tocVisibleTree = computed(() => makeTocTree(tocReviewOnly.value ? tocIssueItems.value : tocDraft.value))
+const visibleTocTreeCount = computed(() => tocReviewOnly.value ? tocIssueItems.value.length : tocDraft.value.length)
+const selectedTocBreadcrumb = computed(() => {
+  if (!selectedToc.value) return ''
+  const index = tocDraft.value.findIndex(item => item.client_key === selectedToc.value.client_key)
+  const parents = []
+  let targetLevel = selectedToc.value.level - 1
+  for (let i = index - 1; i >= 0 && targetLevel > 0; i--) {
+    if (tocDraft.value[i].level === targetLevel) { parents.unshift(tocDraft.value[i].title); targetLevel-- }
+  }
+  return [...parents, selectedToc.value.title].join('  /  ')
+})
+const tocPreviewUrl = computed(() => {
+  if (!book.value || !selectedToc.value) return ''
+  const base = book.value.file_type === 'pdf' ? bookFileUrl(book.value.id) : renderedBookFileUrl(book.value.id)
+  return `${base}#page=${selectedToc.value.start_page}&zoom=page-width`
+})
 const artifactText = computed(() => mode.value === 'card' ? deepData.value.paper_card : deepData.value.markdown)
 const artifactStyle = computed(() => ({ '--reading-font-size': `${fontSize.value}px`, '--reading-max-width': wideText.value ? '1080px' : '820px' }))
 
@@ -129,6 +244,166 @@ const sendToDeck = () => {
   if (!selected) ElMessage.info('已带入当前文献；可在工作台选择章节或粘贴选段')
 }
 const askKnowledgeBase = () => router.push({ path: '/chat', query: { bookId: book.value.id } })
+
+const loadTocEditor = async () => {
+  tocEditorLoading.value = true
+  try {
+    const [audit, revisions] = await Promise.all([getTocReview(book.value.id), listTocRevisions(book.value.id)])
+    tocAudit.value = audit
+    tocRevisions.value = revisions
+    tocDraft.value = audit.items.map(item => ({
+      client_key: `id:${item.id}`, id: item.id, title: item.title,
+      level: item.declared_level, start_page: item.page,
+      review_status: item.review_status,
+      issueText: item.issues?.map(issue => issue.message).join('；') || '', edited: false,
+    }))
+    if (!tocDraft.value.some(item => item.client_key === selectedTocKey.value)) {
+      selectedTocKey.value = tocIssueItems.value[0]?.client_key || tocDraft.value[0]?.client_key || ''
+    }
+    tocHistory.value = []
+  } catch (e) { ElMessage.error(e.message) }
+  finally { tocEditorLoading.value = false }
+}
+const openTocEditor = async () => { tocEditorOpen.value = true; await loadTocEditor() }
+
+const selectTocNode = (data) => { selectedTocKey.value = data.client_key }
+const checkpointToc = () => {
+  const snapshot = JSON.stringify(tocDraft.value)
+  if (tocHistory.value.at(-1) !== snapshot) {
+    tocHistory.value.push(snapshot)
+    if (tocHistory.value.length > 20) tocHistory.value.shift()
+  }
+}
+const undoToc = () => {
+  const snapshot = tocHistory.value.pop()
+  if (!snapshot) return
+  tocDraft.value = JSON.parse(snapshot)
+}
+const selectNextTocIssue = () => {
+  if (!tocIssueItems.value.length) return
+  const current = tocIssueItems.value.findIndex(item => item.client_key === selectedTocKey.value)
+  selectedTocKey.value = tocIssueItems.value[(current + 1) % tocIssueItems.value.length].client_key
+}
+
+const normalizeAllTocLevels = () => {
+  for (let i = 0; i < tocDraft.value.length; i++) {
+    const maxLevel = i ? Math.min(4, tocDraft.value[i - 1].level + 1) : 1
+    tocDraft.value[i].level = Math.max(1, Math.min(maxLevel, tocDraft.value[i].level || 1))
+  }
+}
+const normalizeTocLevels = (index) => {
+  tocDraft.value[index].edited = true
+  normalizeAllTocLevels()
+}
+const subtreeEnd = (index) => {
+  const level = tocDraft.value[index].level
+  let end = index + 1
+  while (end < tocDraft.value.length && tocDraft.value[end].level > level) end++
+  return end
+}
+const moveTocGroup = (index, direction) => {
+  const end = subtreeEnd(index)
+  const group = tocDraft.value.splice(index, end - index)
+  if (direction < 0) {
+    let target = index - 1
+    const level = group[0].level
+    while (target > 0 && tocDraft.value[target].level > level) target--
+    tocDraft.value.splice(target, 0, ...group)
+  } else {
+    let target = index
+    while (target < tocDraft.value.length && tocDraft.value[target].level > group[0].level) target++
+    if (target < tocDraft.value.length) target = subtreeEnd(target)
+    tocDraft.value.splice(target, 0, ...group)
+  }
+  group.forEach(item => { item.edited = true })
+  normalizeAllTocLevels()
+}
+const selectedTocIndex = () => tocDraft.value.findIndex(item => item.client_key === selectedTocKey.value)
+const moveSelectedToc = (direction) => {
+  const index = selectedTocIndex(); if (index < 0) return
+  checkpointToc(); moveTocGroup(index, direction)
+}
+const shiftSelectedToc = (delta) => {
+  const index = selectedTocIndex(); if (index < 0) return
+  checkpointToc()
+  const item = tocDraft.value[index]
+  const maxLevel = index ? Math.min(4, tocDraft.value[index - 1].level + 1) : 1
+  item.level = Math.max(1, Math.min(maxLevel, item.level + delta)); item.edited = true
+  normalizeAllTocLevels()
+}
+const changeSelectedLevel = () => {
+  const index = selectedTocIndex(); if (index < 0) return
+  selectedToc.value.edited = true; normalizeTocLevels(index)
+}
+const addTocAfter = (index) => {
+  const current = tocDraft.value[index]
+  const insertAt = subtreeEnd(index)
+  tocDraft.value.splice(insertAt, 0, { client_key: `new:${++tocTempId}`, id: null,
+    title: '新目录项', level: current.level, start_page: current.start_page,
+    review_status: 'review', issueText: '请核对原文标题和页码', edited: true })
+  normalizeAllTocLevels()
+}
+const addSelectedToc = () => {
+  const index = selectedTocIndex(); if (index < 0) return
+  checkpointToc(); addTocAfter(index)
+  selectedTocKey.value = `new:${tocTempId}`
+}
+const inspectTocPage = async (item) => {
+  tocEditorOpen.value = false
+  mode.value = 'source'
+  initialPage.value = item.start_page || 1
+  hasQueryPage.value = true
+  pdfReaderKey.value++
+  await router.replace({ path: `/reader/${book.value.id}`, query: { page: initialPage.value } })
+}
+const removeTocItem = (index) => {
+  const level = tocDraft.value[index].level
+  tocDraft.value.splice(index, 1)
+  while (index < tocDraft.value.length && tocDraft.value[index].level > level) {
+    tocDraft.value[index].level = Math.max(1, tocDraft.value[index].level - 1)
+    tocDraft.value[index].edited = true
+    index++
+  }
+  normalizeAllTocLevels()
+}
+const removeSelectedToc = () => {
+  const index = selectedTocIndex(); if (index < 0) return
+  checkpointToc(); removeTocItem(index)
+  selectedTocKey.value = tocDraft.value[Math.min(index, tocDraft.value.length - 1)]?.client_key || ''
+}
+const buildTocPayload = () => {
+  normalizeAllTocLevels()
+  const stack = []
+  return tocDraft.value.map(item => {
+    while (stack.length >= item.level) stack.pop()
+    const parent = item.level > 1 ? stack[item.level - 2] : null
+    const payload = { client_key: item.client_key, id: item.id, parent_key: parent?.client_key || null,
+      title: item.title.trim(), level: item.level, start_page: item.start_page }
+    stack[item.level - 1] = item
+    return payload
+  })
+}
+const saveTocEditor = async () => {
+  if (tocDraft.value.some(item => !item.title.trim())) return ElMessage.warning('目录标题不能为空')
+  tocSaving.value = true
+  try {
+    const result = await replaceBookToc(book.value.id, buildTocPayload(), '阅读器人工校正')
+    tocAudit.value = result.audit
+    ElMessage.success('目录、分块归属与来源映射已同步')
+    await loadBook(book.value.id)
+    await loadTocEditor()
+  } catch (e) { ElMessage.error(e.message) }
+  finally { tocSaving.value = false }
+}
+const applySafeTocRepair = async () => {
+  try {
+    await ElMessageBox.confirm('只修正可由编号证明的层级和父级；缺号、重复标题仍保留人工复核。', '应用安全自修正')
+    await autoRepairToc(book.value.id, true)
+    ElMessage.success('安全修正已应用')
+    await loadBook(book.value.id)
+    await loadTocEditor()
+  } catch (e) { if (e !== 'cancel') ElMessage.error(e.message || String(e)) }
+}
 
 const formatDate = (value) => value ? new Date(value).toLocaleString('zh-CN') : ''
 
@@ -211,10 +486,11 @@ onMounted(() => loadBook(Number(route.params.bookId)))
 
 <style scoped>
 .reader-page { display: flex; flex-direction: column; height: calc(100vh - 70px); max-width: 1800px; margin: 0 auto; }
-.reader-top { min-height: 58px; display: grid; grid-template-columns: minmax(260px, 1fr) auto minmax(260px, 1fr); align-items: center; gap: 18px; padding: 8px 14px; margin-bottom: 8px; background: rgba(245,240,232,.96); border: 1px solid var(--el-border-color-lighter); border-radius: 14px; box-shadow: 0 4px 18px rgba(20,30,31,.08); }
+.reader-top { min-height: 58px; display: grid; grid-template-columns: minmax(360px, 1fr) auto minmax(430px, 1.25fr); align-items: center; gap: 18px; padding: 8px 14px; margin-bottom: 8px; background: rgba(245,240,232,.96); border: 1px solid var(--el-border-color-lighter); border-radius: 14px; box-shadow: 0 4px 18px rgba(20,30,31,.08); }
 .reader-identity, .reader-actions { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .reader-actions { justify-content: flex-end; }
 .reader-title { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: var(--el-text-color-primary); }
+.toc-review-btn { flex:none; }
 .reader-meta { margin-top: 2px; font-size: 11px; color: var(--el-text-color-secondary); }
 .reader-body { flex: 1; min-height: 0; }
 .artifact-view { display: grid; grid-template-columns: 240px minmax(0, 1fr); height: 100%; overflow: hidden; border: 1px solid var(--el-border-color-lighter); border-radius: 14px; background: #f8f4ec; }
@@ -238,6 +514,43 @@ onMounted(() => loadBook(Number(route.params.bookId)))
 .focus-reading { position:fixed; inset:0; z-index:2000; height:100vh; max-width:none; padding:10px; background:#eee8dd; }
 .focus-reading .reader-top { grid-template-columns:minmax(260px,1fr) auto minmax(340px,1fr); }
 .artifact-loading { height: 240px; }
+.toc-editor { min-height: 280px; }
+.toc-audit-bar { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px; padding:12px 14px; border:1px solid #e5e7eb; border-radius:10px; background:#f7f2e9; box-shadow:0 1px 2px rgba(15,23,42,.06); }
+.toc-audit-bar > div:first-child { display:flex; flex-direction:column; gap:4px; }
+.toc-audit-bar span, .toc-editor-help, .toc-revisions { color:var(--el-text-color-secondary); font-size:12px; }
+.toc-audit-actions { display:flex; flex-direction:row!important; align-items:center; gap:8px!important; }
+.toc-editor-help { margin:10px 2px; }
+.toc-workspace-actions { display:flex; align-items:center; gap:10px; min-height:38px; color:var(--el-text-color-secondary); font-size:12px; }
+.toc-workspace-actions > span { flex:1; }
+.toc-workspace { display:grid; grid-template-columns:minmax(280px,.8fr) minmax(420px,1.3fr) minmax(300px,.85fr); gap:10px; height:570px; }
+.toc-tree-panel,.toc-page-panel,.toc-inspector-panel { min-width:0; overflow:hidden; border:1px solid #e5e7eb; border-radius:10px; background:#fbf8f1; box-shadow:0 1px 2px rgba(15,23,42,.06); }
+.toc-panel-title { display:flex; justify-content:space-between; align-items:center; height:40px; padding:0 12px; border-bottom:1px solid #e5e7eb; color:#635744; background:#e9e2d5; font-size:13px; font-weight:700; }
+.toc-panel-title small { color:#8f806b; font-weight:400; }
+.toc-tree-panel :deep(.el-tree-node__content) { height:36px; border-bottom:1px solid rgba(229,231,235,.5); }
+.toc-tree-panel :deep(.el-tree-node__content:hover),.toc-tree-panel :deep(.el-tree-node.is-current > .el-tree-node__content) { background:#f1e8d9; }
+.toc-tree-node { display:flex; align-items:center; min-width:0; flex:1; gap:6px; padding-right:8px; border-left:2px solid transparent; }
+.toc-tree-node.status-review { border-left-color:#d6a04d; }.toc-tree-node.status-low { border-left-color:#c96055; }
+.toc-node-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#423f38; font-size:12px; }
+.toc-node-page { flex:none; color:#988a77; font:11px Georgia,serif; }.toc-node-edited { flex:none; padding:1px 4px; border-radius:4px; background:#8b5a2b; color:#fff; font-size:9px; }
+.toc-page-panel { display:flex; flex-direction:column; }.toc-page-frame { width:100%; flex:1; border:0; background:#d8d5ce; }
+.toc-inspector-panel { overflow-y:auto; }.toc-inspector-panel > :not(.toc-panel-title) { margin-left:14px; margin-right:14px; }
+.toc-breadcrumb { margin-top:12px!important; padding:8px 10px; border-radius:7px; background:#f3ede2; color:#776a58; font-size:11px; line-height:1.6; }
+.toc-inspector-panel :deep(.el-alert) { margin-top:10px; }.toc-inspector-form { margin-top:12px!important; }
+.toc-inspector-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; }.toc-inspector-fields :deep(.el-input-number) { width:100%; }
+.toc-structure-actions { display:grid; grid-template-columns:1fr 1fr; gap:7px; }.toc-structure-actions .el-button { margin:0; }
+.toc-open-reader { width:calc(100% - 28px); margin-top:12px!important; }
+@media(max-width:1050px){.toc-workspace{grid-template-columns:minmax(260px,.8fr) 1.2fr}.toc-inspector-panel{grid-column:1/-1;height:300px}.toc-workspace{height:auto}.toc-tree-panel,.toc-page-panel{height:480px}}
+.toc-table-wrap { max-height:55vh; overflow:auto; border:1px solid #e5e7eb; border-radius:10px; }
+.toc-edit-table { width:100%; border-collapse:collapse; background:#fbf8f1; }
+.toc-edit-table th { position:sticky; top:0; z-index:1; padding:9px 8px; background:#e9e2d5; color:#635744; text-align:left; font-size:12px; }
+.toc-edit-table td { padding:6px 8px; border-top:1px solid #e5e7eb; }
+.toc-edit-table th:nth-child(1), .toc-edit-table td:nth-child(1) { width:42px; text-align:center; }
+.toc-edit-table th:nth-child(2), .toc-edit-table td:nth-child(2) { width:72px; }
+.toc-edit-table th:nth-child(4), .toc-edit-table td:nth-child(4) { width:120px; }
+.toc-edit-table th:nth-child(5), .toc-edit-table td:nth-child(5) { width:120px; }
+.toc-edit-table th:nth-child(6), .toc-edit-table td:nth-child(6) { width:220px; }
+.toc-row-actions { white-space:nowrap; }
+.toc-revisions { margin-top:10px; }
 .privacy-tip { max-width: 520px; margin-top: 12px; color: var(--el-text-color-secondary); font-size: 12px; text-align: center; }
 @media (max-width: 1050px) {
   .reader-top { grid-template-columns: 1fr auto; }

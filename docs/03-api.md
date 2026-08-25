@@ -341,16 +341,54 @@ GET /api/settings/probe
 {"deepseek": {"ok": true, "reason": "已连接（模型: deepseek-v4-flash）"}}
 ```
 
+### 6.2 备用兼容接口（不改变默认 DeepSeek 路由）
+
+```
+GET    /api/settings/providers
+POST   /api/settings/providers
+DELETE /api/settings/providers/{provider_id}
+POST   /api/settings/providers/{provider_id}/probe
+```
+
+`POST` 支持 `capability=text|vision`、`protocol=openai_chat`、`base_url`、`model` 和 `api_key`。
+Key 单独加密保存，不进入接口配置 JSON；备用接口不会自动接管现有问答、总结或深度分析。
+
+### 6.3 Office 原版渲染
+
+```
+GET /api/books/{book_id}/rendered-file
+```
+
+PDF 直接返回原文件；DOCX/PPTX 首次访问时调用本机 Office 按需渲染 PDF，之后按源文件哈希缓存。
+Office 不可用或渲染失败时返回 503，结构文本阅读仍可使用。
+
+### 6.4 网页全文解析与浏览器交接
+
+```
+POST /api/literature/resolve           body: {query,include_si}
+POST /api/literature/import            body: {query,include_si,url,provider,title}
+POST /api/literature/browser-handoff   body: {query,include_si,url}
+POST /api/literature/library-handoff   body: {query,include_si}
+```
+
+`resolve` 会区分直接 PDF、普通 HTML、页面发现的 PDF 和登录依赖入口。只有 `direct_download=true`
+的候选可以交给 `/import`；登录依赖候选使用 `/browser-handoff` 在当前 Chrome 打开，应用不读取 Cookie。
+
 ---
 
 ## 7. PDF 标注 /api
 
 ```
 GET    /api/books/{book_id}/annotations?page=3
-POST   /api/books/{book_id}/annotations   body: {"page":3,"rect_json":"[{x,y,w,h}]","text":"…","color":"#f9e572","note":"…","knowledge_node_id":null}
-PATCH  /api/annotations/{id}              body: {"note":"…","color":"…"}
+POST   /api/books/{book_id}/annotations   body: {"page":3,"rect_json":"[...]","anchor":{"schema_version":2,"quote":{"exact":"…","prefix":"…","suffix":"…"},"segments":[{"page":3,"source":"pdf-text|ocr","rects":[{"x":0.1,"y":0.2,"w":0.3,"h":0.04}]}]},"text":"…","color":"#f9e572","note":"…"}
+PATCH  /api/annotations/{id}              body: {"note":"…","color":"…","anchor":{...},"status":"active|needs_reanchor"}
 DELETE /api/annotations/{id}
+GET    /api/books/{book_id}/annotations/audit
+POST   /api/annotations/{id}/repair       # 按原文自动重建旧锚点，失败则 needs_reanchor
+GET    /api/books/{book_id}/pdf-text-layer/{page}?generate=true  # 扫描页 OCR 坐标层
 ```
+
+`anchor` 是权威坐标；`page/rect_json` 是旧客户端兼容投影。所有坐标归一化到页面 `0～1`，跨页选择必须拆成多个 segment。
 
 ## 8. AI 增强 /api/ai（可选，无 Key 时返回友好错误）
 
@@ -380,7 +418,53 @@ POST /api/study/train/start     # 思维训练开始 {book_ids, mode: quiz|free,
 POST /api/study/train/ask       # 回答一轮 {session_id, answer} → {message, round, done}
 ```
 
-## 11. 状态码约定
+## 11. 虚拟书架 `/api/shelves`
+
+```
+GET    /api/shelves
+POST   /api/shelves                         body: {name,parent_id?,description?,color?}
+PATCH  /api/shelves/{shelf_id}              body: {name?,parent_id?,description?,color?,order_index?}
+DELETE /api/shelves/{shelf_id}
+PUT    /api/shelves/{shelf_id}/books        body: {book_ids:[...],mode:"add|replace"}
+DELETE /api/shelves/{shelf_id}/books/{book_id}
+GET    /api/books?shelf_id={id}              # shelf_id=0 表示未归档
+```
+
+> 删除书架只删除虚拟归属关系，不删除书籍记录或原文件。
+
+### 目录逻辑审计与校正
+
+```
+GET  /api/books/{book_id}/toc-review          # 项级置信度、编号问题和安全修复建议
+POST /api/books/{book_id}/toc-auto-repair     body: {apply:false|true}
+PUT  /api/books/{book_id}/toc                 body: {items:[...],note?}
+GET  /api/books/{book_id}/toc-revisions       # 最近 30 次修订快照摘要
+```
+
+`PUT /toc` 是全量事务；每项使用 `client_key`，新项可用 `new:*`，
+`parent_key` 必须指向列表中位于当前项之前的节点。保存后会同步
+章节页界、chunk 归属、source map 和 FTS 定位，并使旧深度分析失效。
+
+## 12. 文献汇报与来源权利
+
+```
+POST  /api/presentations/outline             # 分层取样后生成可编辑提纲
+PATCH /api/presentations/{deck_id}/outline   # 保存人工编辑的 slides
+POST  /api/presentations/{deck_id}/render    # 执行权利门禁、审计与 PPTX 渲染
+GET   /api/presentations/{deck_id}/preview/{slide_no}
+GET   /api/presentations/{deck_id}/download
+
+GET    /api/literature/books/{book_id}/resources
+POST   /api/literature/books/{book_id}/resources
+PATCH  /api/literature/resources/{resource_id}
+DELETE /api/literature/resources/{resource_id}
+```
+
+`POST /api/presentations/outline` 支持 `chapter_ids`、`chunk_ids`、`resource_ids`、`selected_text`、
+`max_source_chars`、`use_scope`、`include_figures` 和 `rights_acknowledged`。返回的 coverage
+同时包含内容覆盖率、结构覆盖率和各分组取样量。
+
+## 13. 状态码约定
 
 | 码 | 场景 |
 |---|---|

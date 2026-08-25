@@ -149,6 +149,86 @@ class TestTocHeuristic:
         audit = verify_toc(toc)
         assert any(i["type"] == "missing_chinese_sequence" and i["level"] == 3 for i in audit["issues"])
 
+    def test_number_logic_infers_contextual_chinese_levels_and_gap(self):
+        from backend.app.services.rag.toc_logic import analyze_toc_rows, auto_repair_toc_rows
+
+        rows = [
+            {"title": "第一章 绪论", "level": 1, "page": 1},
+            {"title": "一、行政管理的含义", "level": 3, "page": 2},
+            {"title": "（一）公共行政", "level": 4, "page": 2},
+            {"title": "三、行政管理的发展", "level": 3, "page": 4},
+            {"title": "第二章 理论", "level": 1, "page": 8},
+        ]
+        audit = analyze_toc_rows(rows)
+        assert audit["items"][1]["inferred_level"] == 2
+        assert audit["items"][2]["inferred_level"] == 3
+        assert any(issue["type"] == "sequence_gap" and issue["missing"] == [2]
+                   for issue in audit["issues"])
+        repaired, _ = auto_repair_toc_rows(rows)
+        assert len(repaired) == len(rows)  # 不凭空创建“二、”
+        assert [row["level"] for row in repaired[:3]] == [1, 2, 3]
+
+    def test_same_page_misordered_child_continues_previous_parent(self):
+        from backend.app.services.rag.toc_logic import analyze_toc_rows, auto_repair_toc_rows
+
+        rows = [
+            {"title": "第一节 结构", "level": 2, "page": 10},
+            {"title": "二、纵向结构", "level": 3, "page": 11},
+            {"title": "（一）中央", "level": 4, "page": 11},
+            {"title": "（二）地方", "level": 4, "page": 12},
+            {"title": "三、编制管理", "level": 3, "page": 12},
+            {"title": "（三）其他方面", "level": 4, "page": 12},
+            {"title": "（一）编制含义", "level": 4, "page": 12},
+        ]
+        audit = analyze_toc_rows(rows)
+        misplaced = audit["items"][5]
+        assert misplaced["inferred_parent_index"] == 1
+        assert misplaced["repairs"]["move_before_index"] == 4
+        repaired, _ = auto_repair_toc_rows(rows)
+        assert [row["title"] for row in repaired][3:6] == [
+            "（二）地方", "（三）其他方面", "三、编制管理",
+        ]
+
+    def test_user_toc_replace_preserves_ids_and_rebuilds_mapping(self):
+        from sqlalchemy import select
+
+        from backend.app.api.books import delete_book
+        from backend.app.core.database import SessionLocal
+        from backend.app.models import Book, Chapter, Chunk, TocRevision
+        from backend.app.services.rag.toc_editor import replace_book_toc, review_chapters
+
+        db = SessionLocal()
+        try:
+            book = Book(title="TOC edit", file_path="missing.pdf", file_type="pdf",
+                        status="ready", total_pages=10)
+            db.add(book); db.flush()
+            root = Chapter(book_id=book.id, title="第一章 绪论", level=1,
+                           order_index=0, start_page=1, end_page=10)
+            wrong = Chapter(book_id=book.id, title="一、概念", level=3,
+                            order_index=1, start_page=2, end_page=10)
+            db.add_all([root, wrong]); db.flush(); wrong.parent_id = root.id
+            chunk = Chunk(book_id=book.id, chapter_id=wrong.id, content="正文",
+                          chunk_index=0, page_start=2, page_end=2)
+            db.add(chunk); db.commit()
+
+            audit = review_chapters([root, wrong])
+            assert audit["summary"]["safe_repairs"] == 1
+            result = replace_book_toc(db, book, [
+                {"client_key": f"id:{root.id}", "id": root.id, "parent_key": None,
+                 "title": root.title, "level": 1, "start_page": 1},
+                {"client_key": f"id:{wrong.id}", "id": wrong.id,
+                 "parent_key": f"id:{root.id}", "title": wrong.title, "level": 2, "start_page": 2},
+                {"client_key": "new:1", "id": None, "parent_key": f"id:{root.id}",
+                 "title": "二、发展", "level": 2, "start_page": 5},
+            ], "user", "test")
+            assert result["audit"]["ok"] is True
+            assert db.get(Chapter, wrong.id).level == 2
+            assert db.get(Chunk, chunk.id).chapter_id == wrong.id
+            assert db.scalar(select(TocRevision).where(TocRevision.book_id == book.id)) is not None
+            delete_book(book.id, db)
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

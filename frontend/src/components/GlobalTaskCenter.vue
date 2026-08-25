@@ -31,16 +31,16 @@ const router = useRouter()
 const isActive = (task) => ['pending', 'running'].includes(task.status)
 const activeTasks = computed(() => taskCenter.items.filter(isActive))
 const finishedTasks = computed(() => taskCenter.items.filter((item) => !isActive(item)))
-const taskLabel = (name) => ({ import: '文献导入 / OCR', reimport: '重新解析', deep: '结构精读', deck: 'PPTX 汇报' }[name] || '知识处理')
+const taskLabel = (name) => ({ import: '文献导入 / OCR', reimport: '重新解析', deep: '结构精读', deck: 'PPTX 汇报', deck_outline: 'PPTX 提纲', deck_render: 'PPTX 渲染' }[name] || '知识处理')
 const statusLabel = (status) => ({ pending: '排队中', running: '处理中', done: '已完成', failed: '失败' }[status] || status)
 const statusType = (status) => ({ done: 'success', failed: 'danger', running: 'warning', pending: 'info' }[status] || 'info')
-const stageLabel = (stage) => ({ parsing: '正在解析原文', ocr: '正在识别扫描页', deep: '正在结构化精读', generate: '正在生成汇报' }[stage] || stage || '等待处理')
+const stageLabel = (stage) => ({ parsing: '正在解析原文', ocr: '正在识别扫描页', deep: '正在结构化精读', generate: '正在生成汇报', deck_outline: '正在生成可编辑提纲', deck_render: '正在渲染并审计 PPTX' }[stage] || stage || '等待处理')
 const percentage = (value) => Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : ''
 const openTask = (task) => {
   if (!task.book_id) return
   visible.value = false
-  if (task.name === 'deck') router.push({ path: '/literature-workbench', query: { bookId: task.book_id } })
+  if (['deck', 'deck_outline', 'deck_render'].includes(task.name)) router.push({ path: '/literature-workbench', query: { bookId: task.book_id } })
   else router.push(`/reader/${task.book_id}`)
 }
 </script>

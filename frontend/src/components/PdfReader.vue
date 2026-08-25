@@ -46,8 +46,13 @@
           :style="{ width: pageWidthPx(p) + 'px', height: pageH(p) + 'px' }">
           <canvas :ref="(el) => setCanvasRef(p, el)" class="pr-canvas" />
           <div :ref="(el) => setTextRef(p, el)" class="text-layer"></div>
+          <span v-if="ocrStates[p] === 'loading'" class="pr-ocr-state">正在生成本页可选文字层…</span>
+          <span v-else-if="ocrStates[p] === 'ready'" class="pr-ocr-state ready">OCR 文字层</span>
+          <button v-if="pageErrors[p]" class="pr-page-retry" type="button" @click="retryPage(p)">
+            本页渲染失败，点击重试
+          </button>
           <div v-for="(st, i) in hlStyles(p)" :key="st.id + '-' + i" class="pr-hl"
-            :style="st.style" @click.stop="openAnnCard('edit', st.ann, $event)" :title="st.ann.text || ''" />
+            :style="st.style" :title="st.ann.text || ''" />
         </div>
         <div v-if="loading" class="pr-loading" v-loading="true" element-loading-text="正在渲染原文…" />
         <div v-if="errorMsg" class="pr-error">⚠️ {{ errorMsg }}</div>
@@ -58,11 +63,12 @@
     <div v-if="selToolbar" class="pr-sel-bar" :style="{ top: selPos.y + 'px', left: selPos.x + 'px' }">
       <el-button size="small" type="primary" @click="aiAction('explain')">💡 解释</el-button>
       <el-button size="small" type="success" @click="aiAction('translate')">🌐 翻译</el-button>
-      <el-button size="small" type="warning" @click="openAnnCard('create')">🖍 高亮</el-button>
+      <el-button v-if="reanchorId" size="small" type="danger" @click="saveReanchor">更新批注位置</el-button>
+      <el-button v-else size="small" type="warning" @click="openAnnCard('create')">🖍 高亮</el-button>
     </div>
 
     <!-- 批注卡片（创建/编辑） -->
-    <div v-if="annCard.visible" class="pr-ann-card" :style="{ top: annCard.y + 'px', left: annCard.x + 'px' }">
+    <div v-if="annCard.visible" class="pr-ann-card">
       <div class="ann-card-title">{{ annCard.mode === 'edit' ? '编辑批注' : '添加批注' }}</div>
       <div class="ann-colors">
         <span v-for="c in COLORS" :key="c" class="ann-color"
@@ -102,8 +108,12 @@
           <span class="ann-dot" :style="{ background: a.color }"></span>
           <el-tag size="small" type="warning">第 {{ a.page }} 页</el-tag>
           <el-button link size="small" @click="jumpToPage(a.page)">跳转</el-button>
+          <el-button link size="small" @click="openAnnCard('edit', a)">编辑</el-button>
+          <el-button v-if="a.status === 'needs_reanchor'" link size="small" type="warning" @click="startReanchor(a)">重新选择</el-button>
+          <el-button v-else-if="a.schema_version < 2" link size="small" type="primary" @click="repairOldAnnotation(a)">自动校准</el-button>
           <el-button link size="small" type="danger" @click="removeAnn(a)">删除</el-button>
         </div>
+        <el-alert v-if="a.status === 'needs_reanchor'" type="warning" :closable="false" title="原位置无法可靠恢复，请跳转后重新选择原文" />
         <div class="ann-text">{{ a.text || '' }}</div>
         <div v-if="a.note" class="ann-note">📝 {{ a.note }}</div>
       </div>
@@ -116,9 +126,11 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import { annotationSegments, clipSelectionRects } from '../utils/pdfAnnotations'
 import {
   listAnnotations, createAnnotation, updateAnnotation, deleteAnnotation,
-  aiExplain, aiSummarize, aiVision, listBooks, getBook, getKnowledgeTree,
+  repairAnnotation, getPdfTextLayer,
+  aiExplain, aiSummarize, aiVision, getBook, getKnowledgeTree,
 } from '../api'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
@@ -167,7 +179,9 @@ const baseWidths = {}
 const pageHeights = ref({})
 const pageMetricsVersion = ref(0)
 const rendered = ref({})
+const pageErrors = ref({})
 const annotations = ref([])
+const ocrStates = ref({})
 const showAnnPanel = ref(false)
 const nodeOptions = ref([])
 
@@ -180,20 +194,29 @@ const aiBusy = ref(false)
 const selToolbar = ref(false)
 const selPos = ref({ x: 0, y: 0 })
 let selText = ''
-let selRects = null
+let selAnchor = null
 let selPage = 1
 let pendingSel = null   // AI 解释后保存为批注用的选区快照
+const reanchorId = ref(null)
 
 // 批注卡片
-const annCard = ref({ visible: false, mode: 'create', x: 0, y: 0, page: 1, rects: [], text: '', color: COLORS[0], note: '', knowledgeNodeId: null, editingId: null })
+const annCard = ref({ visible: false, mode: 'create', page: 1, anchor: null, text: '', color: COLORS[0], note: '', knowledgeNodeId: null, editingId: null })
 
 let pdfDoc = null
 let renderTasks = {}
 const pendingRenders = new Set()
 let bookTitle = ''
+let renderGeneration = 0
+let zoomTimer = null
+let scrollFrame = null
 
-function setCanvasRef(p, el) { if (el) canvasRefs[p] = el }
-function setTextRef(p, el) { if (el) textRefs[p] = el }
+function setCanvasRef(p, el) {
+  if (!el) { delete canvasRefs[p]; return }
+  canvasRefs[p] = el
+  // HTML canvas 默认 300×150，会让数百个尚未渲染的占位页白白占用像素内存。
+  if (!rendered.value[p] && !pendingRenders.has(p)) { el.width = 1; el.height = 1 }
+}
+function setTextRef(p, el) { if (el) textRefs[p] = el; else delete textRefs[p] }
 
 const aiResultHtml = computed(() => {
   const t = aiResult.value || ''
@@ -252,14 +275,16 @@ const loadPdf = async () => {
     // 自动适应宽度（页面更大更清晰）
     await nextTick()
     fitWidth()
-    await renderVisible()
+    // fitWidth 会以当前滚动中心保持视口；首次加载需在它完成后重新应用目标页，
+    // 否则深链 ?page=N 会被初始 scrollTop=0 的滚动事件改回第 1 页。
+    await nextTick()
+    page.value = Math.min(Math.max(1, target), doc.numPages)
     if (useSaved && saved.scrollTop) {
-      await nextTick()
       scroller.value.scrollTop = saved.scrollTop
     } else {
-      await nextTick()
-      scrollToPage(page.value, false)
+      scroller.value.scrollTop = mode.value === 'scroll' ? pageOffset(page.value) + 2 : 0
     }
+    await renderVisible()
     await loadAnnotations()
     loadNodeOptions()
   } catch (e) {
@@ -322,17 +347,17 @@ const renderVisible = async () => {
   for (const p of Object.keys(rendered.value)) {
     if (!want.has(Number(p))) clearPage(Number(p))
   }
-  for (const p of want) {
-    if (!rendered.value[p]) renderPage(Number(p))
-  }
+  const generation = renderGeneration
+  await Promise.all([...want].map(p => rendered.value[p] ? null : renderPage(Number(p), generation)))
 }
 
-const renderPage = async (p) => {
+const renderPage = async (p, generation = renderGeneration) => {
   if (!pdfDoc || rendered.value[p] || pendingRenders.has(p)) return
   pendingRenders.add(p)
   try {
-    if (renderTasks[p]) { try { await renderTasks[p].cancel() } catch {} delete renderTasks[p] }
+    if (renderTasks[p]) { try { renderTasks[p].cancel() } catch {} delete renderTasks[p] }
     const pdfPage = await pdfDoc.getPage(p)
+    if (generation !== renderGeneration) return
     const vp1 = pdfPage.getViewport({ scale: 1 })
     if (baseWidths[p] !== vp1.width || baseHeights[p] !== vp1.height) {
       baseWidths[p] = vp1.width
@@ -342,7 +367,9 @@ const renderPage = async (p) => {
     const vp = pdfPage.getViewport({ scale: scale.value })
     const cv = canvasRefs[p]
     if (!cv) return
-    const dpr = window.devicePixelRatio || 1
+    // 单页像素预算约 8MP（RGBA 约 32MB），避免扫描件/高倍缩放造成内存尖峰。
+    const cssPixels = Math.max(1, vp.width * vp.height)
+    const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(8_000_000 / cssPixels)))
     cv.width = Math.floor(vp.width * dpr)
     cv.height = Math.floor(vp.height * dpr)
     cv.style.width = Math.floor(vp.width) + 'px'
@@ -352,20 +379,72 @@ const renderPage = async (p) => {
     const task = pdfPage.render({ canvasContext: ctx, viewport: vp })
     renderTasks[p] = task
     await task.promise
+    if (generation !== renderGeneration) return
     delete renderTasks[p]
     const tl = textRefs[p]
     if (tl) {
+      tl.style.setProperty('--total-scale-factor', String(scale.value))
       tl.style.width = Math.floor(vp.width) + 'px'
       tl.style.height = Math.floor(vp.height) + 'px'
+      tl.innerHTML = ''
       const textContent = await pdfPage.getTextContent()
+      if (generation !== renderGeneration) return
       const tlInstance = new pdfjsLib.TextLayer({ textContentSource: textContent, container: tl, viewport: vp })
       await tlInstance.render()
+      // 扫描页没有 PDF 文本层：仅为当前渲染页按需取得 OCR 坐标，不加载整本文档。
+      if (!tl.querySelector('span') && props.bookId && p === page.value && generation === renderGeneration) {
+        await renderOcrTextLayer(p, tl, generation)
+      }
     }
     rendered.value[p] = true
+    delete pageErrors.value[p]
   } catch (e) {
-    if (e?.name !== 'RenderingCancelledException') console.error('render err', p, e)
+    if (e?.name !== 'RenderingCancelledException') {
+      console.error('render err', p, e)
+      pageErrors.value[p] = e?.message || '页面渲染失败'
+    }
   } finally {
     pendingRenders.delete(p)
+  }
+}
+
+const renderOcrTextLayer = async (p, tl, generation) => {
+  if (ocrStates.value[p] === 'loading' || tl.querySelector('span')) return
+  ocrStates.value[p] = 'loading'
+  try {
+    const layer = await getPdfTextLayer(props.bookId, p, true)
+    if (generation !== renderGeneration || !textRefs[p] || textRefs[p] !== tl) return
+    const fragment = document.createDocumentFragment()
+    for (const item of layer.items || []) {
+      if (!item.text || item.w <= 0 || item.h <= 0) continue
+      const span = document.createElement('span')
+      span.textContent = item.text
+      span.dataset.source = 'ocr'
+      span.dataset.width = String(item.w)
+      span.style.left = (item.x * 100) + '%'
+      span.style.top = (item.y * 100) + '%'
+      span.style.fontSize = `${Math.max(4, item.h * tl.clientHeight)}px`
+      fragment.appendChild(span)
+    }
+    tl.appendChild(fragment)
+    // 将每行透明文字压缩到 OCR 框宽度，使浏览器 Range 命中框贴合扫描图。
+    for (const span of tl.querySelectorAll('span[data-source="ocr"]')) {
+      const expected = Number(span.dataset.width) * tl.clientWidth
+      const natural = span.getBoundingClientRect().width
+      if (natural > 0 && expected > 0) span.style.setProperty('--ocr-scale-x', String(expected / natural))
+    }
+    ocrStates.value[p] = (layer.items || []).length ? 'ready' : 'empty'
+  } catch (e) {
+    console.warn('OCR text layer unavailable', p, e)
+    ocrStates.value[p] = 'failed'
+  }
+}
+
+const ensureCurrentOcrLayer = () => {
+  const p = page.value
+  const tl = textRefs[p]
+  if (props.bookId && rendered.value[p] && tl && !tl.querySelector('span') && !ocrStates.value[p]) {
+    renderOcrTextLayer(p, tl, renderGeneration)
   }
 }
 
@@ -376,19 +455,29 @@ const clearPage = (p) => {
   if (cv) { cv.width = 1; cv.height = 1 }
   const tl = textRefs[p]
   if (tl) tl.innerHTML = ''
+  delete ocrStates.value[p]
   rendered.value[p] = false
 }
 
+const retryPage = async (p) => {
+  delete pageErrors.value[p]
+  clearPage(p)
+  await nextTick()
+  renderPage(p, renderGeneration)
+}
+
 const onScroll = () => {
+  selToolbar.value = false
   if (mode.value !== 'scroll') return
-  renderVisible()
-  const r = visibleRange()
-  // 连续模式：页码=视口顶部页（渲染缓冲只影响渲染，不影响页码）
-  if (mode.value === 'scroll') {
+  if (scrollFrame) return
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = null
+    renderVisible()
     page.value = currentPageAt(scroller.value.scrollTop)
-  }
-  notifyPageChange()
-  savePosDebounced()
+    ensureCurrentOcrLayer()
+    notifyPageChange()
+    savePosDebounced()
+  })
 }
 
 const notifyPageChange = () => {
@@ -396,7 +485,11 @@ const notifyPageChange = () => {
 }
 
 const onWheel = (e) => {
-  if (e.ctrlKey || e.metaKey) { zoomBy(e.deltaY > 0 ? -0.1 : 0.1); return }
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault()
+    zoomBy(e.deltaY > 0 ? -0.1 : 0.1)
+    return
+  }
   if (mode.value === 'scroll') return  // 连续模式自然滚动
   if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
   if (e.deltaY > 0) goPage(1)
@@ -438,17 +531,33 @@ const scrollToPage = (p, smooth = true) => {
 
 const jumpToPage = (p) => scrollToPage(p)
 
+const applyScale = (nextScale) => {
+  if (!scroller.value) return
+  const oldScale = scale.value || 1
+  const anchor = (scroller.value.scrollTop + scroller.value.clientHeight / 2) / oldScale
+  scale.value = Math.min(2.5, Math.max(0.5, Math.round(nextScale * 100) / 100))
+  renderGeneration++
+  for (const p of Object.keys(rendered.value)) clearPage(Number(p))
+  for (const task of Object.values(renderTasks)) { try { task.cancel() } catch {} }
+  renderTasks = {}
+  clearTimeout(zoomTimer)
+  nextTick(() => {
+    if (mode.value === 'scroll') {
+      scroller.value.scrollTop = Math.max(0, anchor * scale.value - scroller.value.clientHeight / 2)
+    }
+    zoomTimer = setTimeout(() => renderVisible(), 140)
+  })
+}
+
 const zoomBy = (d) => {
-  scale.value = Math.min(2.5, Math.max(0.5, Math.round((scale.value + d) * 100) / 100))
-  renderVisible()
+  applyScale(scale.value + d)
 }
 const fitWidth = () => {
   if (!scroller.value || !numPages.value) return
   const w = scroller.value.clientWidth - 30
   const pairFactor = mode.value === 'double' && pairEndOf(page.value) > pairStartOf(page.value) ? 2 : 1
   const base = (baseWidths[page.value] || 595) * pairFactor + (pairFactor === 2 ? 12 : 0)
-  scale.value = Math.max(0.5, Math.min(2, w / base))
-  renderVisible()
+  applyScale(Math.max(0.5, Math.min(2, w / base)))
 }
 const fitPage = () => {
   if (!scroller.value || !numPages.value) return
@@ -457,8 +566,7 @@ const fitPage = () => {
   const pairFactor = mode.value === 'double' && pairEndOf(page.value) > pairStartOf(page.value) ? 2 : 1
   const bw = (baseWidths[page.value] || 595) * pairFactor + (pairFactor === 2 ? 12 : 0)
   const bh = baseHeights[page.value] || 800
-  scale.value = Math.max(0.5, Math.min(2, Math.min(w / bw, h / bh)))
-  renderVisible()
+  applyScale(Math.max(0.5, Math.min(2, Math.min(w / bw, h / bh))))
 }
 
 watch(mode, (nv) => {
@@ -466,7 +574,7 @@ watch(mode, (nv) => {
     const w = scroller.value.clientWidth - 40
     const bw = baseWidths[page.value] || 595
     if (bw * scale.value * 2 > w) {
-      scale.value = Math.max(0.5, Math.min(2, w / (bw * 2)))
+      applyScale(Math.max(0.5, Math.min(2, w / (bw * 2))))
     }
   }
   page.value = Math.max(1, Math.min(numPages.value || 1, page.value))
@@ -484,10 +592,11 @@ const savePosDebounced = () => { clearTimeout(saveTimer); saveTimer = setTimeout
 const hlStyles = (p) => {
   const out = []
   for (const a of annotations.value) {
-    if (a.page !== p) continue
-    let rects = []
-    try { rects = JSON.parse(a.rect_json) } catch {}
+    const segment = annotationSegments(a).find(s => Number(s.page) === Number(p))
+    if (!segment) continue
+    const rects = segment.rects || []
     for (const r of rects) {
+      if (![r.x, r.y, r.w, r.h].every(Number.isFinite) || r.w <= 0 || r.h <= 0) continue
       out.push({
         id: a.id,
         ann: a,
@@ -527,30 +636,39 @@ const loadNodeOptions = async () => {
 const onMouseUp = async (e) => {
   const sel = window.getSelection()
   if (!sel || sel.isCollapsed || !sel.toString().trim()) { selToolbar.value = false; return }
-  // 健壮定位文本层：优先公共祖先，回退 anchorNode
-  let tl = null
-  try {
-    const ancestor = sel.getRangeAt(0).commonAncestorContainer
-    const el = ancestor.nodeType === 1 ? ancestor : ancestor.parentElement
-    tl = el?.closest?.('.text-layer')
-  } catch { /* ignore */ }
-  if (!tl) {
-    tl = sel.anchorNode?.parentElement?.closest?.('.text-layer') || sel.focusNode?.parentElement?.closest?.('.text-layer')
-  }
-  if (!tl) return
-  const rect = sel.getRangeAt(0).getBoundingClientRect()
+  const range = sel.getRangeAt(0).cloneRange()
+  const rect = range.getBoundingClientRect()
   if (!rect.width) return
   selText = sel.toString().trim().slice(0, 2000)
-  selRects = sel.getRangeAt(0).getClientRects()
-  // 选区所在页：以文本层所在 .pr-page 为准（连续模式多页可见时更可靠）
-  const pageEl = tl.closest('.pr-page')
-  selPage = pageEl ? parseInt(pageEl.dataset.page) : page.value
+  selAnchor = snapshotRange(range, selText)
+  if (!selAnchor?.segments?.length) { selToolbar.value = false; return }
+  selPage = selAnchor.segments[0].page
   const pr = rootEl.value.getBoundingClientRect()
   selPos.value = {
-    x: Math.max(8, Math.min(rect.left - pr.left + scroller.value.scrollLeft, pr.width - 320)),
-    y: Math.max(8, Math.min(rect.bottom - pr.top + scroller.value.scrollTop + 8, pr.height - 60)),
+    x: Math.max(8, Math.min(rect.left - pr.left, pr.width - 320)),
+    y: Math.max(8, Math.min(rect.bottom - pr.top + 8, pr.height - 60)),
   }
   selToolbar.value = true
+}
+
+const snapshotRange = (range, exact) => {
+  const rangeRects = Array.from(range.getClientRects()).filter(r => r.width > 0.5 && r.height > 0.5)
+  const pages = Array.from(rootEl.value?.querySelectorAll('.pr-page') || []).map(pageEl => ({
+    page: Number(pageEl.dataset.page),
+    source: pageEl.querySelector('.text-layer span[data-source="ocr"]') ? 'ocr' : 'pdf-text',
+    bounds: pageEl.getBoundingClientRect(),
+  }))
+  const anchorText = range.startContainer?.textContent || ''
+  const focusText = range.endContainer?.textContent || ''
+  return {
+    schema_version: 2,
+    quote: {
+      exact,
+      prefix: anchorText.slice(Math.max(0, range.startOffset - 32), range.startOffset),
+      suffix: focusText.slice(range.endOffset, range.endOffset + 32),
+    },
+    segments: clipSelectionRects(rangeRects, pages),
+  }
 }
 
 const onMouseDown = () => {}
@@ -558,29 +676,17 @@ const onMouseDown = () => {}
 // 批注卡片
 const openAnnCard = (modeName, ann = null, ev = null) => {
   selToolbar.value = false
-  const pr = rootEl.value.getBoundingClientRect()
-  let x, y
-  if (ev) {
-    x = ev.clientX - pr.left + scroller.value.scrollLeft
-    y = ev.clientY - pr.top + scroller.value.scrollTop
-  } else {
-    x = selPos.value.x
-    y = selPos.value.y + 40
-  }
-  // 边界钳制（窄面板/靠边时避免溢出）
-  x = Math.max(8, Math.min(x, pr.width - 280))
-  y = Math.max(8, Math.min(y, pr.height - 260))
   if (modeName === 'edit' && ann) {
     annCard.value = {
-      visible: true, mode: 'edit', x, y, page: ann.page,
-      rects: JSON.parse(ann.rect_json || '[]'), text: ann.text || '',
+      visible: true, mode: 'edit', page: ann.page,
+      anchor: null, text: ann.text || '',
       color: ann.color || COLORS[0], note: ann.note || '',
       knowledgeNodeId: ann.knowledge_node_id || null, editingId: ann.id,
     }
   } else {
     annCard.value = {
-      visible: true, mode: 'create', x, y, page: selPage,
-      rects: selRects ? Array.from(selRects) : [], text: selText || '',
+      visible: true, mode: 'create', page: selPage,
+      anchor: selAnchor, text: selText || '',
       color: COLORS[0], note: '', knowledgeNodeId: null, editingId: null,
     }
   }
@@ -596,22 +702,11 @@ const saveAnnCard = async () => {
     } catch (e) { ElMessage.error(e.message) }
   } else {
     if (!props.bookId) { ElMessage.warning('缺少书籍信息'); return }
-    // 把 DOMRect 归一化为 0-1 坐标
-    const pageEl = document.querySelector('.pr-page[data-page="' + c.page + '"]')
-    if (!pageEl) { ElMessage.warning('页面未就绪'); return }
-    const pr = pageEl.getBoundingClientRect()
-    const rects = []
-    for (const r of c.rects) {
-      rects.push({
-        x: +((r.left - pr.left) / pr.width).toFixed(4),
-        y: +((r.top - pr.top) / pr.height).toFixed(4),
-        w: +(r.width / pr.width).toFixed(4),
-        h: +(r.height / pr.height).toFixed(4),
-      })
-    }
+    if (!c.anchor?.segments?.length) { ElMessage.warning('没有可保存的文字位置'); return }
+    const first = c.anchor.segments[0]
     try {
       await createAnnotation(props.bookId, {
-        page: c.page, rect_json: JSON.stringify(rects), text: c.text,
+        page: first.page, rect_json: JSON.stringify(first.rects), anchor: c.anchor, text: c.text,
         color: c.color, note: c.note || '', knowledge_node_id: c.knowledgeNodeId || null,
       })
       ElMessage.success('已添加高亮')
@@ -633,6 +728,38 @@ const deleteAnnFromCard = async () => {
 const removeAnn = async (a) => {
   await deleteAnnotation(a.id)
   loadAnnotations()
+}
+
+const repairOldAnnotation = async (annotation) => {
+  try {
+    const repaired = await repairAnnotation(annotation.id)
+    if (repaired.status === 'active' && repaired.schema_version >= 2) ElMessage.success('已根据原文重新校准位置')
+    else ElMessage.warning('未能自动定位，请重新选择原文')
+    await loadAnnotations()
+  } catch (e) { ElMessage.error(e.message) }
+}
+
+const startReanchor = (annotation) => {
+  reanchorId.value = annotation.id
+  showAnnPanel.value = false
+  jumpToPage(annotation.page)
+  ElMessage.info('请在原页重新选择对应文字，然后点击“更新批注位置”')
+}
+
+const saveReanchor = async () => {
+  if (!reanchorId.value || !selAnchor?.segments?.length) return
+  const first = selAnchor.segments[0]
+  try {
+    await updateAnnotation(reanchorId.value, {
+      page: first.page, rect_json: JSON.stringify(first.rects), anchor: selAnchor,
+      text: selText, status: 'active',
+    })
+    reanchorId.value = null
+    selToolbar.value = false
+    window.getSelection()?.removeAllRanges()
+    ElMessage.success('批注位置已更新')
+    await loadAnnotations()
+  } catch (e) { ElMessage.error(e.message) }
 }
 
 const exportAnns = () => {
@@ -664,22 +791,7 @@ const aiAction = async (action) => {
   selToolbar.value = false
   if (!selText) return
   // 记录选区快照（用于「保存为批注」）
-  if (selRects) {
-    const pageEl = document.querySelector('.pr-page[data-page="' + selPage + '"]')
-    if (pageEl) {
-      const pr2 = pageEl.getBoundingClientRect()
-      pendingSel = {
-        page: selPage,
-        rects: Array.from(selRects).map(r => ({
-          x: +((r.left - pr2.left) / pr2.width).toFixed(4),
-          y: +((r.top - pr2.top) / pr2.height).toFixed(4),
-          w: +(r.width / pr2.width).toFixed(4),
-          h: +(r.height / pr2.height).toFixed(4),
-        })),
-        text: selText,
-      }
-    }
-  }
+  if (selAnchor?.segments?.length) pendingSel = { anchor: selAnchor, text: selText }
   aiTitle.value = action === 'translate' ? '翻译' : 'AI 解释'
   aiPanel.value = true
   aiLoading.value = true
@@ -695,8 +807,9 @@ const saveAiAsAnnotation = async () => {
   if (!pendingSel || !props.bookId || !aiResult.value || aiResult.value.startsWith('⚠️')) return
   try {
     await createAnnotation(props.bookId, {
-      page: pendingSel.page,
-      rect_json: JSON.stringify(pendingSel.rects),
+      page: pendingSel.anchor.segments[0].page,
+      rect_json: JSON.stringify(pendingSel.anchor.segments[0].rects),
+      anchor: pendingSel.anchor,
       text: pendingSel.text,
       color: COLORS[0],
       note: '💡 AI 解读：' + aiResult.value.slice(0, 1500),
@@ -746,7 +859,15 @@ const analyzePage = async () => {
   aiResult.value = ''
   aiBusy.value = true
   try {
-    const image = cv.toDataURL('image/jpeg', 0.8)
+    const blob = await new Promise((resolve, reject) => cv.toBlob(
+      value => value ? resolve(value) : reject(new Error('页面图像编码失败')), 'image/jpeg', 0.82,
+    ))
+    const image = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = () => reject(new Error('页面图像读取失败'))
+      reader.readAsDataURL(blob)
+    })
     const resp = await aiVision({ book_id: props.bookId, page: page.value, image })
     if (!resp.ok) throw new Error(resp.error || '视觉分析失败')
     aiResult.value = resp.result
@@ -766,8 +887,7 @@ const onKeydown = (e) => {
 
 onMounted(async () => {
   try {
-    const resp = await listBooks({ page_size: 100 })
-    const b = resp.items.find(x => x.id === props.bookId)
+    const b = props.bookId ? await getBook(props.bookId) : null
     bookTitle = b?.title || ''
   } catch {}
   window.addEventListener('keydown', onKeydown)
@@ -777,12 +897,18 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   savePos()
+  clearTimeout(zoomTimer)
+  clearTimeout(saveTimer)
+  if (scrollFrame) cancelAnimationFrame(scrollFrame)
+  for (const p of Object.keys(rendered.value)) clearPage(Number(p))
   if (pdfDoc) { try { pdfDoc.destroy() } catch {} }
 })
 </script>
 
 <style scoped>
 .pdf-reader { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 360px; }
+.pr-page-retry { position:absolute; inset:50% auto auto 50%; transform:translate(-50%,-50%); z-index:4; padding:8px 12px; border:1px solid #e5e7eb; border-radius:8px; background:rgba(255,255,255,.94); color:#8b5a2b; box-shadow:0 1px 2px rgba(15,23,42,.08); cursor:pointer; }
+.pr-page-retry:hover { transform:translate(-50%,-52%); box-shadow:0 4px 12px rgba(15,23,42,.12); }
 .pr-toolbar {
   display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-wrap: wrap;
   background: var(--el-fill-color-lighter); border-radius: 8px 8px 0 0;
@@ -805,10 +931,25 @@ onBeforeUnmount(() => {
 .pr-mode-scroll .pr-page, .pr-mode-single .pr-page { display: block; margin: 0 auto 10px; }
 .pr-mode-double .pr-page { display: inline-block; vertical-align: top; margin: 0 4px; }
 .pr-canvas { display: block; }
-.text-layer { position: absolute; inset: 0; overflow: hidden; line-height: 1; cursor: text; }
-.text-layer :deep(span) { position: absolute; white-space: pre; transform-origin: 0 0; color: transparent; cursor: text; user-select: text; }
+.text-layer {
+  position: absolute; inset: 0; overflow: clip; line-height: 1; cursor: text;
+  text-align: initial; letter-spacing: normal; word-spacing: normal; text-size-adjust: none;
+  transform-origin: 0 0; z-index: 1; --min-font-size: 1; --min-font-size-inv: calc(1 / var(--min-font-size));
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+}
+.text-layer :deep(:is(span, br)) { position: absolute; white-space: pre; transform-origin: 0 0; color: transparent; cursor: text; user-select: text; }
+.text-layer :deep(> :not(.markedContent)), .text-layer :deep(.markedContent span:not(.markedContent)) {
+  z-index: 1; --font-height: 0; --scale-x: 1; --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.text-layer :deep(.markedContent) { display: contents; }
+.text-layer :deep(span[data-source="ocr"]) {
+  display: inline-block; line-height: 1; --ocr-scale-x: 1;
+  transform: scaleX(var(--ocr-scale-x));
+}
 .text-layer :deep(span::selection) { background: rgba(59, 130, 246, 0.4); }
-.pr-hl { position: absolute; border-radius: 2px; pointer-events: auto; cursor: pointer; }
+.pr-hl { position: absolute; z-index: 2; border-radius: 2px; pointer-events: none; }
 .pr-hl:hover { outline: 1px solid #c45656; }
 .pr-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .pr-error { color: #ffd9a0; padding: 20px; font-size: 13px; }
@@ -820,10 +961,12 @@ onBeforeUnmount(() => {
   border: 1px solid var(--el-border-color-light);
 }
 .pr-ann-card {
-  position: absolute; z-index: 60; width: 260px; padding: 10px;
+  position: absolute; z-index: 60; width: 280px; padding: 10px; top: 58px; right: 12px;
   background: #fff; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.3);
   border: 1px solid var(--el-border-color-light);
 }
+.pr-ocr-state { position:absolute; right:8px; top:8px; z-index:3; padding:3px 7px; border-radius:10px; background:rgba(15,23,42,.72); color:#fff; font-size:11px; pointer-events:none; }
+.pr-ocr-state.ready { opacity:.55; }
 .ann-card-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
 .ann-colors { display: flex; gap: 6px; margin-bottom: 8px; }
 .ann-color { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }

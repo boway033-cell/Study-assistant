@@ -8,8 +8,9 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, literature, plan, presentations, quizzes, settings, stats, study, tags
+from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, literature, plan, presentations, quizzes, settings, shelves, stats, study, tags
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import Base, engine
 from backend.app.services.rag import fts
@@ -49,7 +50,7 @@ def _migrate():
             except Exception:  # noqa: BLE001
                 pass
             try:
-                conn.execute(text("UPDATE presentation_decks SET status='failed', error_msg='服务重启，生成任务已中断，请重新生成' WHERE status IN ('pending','running')"))
+                conn.execute(text("UPDATE presentation_decks SET status='failed', error_msg='服务重启，生成任务已中断，请重新生成' WHERE status IN ('pending','running','outlining','rendering')"))
             except Exception:  # noqa: BLE001
                 pass
             # book_deep 新增 chapter_hashes_json 列
@@ -68,6 +69,17 @@ def _migrate():
                 it_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(import_tasks)")).fetchall()]
                 if "retry_count" not in it_cols:
                     conn.execute(text("ALTER TABLE import_tasks ADD COLUMN retry_count INTEGER DEFAULT 0"))
+            except Exception:  # noqa: BLE001
+                pass
+            # PDF 批注 v2：多页分段、原文锚点与待重定位状态。
+            try:
+                ann_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(annotations)")).fetchall()]
+                if "schema_version" not in ann_cols:
+                    conn.execute(text("ALTER TABLE annotations ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1"))
+                if "anchor_json" not in ann_cols:
+                    conn.execute(text("ALTER TABLE annotations ADD COLUMN anchor_json TEXT"))
+                if "status" not in ann_cols:
+                    conn.execute(text("ALTER TABLE annotations ADD COLUMN status VARCHAR(24) NOT NULL DEFAULT 'active'"))
             except Exception:  # noqa: BLE001
                 pass
             # 加密旧的明文 API Key（向后兼容：旧版直接存明文，新版加密存储）
@@ -150,14 +162,28 @@ async def lifespan(_app: FastAPI):
         pass
 
 
-app = FastAPI(title="Study assistant", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Study assistant", version="1.1.0", lifespan=lifespan)
+
+
+class SPAStaticFiles(StaticFiles):
+    """静态资源不存在时回退 index.html，支持刷新和协议深链。"""
+
+    async def get_response(self, path: str, scope):
+        try:
+            response = await super().get_response(path, scope)
+            if response.status_code != 404:
+                return response
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+        return await super().get_response("index.html", scope)
 
 # 本地访问控制：只允许本服务与本地开发源，拒绝任意来源跨域（防恶意网页调用本地 API）
+_LOCAL_APP_PORTS = {*range(8000, 8011), app_settings.port}
 _ALLOWED_ORIGINS = [
-    f"http://127.0.0.1:{app_settings.port}",
-    f"http://localhost:{app_settings.port}",
-    "http://127.0.0.1:5173",  # vite dev server
-    "http://localhost:5173",
+    f"http://{host}:{port}"
+    for host in ("127.0.0.1", "localhost")
+    for port in sorted(_LOCAL_APP_PORTS | {5173})
 ]
 
 app.add_middleware(
@@ -191,6 +217,7 @@ app.include_router(study.router)
 app.include_router(graph.router)
 app.include_router(plan.router)
 app.include_router(tags.router)
+app.include_router(shelves.router)
 app.include_router(draw.router)
 app.include_router(presentations.router)
 app.include_router(literature.router)
@@ -198,7 +225,13 @@ app.include_router(literature.router)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    # 启动器据此区分占用端口的旧版进程，避免新前端复用缺少新 API 的后端。
+    return {
+        "status": "ok",
+        "app": "study-assistant",
+        "api_revision": 2,
+        "capabilities": {"shelves_write": True},
+    }
 
 
 @app.get("/api/health/data")
@@ -220,4 +253,4 @@ def health_data():
 # 静态资源（前端构建产物）—— 必须放在所有 API 路由之后
 _frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 if _frontend_dist.exists():
-    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
+    app.mount("/", SPAStaticFiles(directory=_frontend_dist, html=True), name="frontend")

@@ -49,13 +49,13 @@
 | 全文检索 | SQLite FTS5 + jieba | — | 中文需 jieba 分词后建索引（零内存） |
 | PDF 解析 | PyMuPDF (fitz) | ≥1.24 | 快、可提取目录/文字/页码 |
 | Word / PPT | python-docx / python-pptx | — | 段落与标题层级 |
-| OCR（可选） | PaddleOCR / tesseract | — | 扫描版 PDF；体积大，默认不安装，按需启用（P2） |
+| OCR（可选） | RapidOCR / Tesseract / PaddleOCR | — | 扫描版 PDF；默认优先轻量 RapidOCR，按当前页或弱页启用 |
 | 向量库（可选） | ChromaDB | ≥0.4 | 本地、纯 Python；`vector_search` 默认关 |
 | 嵌入模型（可选） | fastembed + bge-small-zh-v1.5 | fastembed≥0.4 | ONNX Runtime，内存 <500MB，全离线 |
 | **云端 LLM** | **DeepSeek API（deepseek-v4-flash / deepseek-v4-pro）** | httpx | **唯一 AI 后端（本地 Ollama 已取消）**；质量高、成本低 |
 | 前端 | Vue3 + Vite + Element Plus | — | 组件全、开发快 |
 | PDF 阅读器 | **pdf.js（pdfjs-dist）** | ≥4 | Mozilla 开源（~48k★），Firefox 同内核；页面内直接渲染，无需下载 |
-| 启动器 | launcher.py + start.bat/stop.bat | — | 自检端口/已在运行，自动开浏览器 |
+| 启动器 | start.bat/stop.bat + auto_start.ps1 | — | 自检端口/已在运行，自动开浏览器 |
 | 思维导图 | 自绘 SVG（零依赖） | — | 知识树导图视图，低内存 |
 
 | 图表 | ECharts | — | 趋势图、掌握度柱状图 |

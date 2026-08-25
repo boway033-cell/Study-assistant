@@ -24,6 +24,7 @@ from backend.app.models import (
     PaperProfile,
     PresentationDeck,
     Quiz,
+    TocRevision,
     book_tags,
 )
 
@@ -39,6 +40,7 @@ def prepare_book_for_reparse(db: Session, book_id: int) -> None:
     db.execute(update(KnowledgeNode).where(KnowledgeNode.book_id == book_id).values(chapter_id=None))
     db.execute(delete(BookAnalysis).where(BookAnalysis.book_id == book_id))
     db.execute(delete(BookDeep).where(BookDeep.book_id == book_id))
+    db.execute(delete(TocRevision).where(TocRevision.book_id == book_id))
     chapter_ids = select(Chapter.id).where(Chapter.book_id == book_id)
     db.execute(
         update(Chapter).where(Chapter.parent_id.in_(chapter_ids)).values(parent_id=None)
@@ -105,6 +107,7 @@ def delete_book_records(db: Session, book_id: int) -> list[str]:
         KnowledgeNode,
         Chunk,
         Quiz,
+        TocRevision,
         Chapter,
     ):
         db.execute(delete(model).where(model.book_id == book_id))

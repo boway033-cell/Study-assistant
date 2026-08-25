@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import json
 import socket
 import subprocess
 import sys
@@ -15,7 +16,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def get_port() -> int:
@@ -26,10 +27,17 @@ def get_port() -> int:
 
 
 def health_ok(port: int) -> bool:
-    """探测 /api/health，确认应用已在运行。"""
+    """确认端口上运行的是支持当前前端 API 的学习助手。"""
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=2) as r:
-            return r.status == 200
+            payload = json.loads(r.read().decode("utf-8"))
+            return (
+                r.status == 200
+                and payload.get("status") == "ok"
+                and payload.get("app") == "study-assistant"
+                and int(payload.get("api_revision", 0)) >= 2
+                and payload.get("capabilities", {}).get("shelves_write") is True
+            )
     except Exception:
         return False
 

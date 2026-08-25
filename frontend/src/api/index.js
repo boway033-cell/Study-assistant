@@ -36,8 +36,13 @@ export const listTasks = (params = {}) => http.get('/tasks', { params })
 export const getChunkOriginal = (bookId, chunkId) => http.get(`/books/${bookId}/chunk/${chunkId}`)
 export const getPageText = (bookId, pageNo) => http.get(`/books/${bookId}/page/${pageNo}`)
 export const bookFileUrl = (bookId) => `/api/books/${bookId}/file`
+export const renderedBookFileUrl = (bookId) => `/api/books/${bookId}/rendered-file`
 export const getBookDocument = (bookId) => http.get(`/books/${bookId}/document`)
 export const renameChapter = (id, title) => http.patch(`/chapters/${id}`, { title })
+export const getTocReview = (bookId) => http.get(`/books/${bookId}/toc-review`)
+export const autoRepairToc = (bookId, apply = false) => http.post(`/books/${bookId}/toc-auto-repair`, { apply })
+export const replaceBookToc = (bookId, items, note) => http.put(`/books/${bookId}/toc`, { items, note })
+export const listTocRevisions = (bookId) => http.get(`/books/${bookId}/toc-revisions`)
 export const getArchiveProfile = (bookId) => http.get(`/books/${bookId}/archive`)
 export const updateArchiveProfile = (bookId, data) => http.patch(`/books/${bookId}/archive`, data)
 export const getSourceMap = (bookId) => http.get(`/books/${bookId}/source-map`)
@@ -98,6 +103,14 @@ export const getBookTags = (bookId) => http.get(`/books/${bookId}/tags`)
 export const addBookTags = (bookId, data) => http.post(`/books/${bookId}/tags`, data)
 export const removeBookTag = (bookId, tagId) => http.delete(`/books/${bookId}/tags/${tagId}`)
 
+// ===== 虚拟书架 =====
+export const listShelves = () => http.get('/shelves')
+export const createShelf = (data) => http.post('/shelves', data)
+export const updateShelf = (id, data) => http.patch(`/shelves/${id}`, data)
+export const deleteShelf = (id) => http.delete(`/shelves/${id}`)
+export const putShelfBooks = (id, bookIds, mode = 'add') => http.put(`/shelves/${id}/books`, { book_ids: bookIds, mode })
+export const removeShelfBook = (id, bookId) => http.delete(`/shelves/${id}/books/${bookId}`)
+
 // ===== 统计 =====
 export const getOverview = () => http.get('/stats/overview')
 export const getMastery = (bookId) => http.get('/stats/mastery', { params: { book_id: bookId } })
@@ -126,6 +139,9 @@ export const listAnnotations = (bookId, params) => http.get(`/books/${bookId}/an
 export const createAnnotation = (bookId, data) => http.post(`/books/${bookId}/annotations`, data)
 export const updateAnnotation = (id, data) => http.patch(`/annotations/${id}`, data)
 export const deleteAnnotation = (id) => http.delete(`/annotations/${id}`)
+export const repairAnnotation = (id) => http.post(`/annotations/${id}/repair`)
+export const auditAnnotations = (bookId) => http.get(`/books/${bookId}/annotations/audit`)
+export const getPdfTextLayer = (bookId, page, generate = true) => http.get(`/books/${bookId}/pdf-text-layer/${page}`, { params: { generate } })
 
 // ===== AI 增强（可选，无 Key 时后端返回友好错误）=====
 export const aiExplain = (data) => http.post('/ai/explain', data)
@@ -142,18 +158,31 @@ export const studyTrainEnd = (data) => http.post('/study/train/end', data)
 export const getSettings = () => http.get('/settings')
 export const updateSettings = (data) => http.put('/settings', data)
 export const probeSettings = () => http.get('/settings/probe')
+export const listCompatibleProviders = () => http.get('/settings/providers')
+export const saveCompatibleProvider = (data) => http.post('/settings/providers', data)
+export const deleteCompatibleProvider = (id) => http.delete(`/settings/providers/${id}`)
+export const probeCompatibleProvider = (id) => http.post(`/settings/providers/${id}/probe`)
 
 // ===== 文献汇报与合法全文获取 =====
 export const generatePresentation = (data) => http.post('/presentations/generate', data)
+export const createPresentationOutline = (data) => http.post('/presentations/outline', data)
+export const updatePresentationOutline = (id, slides) => http.patch(`/presentations/${id}/outline`, { slides })
+export const renderPresentation = (id, data) => http.post(`/presentations/${id}/render`, data)
 export const listPresentations = (bookId) => http.get('/presentations', { params: bookId ? { book_id: bookId } : {} })
 export const getPresentation = (id) => http.get(`/presentations/${id}`)
 export const presentationDownloadUrl = (id) => `/api/presentations/${id}/download`
+export const presentationPreviewUrl = (id, slideNo) => `/api/presentations/${id}/preview/${slideNo}`
 export const getLiteratureConfig = () => http.get('/literature/config')
 export const updateLiteratureConfig = (data) => http.put('/literature/config', data)
 export const resolveLiterature = (data) => http.post('/literature/resolve', data, { timeout: 90000 })
 export const importOpenAccess = (data) => http.post('/literature/import', data, { timeout: 180000 })
 export const openLibraryHandoff = (data) => http.post('/literature/library-handoff', data)
+export const openBrowserHandoff = (data) => http.post('/literature/browser-handoff', data)
 export const listLiteratureAttempts = () => http.get('/literature/attempts')
+export const listLiteratureResources = (bookId) => http.get(`/literature/books/${bookId}/resources`)
+export const createLiteratureResource = (bookId, data) => http.post(`/literature/books/${bookId}/resources`, data)
+export const updateLiteratureResource = (id, data) => http.patch(`/literature/resources/${id}`, data)
+export const deleteLiteratureResource = (id) => http.delete(`/literature/resources/${id}`)
 
 // ===== 知识图谱 =====
 export const getGraph = (bookIds) => http.get('/graph', {

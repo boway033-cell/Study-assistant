@@ -27,6 +27,14 @@ book_tags = Table(
     Column("tag_id", ForeignKey("tags.id"), primary_key=True),
 )
 
+# 书架是虚拟集合：同一文献可加入多个书架，不复制或移动原文件。
+shelf_books = Table(
+    "shelf_books", Base.metadata,
+    Column("shelf_id", ForeignKey("shelves.id", ondelete="CASCADE"), primary_key=True),
+    Column("book_id", ForeignKey("books.id", ondelete="CASCADE"), primary_key=True),
+    Column("order_index", Integer, nullable=False, default=0),
+)
+
 
 class Book(Base):
     __tablename__ = "books"
@@ -48,6 +56,7 @@ class Book(Base):
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="book", cascade="all, delete-orphan")
     quizzes: Mapped[list["Quiz"]] = relationship(back_populates="book", cascade="all, delete-orphan")
     tags: Mapped[list["Tag"]] = relationship(secondary=book_tags, back_populates="books")
+    shelves: Mapped[list["Shelf"]] = relationship(secondary=shelf_books, back_populates="books")
 
 
 class PaperProfile(Base):
@@ -91,6 +100,20 @@ class Chapter(Base):
     children: Mapped[list["Chapter"]] = relationship()
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="chapter")
     quizzes: Mapped[list["Quiz"]] = relationship(back_populates="chapter")
+
+
+class TocRevision(Base):
+    """目录人工/自动修订快照，用于追溯和撤销。"""
+
+    __tablename__ = "toc_revisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
+    note: Mapped[str | None] = mapped_column(String(255))
+    before_json: Mapped[str] = mapped_column(Text, nullable=False)
+    after_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 
 class Chunk(Base):
@@ -208,6 +231,9 @@ class Annotation(Base):
     color: Mapped[str] = mapped_column(String(20), default="#f9e572")
     note: Mapped[str | None] = mapped_column(Text)                # 用户笔记
     knowledge_node_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_nodes.id"))
+    schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    anchor_json: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), default="active", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     book: Mapped["Book"] = relationship()
@@ -303,6 +329,47 @@ class Tag(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     books: Mapped[list["Book"]] = relationship(secondary=book_tags, back_populates="tags")
+
+
+class Shelf(Base):
+    """层级虚拟书架；删除书架只删除归属关系，不删除文献。"""
+
+    __tablename__ = "shelves"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("shelves.id", ondelete="CASCADE"), index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    color: Mapped[str] = mapped_column(String(20), default="#8B5A2B")
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    books: Mapped[list["Book"]] = relationship(secondary=shelf_books, back_populates="shelves")
+    children: Mapped[list["Shelf"]] = relationship(cascade="all, delete-orphan")
+
+
+class LiteratureResource(Base):
+    """正文、SI、图表或数据集的来源与权利元数据。"""
+
+    __tablename__ = "literature_resources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    resource_book_id: Mapped[int | None] = mapped_column(ForeignKey("books.id", ondelete="SET NULL"), index=True)
+    role: Mapped[str] = mapped_column(String(30), nullable=False, default="main")
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    license_expression: Mapped[str | None] = mapped_column(String(120))
+    rights_statement_uri: Mapped[str | None] = mapped_column(Text)
+    rights_status: Mapped[str] = mapped_column(String(30), default="not_evaluated")
+    rights_holder: Mapped[str | None] = mapped_column(String(255))
+    attribution: Mapped[str | None] = mapped_column(Text)
+    permission_note: Mapped[str | None] = mapped_column(Text)
+    allow_reuse: Mapped[int] = mapped_column(Integer, default=0)
+    provenance_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
 class ImportTask(Base):

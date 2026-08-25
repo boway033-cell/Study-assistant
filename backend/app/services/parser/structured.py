@@ -27,6 +27,10 @@ class DocumentBlock:
     font_weight: int | None = None
     source: str = "pdf-text"
     confidence: float = 1.0
+    reading_order: int = 0
+    asset_id: str | None = None
+    parent_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -44,7 +48,7 @@ class StructuredPage:
 class StructuredDocument:
     pages: list[StructuredPage] = field(default_factory=list)
     backend: str = "unknown"
-    version: int = 1
+    version: int = 2
 
     def page_texts(self) -> list[str]:
         return [page.text() for page in self.pages]
@@ -78,6 +82,75 @@ def _join_line_texts(lines: list[str]) -> str:
     from backend.app.services.analyzer.textclean import reflow_paragraphs
 
     return reflow_paragraphs("\n".join(line.strip() for line in lines if line.strip()))
+
+
+def _order_page_blocks(page: StructuredPage) -> None:
+    """按全宽块分段，段内先左栏后右栏，避免双栏论文逐行左右穿插。"""
+    if not page.blocks:
+        return
+    figures = [item for item in page.blocks if item.role == "figure"]
+    for block in page.blocks:
+        if block.role == "text" and re.match(r"^(?:图\s*[0-9一二三四五六七八九十]+|Fig(?:ure)?\.?\s*\d+)", block.text.strip(), re.I):
+            block.role = "caption"
+            if figures:
+                nearest = min(figures, key=lambda figure: abs(figure.bbox[3] - block.bbox[1]))
+                block.parent_id = nearest.asset_id
+    midpoint = page.width / 2 if page.width else 0
+    full_width: list[DocumentBlock] = []
+    narrow: list[DocumentBlock] = []
+    ordered: list[DocumentBlock] = []
+
+    def flush_narrow(before_y: float | None = None) -> None:
+        ready = [block for block in narrow if before_y is None or block.bbox[1] < before_y]
+        if not ready:
+            return
+        ready.sort(key=lambda block: (0 if (block.bbox[0] + block.bbox[2]) / 2 < midpoint else 1,
+                                      block.bbox[1], block.bbox[0]))
+        ordered.extend(ready)
+        for block in ready:
+            narrow.remove(block)
+
+    for block in sorted(page.blocks, key=lambda item: (item.bbox[1], item.bbox[0])):
+        width = max(0.0, block.bbox[2] - block.bbox[0])
+        crosses_middle = block.bbox[0] < midpoint < block.bbox[2]
+        if page.width and (crosses_middle or width >= page.width * .72):
+            flush_narrow(block.bbox[1])
+            ordered.append(block); full_width.append(block)
+        else:
+            narrow.append(block)
+    flush_narrow()
+    page.blocks = ordered
+    for index, block in enumerate(page.blocks):
+        block.reading_order = index
+
+
+def _append_pymupdf_images(path: Path, pages: list[StructuredPage]) -> None:
+    """只保存图片引用与坐标，不把二进制图片塞入结构 JSON。"""
+    import fitz
+
+    doc = fitz.open(path)
+    try:
+        for page_index, pdf_page in enumerate(doc):
+            if page_index >= len(pages):
+                break
+            target = pages[page_index]
+            seen: set[tuple[int, tuple[float, float, float, float]]] = set()
+            for image in pdf_page.get_images(full=True):
+                xref = int(image[0])
+                for rect in pdf_page.get_image_rects(xref):
+                    box = (float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1))
+                    key = (xref, box)
+                    if key in seen or rect.width < 8 or rect.height < 8:
+                        continue
+                    seen.add(key)
+                    target.blocks.append(DocumentBlock(
+                        page=page_index + 1, text="[图像]", bbox=box, role="figure",
+                        source="pymupdf-image", confidence=1.0,
+                        asset_id=f"pdf:{page_index + 1}:xref:{xref}",
+                        metadata={"xref": xref, "width": float(rect.width), "height": float(rect.height)},
+                    ))
+    finally:
+        doc.close()
 
 
 def _from_pdftext(path: Path) -> StructuredDocument:
@@ -124,6 +197,9 @@ def _from_pdftext(path: Path) -> StructuredDocument:
                 source="pdftext",
             ))
         pages.append(page)
+    _append_pymupdf_images(path, pages)
+    for page in pages:
+        _order_page_blocks(page)
     return StructuredDocument(pages=pages, backend="pdftext")
 
 
@@ -135,10 +211,8 @@ def _from_pymupdf(path: Path) -> StructuredDocument:
     try:
         for index, pdf_page in enumerate(doc, start=1):
             page = StructuredPage(index, float(pdf_page.rect.width), float(pdf_page.rect.height))
-            data = pdf_page.get_text("dict", sort=True)
+            data = pdf_page.get_text("dict", sort=True, flags=fitz.TEXTFLAGS_TEXT)
             for raw_block in data.get("blocks", []):
-                if raw_block.get("type") != 0:
-                    continue
                 line_texts: list[str] = []
                 sizes: list[float] = []
                 weights: list[int] = []
@@ -160,6 +234,9 @@ def _from_pymupdf(path: Path) -> StructuredDocument:
             pages.append(page)
     finally:
         doc.close()
+    _append_pymupdf_images(path, pages)
+    for page in pages:
+        _order_page_blocks(page)
     return StructuredDocument(pages=pages, backend="pymupdf")
 
 
@@ -207,6 +284,8 @@ def repeated_margin_lines(document: StructuredDocument, min_pages: int = 3) -> t
         if page.height <= 0:
             continue
         for block in page.blocks:
+            if block.role not in {"text", "title", "caption"}:
+                continue
             key = re.sub(r"\s+", " ", block.text.strip())
             if not key or len(key) > 80:
                 continue
@@ -233,6 +312,7 @@ def structured_to_markdown(document: StructuredDocument) -> str:
 
     parts: list[str] = []
     pending = ""
+    pending_block: DocumentBlock | None = None
     sentence_end = re.compile(r"[。！？!?；;.]\s*$")
     for page in document.pages:
         for block in page.blocks:
@@ -244,16 +324,27 @@ def structured_to_markdown(document: StructuredDocument) -> str:
                 if pending:
                     parts.append(pending)
                     pending = ""
+                    pending_block = None
                 title, level = heading
                 parts.append(f"{'#' * level} {title}")
                 continue
-            if block.role in {"table", "formula", "caption", "list"}:
+            if block.role in {"table", "formula", "caption", "list", "figure"}:
                 if pending:
                     parts.append(pending)
                     pending = ""
-                parts.append(text)
+                    pending_block = None
+                parts.append(text if block.role != "figure" else
+                             f"> 原文图像（第 {block.page} 页，资源 {block.asset_id or '未编号'}；请在原版视图查看）")
                 continue
-            if pending and not sentence_end.search(pending):
+            same_column = True
+            if pending_block and pending_block.page == block.page and page.width:
+                previous_center = (pending_block.bbox[0] + pending_block.bbox[2]) / 2
+                current_center = (block.bbox[0] + block.bbox[2]) / 2
+                previous_narrow = (pending_block.bbox[2] - pending_block.bbox[0]) < page.width * .72
+                current_narrow = (block.bbox[2] - block.bbox[0]) < page.width * .72
+                same_column = not (previous_narrow and current_narrow and
+                                   (previous_center < page.width / 2) != (current_center < page.width / 2))
+            if pending and not sentence_end.search(pending) and same_column:
                 if re.search(r"[\u4e00-\u9fff，、：；]$", pending) and re.match(
                     r"[\u4e00-\u9fff]", text
                 ):
@@ -264,9 +355,11 @@ def structured_to_markdown(document: StructuredDocument) -> str:
                 if pending:
                     parts.append(pending)
                 pending = text
+            pending_block = block
         if pending and sentence_end.search(pending):
             parts.append(pending)
             pending = ""
+            pending_block = None
     if pending:
         parts.append(pending)
     return "\n\n".join(part.strip() for part in parts if part.strip())

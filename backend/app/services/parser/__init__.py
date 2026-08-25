@@ -123,6 +123,35 @@ def _parse_docx(p: Path) -> ParseResult:
     d = docx.Document(p)
     result = ParseResult()
 
+    # 按 OOXML 正文顺序保留段落、表格和图片占位，不再只读取 d.paragraphs。
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+    records: list[tuple[str, str]] = []
+    for child in d.element.body.iterchildren():
+        if child.tag.endswith("}p"):
+            para = Paragraph(child, d)
+            text = para.text.strip()
+            drawings = child.xpath(".//*[local-name()='docPr']")
+            labels = []
+            for drawing in drawings:
+                label = (drawing.get("descr") or drawing.get("name") or "图片").strip()
+                labels.append(f"[图片：{label}]")
+            merged = "\n".join(part for part in [text, *labels] if part)
+            if merged:
+                records.append((merged, para.style.name if para.style is not None else ""))
+        elif child.tag.endswith("}tbl"):
+            table = Table(child, d)
+            rows = [[cell.text.strip().replace("\n", " ") for cell in row.cells] for row in table.rows]
+            if rows:
+                width = max(len(row) for row in rows)
+                normalized = [row + [""] * (width - len(row)) for row in rows]
+                lines = ["| " + " | ".join(row) + " |" for row in normalized]
+                if len(lines) == 1:
+                    lines.append("| " + " | ".join(["---"] * width) + " |")
+                else:
+                    lines.insert(1, "| " + " | ".join(["---"] * width) + " |")
+                records.append(("\n".join(lines), "Table"))
+
     page_text: list[str] = []
     current = []
     page_no = 1
@@ -137,9 +166,7 @@ def _parse_docx(p: Path) -> ParseResult:
             page_no += 1
 
     # 第一遍：样式标题识别
-    for para in d.paragraphs:
-        style = para.style.name if para.style is not None else ""
-        text = para.text.strip()
+    for text, style in records:
         if not text:
             continue
         level = _docx_style_level(style)
@@ -157,9 +184,8 @@ def _parse_docx(p: Path) -> ParseResult:
 
     # 收集样式标题行号（避免启发式重复识别同一行）
     style_lines: set[int] = set()
-    for idx, para in enumerate(d.paragraphs):
-        style = para.style.name if para.style is not None else ""
-        if _docx_style_level(style) is not None and para.text.strip():
+    for idx, (text, style) in enumerate(records):
+        if _docx_style_level(style) is not None and text.strip():
             style_lines.add(idx)
 
     # 逐段扫描：识别标题（样式优先，其次启发式），重建 pages
@@ -180,11 +206,10 @@ def _parse_docx(p: Path) -> ParseResult:
             current = []
         merged_toc.append(TocItem(title=_clean_docx_title(title), level=level, page=len(merged_toc) + 1))
 
-    for idx, para in enumerate(d.paragraphs):
-        text = para.text.strip()
+    for idx, (text, style) in enumerate(records):
+        text = text.strip()
         if not text:
             continue
-        style = para.style.name if para.style is not None else ""
         level = _docx_style_level(style) if idx in style_lines else None
         if level is not None:
             push_toc(text, level)
@@ -253,17 +278,39 @@ def _parse_pptx(p: Path) -> ParseResult:
     result = ParseResult(total_pages=len(prs.slides))
     page_texts: list[str] = []
 
+    def shape_texts(shape) -> list[str]:
+        values: list[str] = []
+        if getattr(shape, "has_text_frame", False):
+            value = shape.text_frame.text.strip()
+            if value:
+                values.append(value)
+        if getattr(shape, "has_table", False):
+            rows = [[cell.text.strip().replace("\n", " ") for cell in row.cells] for row in shape.table.rows]
+            if rows:
+                width = max(len(row) for row in rows)
+                values.append("\n".join(
+                    ["| " + " | ".join(rows[0]) + " |",
+                     "| " + " | ".join(["---"] * width) + " |"] +
+                    ["| " + " | ".join(row) + " |" for row in rows[1:]]
+                ))
+        if getattr(shape, "shape_type", None) == 13:  # MSO_SHAPE_TYPE.PICTURE
+            values.append(f"[图片：{getattr(shape, 'name', 'Picture')}]")
+        if getattr(shape, "has_chart", False):
+            values.append(f"[图表：{getattr(shape, 'name', 'Chart')}]")
+        if getattr(shape, "shape_type", None) == 6:  # GROUP
+            for child in sorted(shape.shapes, key=lambda item: (item.top, item.left)):
+                values.extend(shape_texts(child))
+        return values
+
     for i, slide in enumerate(prs.slides, start=1):
         texts: list[str] = []
-        for shape in slide.shapes:
-            if shape.has_text_frame:
-                t = shape.text_frame.text.strip()
-                if t:
-                    texts.append(t)
-            if shape.has_table:
-                for row in shape.table.rows:
-                    cells = [c.text.strip() for c in row.cells]
-                    texts.append(" | ".join(cells))
+        ordered_shapes = sorted(slide.shapes, key=lambda shape: (shape.top, shape.left))
+        for shape in ordered_shapes:
+            texts.extend(shape_texts(shape))
+        title = slide.shapes.title.text.strip() if slide.shapes.title and slide.shapes.title.text.strip() else ""
+        if not title:
+            title = next((line.strip() for text in texts for line in text.splitlines() if line.strip() and not line.startswith("[")), f"幻灯片 {i}")
+        result.toc.append(TocItem(title=title[:255], level=1, page=i))
         page_texts.append("\n".join(texts))
 
     result.pages = page_texts

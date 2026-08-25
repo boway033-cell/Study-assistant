@@ -9,8 +9,11 @@ $runner = Join-Path $root "server_runner.py"
 
 function Test-StudyAssistant([int]$candidatePort) {
     try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$candidatePort/api/health" -TimeoutSec 2
-        return $response.StatusCode -eq 200
+        $response = Invoke-RestMethod -Uri "http://127.0.0.1:$candidatePort/api/health" -TimeoutSec 2
+        return $response.status -eq "ok" -and
+            $response.app -eq "study-assistant" -and
+            [int]$response.api_revision -ge 2 -and
+            $response.capabilities.shelves_write -eq $true
     } catch { return $false }
 }
 

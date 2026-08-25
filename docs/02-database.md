@@ -157,6 +157,44 @@ tasks（内存态，不入库）
 
 ## 3. FTS5 全文索引
 
+### 2.10 `shelves` / `shelf_books` — 层级虚拟书架
+
+- `shelves` 保存 `name`、`parent_id`、`description`、`color`、`order_index` 和时间戳。
+- `shelf_books` 以 `(shelf_id, book_id)` 为复合主键，另保存 `order_index`。
+- 同一本书可属于多个书架；删除书架只级联删除归属关系。
+
+### 2.11 `literature_resources` — SI 与来源权利
+
+| 字段组 | 说明 |
+|---|---|
+| `book_id`, `resource_book_id`, `role`, `title` | 所属主文、可选已导入资源书籍及 main/SI/figure/table/dataset/other 角色 |
+| `source_url`, `provenance_json` | 可回查的来源与获取记录，不保存 Cookie/密码 |
+| `license_expression`, `rights_statement_uri` | SPDX 式许可证表达与 RightsStatements URI |
+| `rights_status`, `rights_holder` | 权利评估状态与权利人 |
+| `attribution`, `permission_note`, `allow_reuse` | 归属文字、单独授权说明与复用标记 |
+
+### 2.12 `presentation_decks` — 提纲与渲染状态
+
+- 状态流：`pending → outlining → outline_ready → rendering → done|failed`。
+- `selection_json` 保存选择边界、source map 和覆盖率；`outline_json` 保存人工可编辑页面。
+- `qa_json` 保存主张—来源审计、结构检查、真实 PowerPoint 渲染与视觉差异结果。
+- `manifest_json` 保存输出版本、所用来源、权利决策和预览信息。
+
+### 2.13 `toc_revisions` — 目录修订追溯
+
+- `book_id`：所属文献；删除文献时级联删除。
+- `source`：`auto` 或 `user`；`note` 保存修订说明。
+- `before_json` / `after_json`：保存标题、层级、父级、顺序和页界的前后快照。
+- 当前 schema version = 7。
+
+### 2.14 `annotations` — PDF 批注与稳定锚点
+
+- `page` / `rect_json`：v1 兼容投影，保存第一个页面片段。
+- `schema_version`：`1` 为旧单页矩形，`2` 为版本化多页锚点。
+- `anchor_json`：保存文档指纹、原文 `exact/prefix/suffix` 和逐页 `segments`；每段标记 `pdf-text` 或 `ocr` 来源。
+- `status`：`active` 或 `needs_reanchor`。自动原文定位失败时保留批注，允许用户在阅读器重新选择位置。
+- 所有矩形为页面归一化坐标，后端验证 `x/y/w/h`、页码及边界，不再接受越界记录。
+
 ```sql
 -- 由 jieba 分词后的文本写入（分词结果以空格连接）
 CREATE VIRTUAL TABLE fts_books USING fts5(

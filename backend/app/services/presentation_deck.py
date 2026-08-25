@@ -7,6 +7,7 @@ results: each slide must retain local chunk/page source IDs.
 from __future__ import annotations
 
 import json
+import math
 import re
 import tempfile
 from datetime import datetime
@@ -17,7 +18,7 @@ from sqlalchemy import select
 
 from backend.app.core.config import settings
 from backend.app.core.database import SessionLocal
-from backend.app.models import Book, Chapter, Chunk, PaperProfile, PresentationDeck
+from backend.app.models import Book, Chapter, Chunk, LiteratureResource, PaperProfile, PresentationDeck
 from backend.app.services.llm import LLMRouter, load_llm_config, parse_json_response
 from backend.app.worker.tasks import update_progress
 
@@ -47,44 +48,148 @@ def classify_paper_type(title: str, text: str) -> str:
     return max(scores, key=scores.get) if max(scores.values(), default=0) else "discovery"
 
 
-def collect_selection(db, book_id: int, chapter_ids: list[int], chunk_ids: list[int], selected_text: str) -> dict:
+def _descendants(chapters: list[Chapter], root_ids: set[int]) -> set[int]:
+    children: dict[int | None, list[int]] = {}
+    for chapter in chapters:
+        children.setdefault(chapter.parent_id, []).append(chapter.id)
+    result = set(root_ids); stack = list(root_ids)
+    while stack:
+        child_ids = children.get(stack.pop(), [])
+        result.update(child_ids); stack.extend(child_ids)
+    return result
+
+
+def _scope_root(chapter_id: int | None, parent_map: dict[int, int | None], roots: set[int]) -> int | None:
+    current = chapter_id
+    seen = set()
+    while current is not None and current not in seen:
+        if current in roots:
+            return current
+        seen.add(current); current = parent_map.get(current)
+    return None
+
+
+def _sample_group(chunks: list[Chunk], quota: int) -> tuple[list[tuple[Chunk, str]], int]:
+    """均匀覆盖首/中/尾，避免只读取章节前部。"""
+    usable = [(chunk, (chunk.content or "").strip()) for chunk in chunks if (chunk.content or "").strip()]
+    if not usable or quota <= 0:
+        return [], 0
+    selected: list[tuple[Chunk, str]] = []
+    remaining = quota
+    pending = list(range(len(usable)))
+    # 先按均匀位置各取一轮，再利用剩余额度补充相邻内容。
+    target_count = min(len(usable), max(3, math.ceil(quota / 2800)))
+    if target_count == 1:
+        indexes = [0]
+    else:
+        indexes = sorted({round(i * (len(usable) - 1) / (target_count - 1)) for i in range(target_count)})
+    indexes += [i for i in pending if i not in indexes]
+    for index in indexes:
+        chunk, content = usable[index]
+        if remaining <= 0:
+            break
+        excerpt = content[:min(4000, remaining)]
+        if excerpt:
+            selected.append((chunk, excerpt)); remaining -= len(excerpt)
+    selected.sort(key=lambda item: item[0].chunk_index)
+    return selected, quota - remaining
+
+
+def collect_selection(db, book_id: int, chapter_ids: list[int], chunk_ids: list[int], selected_text: str,
+                      resource_ids: list[int] | None = None, max_source_chars: int = 52000) -> dict:
     book = db.get(Book, book_id)
     if not book:
         raise ValueError("文献不存在")
+    chapters = list(db.scalars(select(Chapter).where(Chapter.book_id == book_id)
+                               .order_by(Chapter.order_index)).all())
+    chapter_map = {chapter.id: chapter for chapter in chapters}
+    parent_map = {chapter.id: chapter.parent_id for chapter in chapters}
     query = select(Chunk).where(Chunk.book_id == book_id)
     if chunk_ids:
         query = query.where(Chunk.id.in_(chunk_ids))
     elif chapter_ids:
-        query = query.where(Chunk.chapter_id.in_(chapter_ids))
-    chunks = list(db.scalars(query.order_by(Chunk.chunk_index)).all())
-    if not chapter_ids and not chunk_ids:
-        chunks = chunks[:60]
+        query = query.where(Chunk.chapter_id.in_(_descendants(chapters, set(chapter_ids))))
+    main_chunks = list(db.scalars(query.order_by(Chunk.chunk_index)).all())
+
+    groups: list[dict] = []
+    if chunk_ids:
+        groups.append({"key": "explicit_chunks", "title": "指定片段", "book_id": book_id,
+                       "resource_id": None, "chunks": main_chunks})
+    else:
+        roots = set(chapter_ids) if chapter_ids else {c.id for c in chapters if c.parent_id is None or c.level == 1}
+        if not roots:
+            groups.append({"key": f"book:{book_id}", "title": book.title, "book_id": book_id,
+                           "resource_id": None, "chunks": main_chunks})
+        else:
+            bucket = {root: [] for root in roots}
+            other = []
+            for chunk in main_chunks:
+                root = _scope_root(chunk.chapter_id, parent_map, roots)
+                (bucket[root] if root in bucket else other).append(chunk)
+            for root in sorted(roots, key=lambda rid: chapter_map.get(rid).order_index if rid in chapter_map else rid):
+                groups.append({"key": f"chapter:{root}", "title": chapter_map[root].title if root in chapter_map else f"章节 {root}",
+                               "book_id": book_id, "resource_id": None, "chunks": bucket[root]})
+            if other:
+                groups.append({"key": "unmapped", "title": "未映射章节", "book_id": book_id,
+                               "resource_id": None, "chunks": other})
+
+    selected_resources = []
+    if resource_ids:
+        selected_resources = list(db.scalars(select(LiteratureResource).where(
+            LiteratureResource.book_id == book_id, LiteratureResource.id.in_(set(resource_ids)))).all())
+        if len(selected_resources) != len(set(resource_ids)):
+            raise ValueError("部分补充材料不存在或不属于当前文献")
+        for resource in selected_resources:
+            if resource.resource_book_id:
+                resource_chunks = list(db.scalars(select(Chunk).where(Chunk.book_id == resource.resource_book_id)
+                                                  .order_by(Chunk.chunk_index)).all())
+                groups.append({"key": f"resource:{resource.id}", "title": resource.title,
+                               "book_id": resource.resource_book_id, "resource_id": resource.id,
+                               "chunks": resource_chunks})
+
+    user_text = selected_text.strip()[:12000]
+    source_budget = max(8000, min(max_source_chars, 100000)) - len(user_text)
+    available_by_group = [sum(len((c.content or "").strip()) for c in group["chunks"]) for group in groups]
+    weights = [math.sqrt(max(chars, 1)) for chars in available_by_group]
+    weight_total = sum(weights) or 1
+    quotas = [max(800, int(source_budget * weight / weight_total)) for weight in weights]
+    if sum(quotas) > source_budget and quotas:
+        scale = source_budget / sum(quotas)
+        quotas = [max(300, int(quota * scale)) for quota in quotas]
+
     sources = []
-    total = 0
-    for c in chunks:
-        content = (c.content or "").strip()
-        if not content:
-            continue
-        # Keep model input bounded while preserving complete sentences where possible.
-        content = content[:4000]
-        if total + len(content) > 52000:
-            break
-        total += len(content)
-        sources.append({
-            "source_id": f"chunk:{c.id}", "chunk_id": c.id, "chapter_id": c.chapter_id,
-            "page_start": c.page_start, "page_end": c.page_end, "text": content,
-        })
-    if selected_text.strip():
-        sources.insert(0, {"source_id": "selection:user", "chunk_id": None, "chapter_id": None,
-                           "page_start": None, "page_end": None, "text": selected_text.strip()[:12000]})
+    coverage_groups = []
+    for group, available_chars, quota in zip(groups, available_by_group, quotas):
+        sampled, sampled_chars = _sample_group(group["chunks"], quota)
+        for chunk, content in sampled:
+            sources.append({"source_id": f"chunk:{chunk.id}", "chunk_id": chunk.id,
+                            "book_id": chunk.book_id, "resource_id": group["resource_id"],
+                            "chapter_id": chunk.chapter_id, "chapter_title": chapter_map.get(chunk.chapter_id).title if chunk.chapter_id in chapter_map else None,
+                            "page_start": chunk.page_start, "page_end": chunk.page_end, "text": content})
+        coverage_groups.append({"key": group["key"], "title": group["title"],
+                                "available_chars": available_chars, "sampled_chars": sampled_chars,
+                                "total_chunks": len(group["chunks"]), "sampled_chunks": len(sampled),
+                                "coverage": round(sampled_chars / available_chars, 4) if available_chars else 0})
+    if user_text:
+        sources.insert(0, {"source_id": "selection:user", "chunk_id": None, "book_id": book_id,
+                           "resource_id": None, "chapter_id": None, "chapter_title": None,
+                           "page_start": None, "page_end": None, "text": user_text})
     if not sources:
         raise ValueError("所选范围没有可用于汇报的正文")
-    chapter_names = dict(db.execute(select(Chapter.id, Chapter.title).where(Chapter.book_id == book_id)).all())
+    total_available = sum(available_by_group)
+    total_sampled = sum(group["sampled_chars"] for group in coverage_groups)
+    covered_groups = sum(1 for group in coverage_groups if group["sampled_chunks"])
     return {
         "book": {"id": book.id, "title": book.title},
         "chapter_ids": chapter_ids, "chunk_ids": chunk_ids,
-        "chapter_titles": [chapter_names[i] for i in chapter_ids if i in chapter_names],
-        "sources": sources,
+        "resource_ids": resource_ids or [],
+        "chapter_titles": [chapter_map[i].title for i in chapter_ids if i in chapter_map],
+        "sources": sources, "coverage": {"max_source_chars": max_source_chars,
+            "available_chars": total_available, "sampled_chars": total_sampled,
+            "content_coverage": round(total_sampled / total_available, 4) if total_available else 0,
+            "structure_coverage": round(covered_groups / len(coverage_groups), 4) if coverage_groups else 0,
+            "covered_groups": covered_groups, "total_groups": len(coverage_groups),
+            "unlocated_user_selection": bool(user_text), "groups": coverage_groups},
     }
 
 
@@ -148,6 +253,61 @@ bullets(0-4条，每条不超过45字), source_ids(只能引用给定ID)。封�
                        "bullets": [str(x)[:100] for x in item.get("bullets", [])[:4]],
                        "source_ids": ids})
     return result if len(result) >= 5 else None
+
+
+def _terms(text: str) -> set[str]:
+    latin = {x.lower() for x in re.findall(r"[A-Za-z][A-Za-z0-9_.+-]{2,}", text)}
+    chinese = re.findall(r"[\u4e00-\u9fff]{2,}", text)
+    bigrams = {word[i:i + 2] for word in chinese for i in range(len(word) - 1)}
+    return latin | bigrams
+
+
+def audit_claim_sources(outline: list[dict], sources: list[dict]) -> dict:
+    """保守的本地一致性审计：定位、数字和术语；不把词面相似冒充语义蕴含。"""
+    source_map = {source["source_id"]: source for source in sources}
+    results = []
+    counts = {"supported": 0, "partial": 0, "needs_review": 0, "unsupported": 0, "unlocated": 0}
+    blocking = []
+    for index, slide in enumerate(outline, 1):
+        if index == 1 or slide.get("kind") == "cover":
+            continue
+        source_ids = list(dict.fromkeys(slide.get("source_ids") or []))
+        valid = [source_map[source_id] for source_id in source_ids if source_id in source_map]
+        invalid_ids = [source_id for source_id in source_ids if source_id not in source_map]
+        claim = " ".join([str(slide.get("claim") or ""), *[str(x) for x in slide.get("bullets", [])]])
+        evidence = "\n".join(source.get("text") or "" for source in valid)
+        claim_numbers = set(re.findall(r"(?<!\w)\d+(?:\.\d+)?%?", claim))
+        source_numbers = set(re.findall(r"(?<!\w)\d+(?:\.\d+)?%?", evidence))
+        missing_numbers = sorted(claim_numbers - source_numbers)
+        claim_terms = _terms(claim); source_terms = _terms(evidence)
+        overlap = len(claim_terms & source_terms) / max(len(claim_terms), 1)
+        located = any(source.get("page_start") or source.get("chapter_id") for source in valid)
+        issues = []
+        if invalid_ids: issues.append(f"无效来源：{', '.join(invalid_ids)}")
+        if not valid: issues.append("没有可核对的来源")
+        if missing_numbers: issues.append("来源中未找到数字：" + "、".join(missing_numbers[:8]))
+        if valid and overlap < .08: issues.append("主张与来源词面重合度低，需人工核对语义")
+        if not located: issues.append("来源缺少页码或章节定位")
+        if not valid or invalid_ids or missing_numbers:
+            status = "unsupported"; blocking.append(index)
+        elif not located:
+            status = "unlocated"
+        elif overlap < .08:
+            status = "needs_review"
+        elif overlap < .18:
+            status = "partial"
+        else:
+            status = "supported"
+        counts[status] += 1
+        results.append({"slide": index, "title": slide.get("title"), "status": status,
+                        "source_ids": source_ids, "overlap_score": round(overlap, 4),
+                        "missing_numbers": missing_numbers, "issues": issues})
+    total = len(results)
+    accepted = counts["supported"] + counts["partial"]
+    return {"ok": not blocking, "blocking_slides": blocking, "counts": counts,
+            "accepted_ratio": round(accepted / total, 4) if total else 1.0,
+            "items": results,
+            "boundary": "本地审计只验证定位、数字和术语一致性；needs_review 仍需人工判断语义是否成立。"}
 
 
 def _add_textbox(slide, left, top, width, height, text, size, color, bold=False, font="Microsoft YaHei"):
@@ -267,40 +427,143 @@ def audit_pptx(path: Path, outline: list[dict]) -> dict:
     return {"ok": not issues, "slide_count": len(prs.slides), "issues": issues}
 
 
-async def generate_deck_task(record, deck_id: int) -> dict:
+def validate_outline(outline: list[dict], sources: list[dict]) -> list[dict]:
+    if not 2 <= len(outline) <= 24:
+        raise ValueError("提纲页数需为 2–24 页")
+    allowed = {source["source_id"] for source in sources}
+    cleaned = []
+    for index, raw in enumerate(outline):
+        if not isinstance(raw, dict):
+            raise ValueError(f"第 {index + 1} 页格式无效")
+        source_ids = list(dict.fromkeys(str(item) for item in raw.get("source_ids", [])))
+        invalid = [source_id for source_id in source_ids if source_id not in allowed]
+        if invalid:
+            raise ValueError(f"第 {index + 1} 页包含无效来源：{', '.join(invalid)}")
+        title = str(raw.get("title") or "").strip()[:70]
+        if not title:
+            raise ValueError(f"第 {index + 1} 页缺少标题")
+        kind = "cover" if index == 0 else str(raw.get("kind") or "content")[:20]
+        if index > 0 and not source_ids:
+            raise ValueError(f"第 {index + 1} 页至少需要一个来源")
+        cleaned.append({"title": title, "kind": kind,
+                        "claim": str(raw.get("claim") or "").strip()[:220],
+                        "bullets": [str(item).strip()[:100] for item in raw.get("bullets", [])[:4] if str(item).strip()],
+                        "source_ids": source_ids})
+    return cleaned
+
+
+def _rights_policy(db, book_id: int, options: dict) -> dict:
+    resources = list(db.scalars(select(LiteratureResource).where(LiteratureResource.book_id == book_id)).all())
+    reusable = [resource for resource in resources if resource.allow_reuse or resource.rights_status in
+                {"open_license", "permission_granted", "public_domain"}]
+    unknown = [resource for resource in resources if resource.rights_status in {"not_evaluated", "undetermined", "in_copyright", "restricted"}]
+    scope = options.get("use_scope", "personal")
+    requested = bool(options.get("include_figures"))
+    acknowledged = bool(options.get("rights_acknowledged"))
+    issues = []
+    allow_figures = requested
+    if requested and scope in {"public", "commercial"} and not reusable:
+        allow_figures = False; issues.append("公开或商业用途没有可复用许可，已自动关闭原图嵌入")
+    elif requested and unknown and not acknowledged:
+        allow_figures = False; issues.append("存在未评估权利资源且尚未确认，已自动关闭原图嵌入")
+    manifest = [{"id": resource.id, "role": resource.role, "title": resource.title,
+                 "license_expression": resource.license_expression,
+                 "rights_statement_uri": resource.rights_statement_uri,
+                 "rights_status": resource.rights_status, "allow_reuse": bool(resource.allow_reuse),
+                 "attribution": resource.attribution} for resource in resources]
+    return {"use_scope": scope, "requested_figures": requested, "allow_figures": allow_figures,
+            "acknowledged": acknowledged, "issues": issues, "resources": manifest,
+            "boundary": "系统记录权利元数据并执行保守复用策略，不替代法律判断。"}
+
+
+async def generate_outline_task(record, deck_id: int) -> dict:
     db = SessionLocal()
     try:
         deck = db.get(PresentationDeck, deck_id)
-        if not deck: raise ValueError("汇报任务不存在")
-        deck.status = "running"; db.commit()
+        if not deck:
+            raise ValueError("汇报任务不存在")
+        deck.status = "outlining"; db.commit()
         selection = json.loads(deck.selection_json or "{}"); options = json.loads(deck.options_json or "{}")
-        book = db.get(Book, deck.book_id); profile = db.get(PaperProfile, deck.book_id)
-        sources = selection["sources"]
-        paper_type = classify_paper_type(book.title, "\n".join(x["text"] for x in sources))
+        book = db.get(Book, deck.book_id); sources = selection["sources"]
+        paper_type = classify_paper_type(book.title, "\n".join(source["text"] for source in sources))
         deck.paper_type = paper_type
-        update_progress(record, .2, "deck", f"已识别为{PAPER_TYPE_LABELS[paper_type]}论文")
+        update_progress(record, .18, "deck_outline", f"已识别为{PAPER_TYPE_LABELS[paper_type]}论文")
         outline = None; cfg = load_llm_config(db)
         if cfg.get("deepseek_api_key"):
-            update_progress(record, .42, "deck", "AI 正在按证据链组织中文提纲")
+            update_progress(record, .48, "deck_outline", "AI 正在按证据链组织可编辑提纲")
             outline = await _ai_outline(LLMRouter.get("auto", cfg), book.title, paper_type, sources, options)
         if not outline:
             outline = _local_outline(book.title, paper_type, sources, options["slide_count"])
+        outline = validate_outline(outline, sources)
+        claim_audit = audit_claim_sources(outline, sources)
         deck.outline_json = json.dumps(outline, ensure_ascii=False)
-        update_progress(record, .72, "deck", "正在生成可编辑 PPTX")
-        filename = f"paper-report-{book.id}-{deck.id}.pptx"; path = settings.presentations_dir / filename
-        render_pptx(path, book, profile, outline, sources, paper_type, options)
-        qa = audit_pptx(path, outline)
-        manifest = {"version": 1, "created_at": datetime.now().isoformat(), "book_id": book.id,
-                    "paper_type": paper_type, "selection": {k: selection.get(k) for k in ("chapter_ids", "chunk_ids", "chapter_titles")},
-                    "source_ids": [s["source_id"] for s in sources], "generator": "nature-paper2ppt-adapted",
-                    "language": "zh-CN", "editable": True}
-        deck.file_path = filename; deck.qa_json = json.dumps(qa, ensure_ascii=False)
-        deck.manifest_json = json.dumps(manifest, ensure_ascii=False); deck.status = "done"; db.commit()
-        update_progress(record, 1, "deck", "中文文献汇报已生成")
-        return {"deck_id": deck.id, "slide_count": len(outline), "paper_type": paper_type, "qa": qa}
+        deck.qa_json = json.dumps({"stage": "outline", "claim_source": claim_audit,
+                                   "coverage": selection.get("coverage", {})}, ensure_ascii=False)
+        deck.status = "outline_ready"; db.commit()
+        update_progress(record, 1, "deck_outline", "提纲已生成，等待人工确认")
+        return {"deck_id": deck.id, "status": deck.status, "slide_count": len(outline),
+                "coverage": selection.get("coverage", {}), "claim_source": claim_audit}
     except Exception as exc:
         db.rollback(); deck = db.get(PresentationDeck, deck_id)
         if deck: deck.status = "failed"; deck.error_msg = str(exc); db.commit()
         raise
     finally:
         db.close()
+
+
+async def render_deck_task(record, deck_id: int) -> dict:
+    from backend.app.services.powerpoint_render import render_powerpoint_preview
+
+    db = SessionLocal()
+    try:
+        deck = db.get(PresentationDeck, deck_id)
+        if not deck:
+            raise ValueError("汇报任务不存在")
+        selection = json.loads(deck.selection_json or "{}"); options = json.loads(deck.options_json or "{}")
+        outline = validate_outline(json.loads(deck.outline_json or "[]"), selection.get("sources", []))
+        book = db.get(Book, deck.book_id); profile = db.get(PaperProfile, deck.book_id)
+        rights = _rights_policy(db, deck.book_id, options)
+        render_options = {**options, "include_figures": rights["allow_figures"]}
+        claim_audit = audit_claim_sources(outline, selection["sources"])
+        if claim_audit["blocking_slides"] and not options.get("confirm_unsupported_claims"):
+            raise ValueError("提纲存在不支持的主张，请修改来源或明确确认后再渲染")
+        deck.status = "rendering"; db.commit()
+        update_progress(record, .28, "deck_render", "正在生成可编辑 PPTX")
+        filename = f"paper-report-{book.id}-{deck.id}.pptx"; path = settings.presentations_dir / filename
+        render_pptx(path, book, profile, outline, selection["sources"], deck.paper_type or "discovery", render_options)
+        structural = audit_pptx(path, outline)
+        update_progress(record, .66, "deck_render", "Microsoft PowerPoint 正在真实渲染预览")
+        visual = render_powerpoint_preview(path, deck.id)
+        issues = [*structural.get("issues", []), *rights["issues"], *visual.get("issues", [])]
+        qa = {"ok": structural["ok"] and claim_audit["ok"] and visual.get("ok", False),
+              "issues": issues, "structural": structural, "claim_source": claim_audit,
+              "coverage": selection.get("coverage", {}), "rights": rights, "visual": visual}
+        manifest = {"version": 2, "created_at": datetime.now().isoformat(), "book_id": book.id,
+                    "paper_type": deck.paper_type, "selection": {key: selection.get(key) for key in
+                        ("chapter_ids", "chunk_ids", "resource_ids", "chapter_titles")},
+                    "source_ids": [source["source_id"] for source in selection["sources"]],
+                    "coverage": selection.get("coverage", {}), "rights": rights,
+                    "generator": "nature-paper2ppt-adapted", "language": "zh-CN", "editable": True}
+        deck.file_path = filename; deck.qa_json = json.dumps(qa, ensure_ascii=False)
+        deck.manifest_json = json.dumps(manifest, ensure_ascii=False); deck.status = "done"; db.commit()
+        update_progress(record, 1, "deck_render", "PPTX 与真实渲染审计已完成")
+        return {"deck_id": deck.id, "slide_count": len(outline), "paper_type": deck.paper_type, "qa": qa}
+    except Exception as exc:
+        db.rollback(); deck = db.get(PresentationDeck, deck_id)
+        if deck: deck.status = "outline_ready" if deck.outline_json else "failed"; deck.error_msg = str(exc); db.commit()
+        raise
+    finally:
+        db.close()
+
+
+async def generate_deck_task(record, deck_id: int) -> dict:
+    await generate_outline_task(record, deck_id)
+    db = SessionLocal()
+    try:
+        deck = db.get(PresentationDeck, deck_id)
+        options = json.loads(deck.options_json or "{}")
+        options["confirm_unsupported_claims"] = True
+        deck.options_json = json.dumps(options, ensure_ascii=False); db.commit()
+    finally:
+        db.close()
+    return await render_deck_task(record, deck_id)

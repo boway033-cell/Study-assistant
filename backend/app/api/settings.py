@@ -1,7 +1,14 @@
 """设置 API（docs/03-api.md §6）— 仅 DeepSeek 云端配置"""
 from __future__ import annotations
 
+import json
+import re
+import uuid
+from urllib.parse import urlparse
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.core import crypto
@@ -13,6 +20,17 @@ from backend.app.services.llm import DeepSeekProvider, load_llm_config
 from backend.app.services.vision import VisionProvider, load_vision_config
 
 router = APIRouter(prefix="/api", tags=["settings"])
+_PROFILES_KEY = "compatible_provider_profiles"
+
+
+class CompatibleProviderWrite(BaseModel):
+    id: str | None = Field(default=None, max_length=40)
+    name: str = Field(min_length=1, max_length=80)
+    capability: str = Field(pattern="^(text|vision)$")
+    protocol: str = Field(default="openai_chat", pattern="^openai_chat$")
+    base_url: str = Field(min_length=8, max_length=1000)
+    model: str = Field(min_length=1, max_length=120)
+    api_key: str | None = Field(default=None, max_length=1000)
 
 _DEFAULTS = {
     "deepseek_api_key": app_settings.deepseek_api_key,
@@ -47,6 +65,23 @@ def _mask_key(key: str) -> str:
     return key[:3] + "***" + key[-4:]
 
 
+def _compatible_profiles(db: Session) -> list[dict]:
+    raw = _get_setting(db, _PROFILES_KEY)
+    try:
+        values = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        values = []
+    return [item for item in values if isinstance(item, dict)]
+
+
+def _validate_api_base(value: str) -> str:
+    url = value.strip().rstrip("/")
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise HTTPException(400, "兼容接口 Base URL 必须是不含凭据的 HTTPS 地址")
+    return url
+
+
 @router.get("/settings", response_model=SettingsResp)
 def get_settings(db: Session = Depends(get_db)):
     cfg = load_llm_config(db)
@@ -56,6 +91,7 @@ def get_settings(db: Session = Depends(get_db)):
         deepseek_api_key=_mask_key(api_key),
         deepseek_model=cfg["deepseek_model"] if cfg["deepseek_model"] in DEEPSEEK_MODELS else "flash",
         vision_api_key=_mask_key(vcfg["vision_api_key"]),
+        vision_base_url=vcfg["vision_base_url"],
         vision_model=vcfg["vision_model"],
         rag_top_k=_get_setting(db, "rag_top_k"),
         vector_search=_get_setting(db, "vector_search") == "true",
@@ -74,6 +110,8 @@ def update_settings(req: SettingsUpdateReq, db: Session = Depends(get_db)):
         _set_setting(db, "deepseek_model", req.deepseek_model)
     if req.vision_api_key is not None:
         _set_setting(db, "vision_api_key", crypto.encrypt(req.vision_api_key.strip()))
+    if req.vision_base_url is not None:
+        _set_setting(db, "vision_base_url", _validate_api_base(req.vision_base_url))
     if req.vision_model is not None:
         _set_setting(db, "vision_model", req.vision_model.strip())
     if req.rag_top_k is not None:
@@ -106,3 +144,63 @@ async def probe(db: Session = Depends(get_db)):
         deepseek=ProbeItem(ok=deepseek_ok, reason=deepseek_reason),
         vision=ProbeItem(ok=vision_ok, reason=vision_reason),
     )
+
+
+@router.get("/settings/providers")
+def list_compatible_providers(db: Session = Depends(get_db)):
+    items = []
+    for profile in _compatible_profiles(db):
+        key = crypto.decrypt(_get_setting(db, f"compatible_provider_key:{profile.get('id', '')}"))
+        items.append({**profile, "configured": bool(key), "api_key": _mask_key(key)})
+    return {"default_text_provider": "deepseek", "default_vision_provider": "qwen-vl",
+            "routing_locked": True, "items": items}
+
+
+@router.post("/settings/providers", status_code=201)
+def save_compatible_provider(req: CompatibleProviderWrite, db: Session = Depends(get_db)):
+    provider_id = (req.id or uuid.uuid4().hex[:12]).strip().lower()
+    if not re.fullmatch(r"[a-z0-9_-]{3,40}", provider_id):
+        raise HTTPException(400, "接口 ID 只能包含小写字母、数字、_ 和 -")
+    profiles = _compatible_profiles(db)
+    profile = {"id": provider_id, "name": req.name.strip(), "capability": req.capability,
+               "protocol": req.protocol, "base_url": _validate_api_base(req.base_url),
+               "model": req.model.strip()}
+    existing = next((index for index, item in enumerate(profiles) if item.get("id") == provider_id), None)
+    if existing is None:
+        profiles.append(profile)
+    else:
+        profiles[existing] = profile
+    _set_setting(db, _PROFILES_KEY, json.dumps(profiles, ensure_ascii=False))
+    if req.api_key:
+        _set_setting(db, f"compatible_provider_key:{provider_id}", crypto.encrypt(req.api_key.strip()))
+    db.commit()
+    return {**profile, "configured": bool(req.api_key or crypto.decrypt(_get_setting(db, f"compatible_provider_key:{provider_id}")))}
+
+
+@router.delete("/settings/providers/{provider_id}", status_code=204)
+def delete_compatible_provider(provider_id: str, db: Session = Depends(get_db)):
+    profiles = [item for item in _compatible_profiles(db) if item.get("id") != provider_id]
+    _set_setting(db, _PROFILES_KEY, json.dumps(profiles, ensure_ascii=False))
+    key_row = db.get(Setting, f"compatible_provider_key:{provider_id}")
+    if key_row:
+        db.delete(key_row)
+    db.commit()
+
+
+@router.post("/settings/providers/{provider_id}/probe")
+async def probe_compatible_provider(provider_id: str, db: Session = Depends(get_db)):
+    profile = next((item for item in _compatible_profiles(db) if item.get("id") == provider_id), None)
+    if not profile:
+        raise HTTPException(404, "兼容接口不存在")
+    key = crypto.decrypt(_get_setting(db, f"compatible_provider_key:{provider_id}"))
+    if not key:
+        return {"ok": False, "reason": "未配置 API Key"}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5)) as client:
+            response = await client.get(f"{profile['base_url'].rstrip('/')}/models",
+                                        headers={"Authorization": f"Bearer {key}"})
+        if response.status_code == 200:
+            return {"ok": True, "reason": f"接口可达；已配置模型 {profile['model']}"}
+        return {"ok": False, "reason": f"HTTP {response.status_code}: {response.text[:160]}"}
+    except httpx.HTTPError as exc:
+        return {"ok": False, "reason": f"连接失败：{type(exc).__name__}: {exc}"}

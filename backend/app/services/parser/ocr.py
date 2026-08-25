@@ -202,6 +202,41 @@ def _cached_text(cache_dir: Path | None, page_no: int) -> tuple[Path | None, str
     return cache_file, None
 
 
+def _cache_rapid_layout(cache_dir: Path | None, page_no: int, result, width: int, height: int) -> None:
+    """保留 RapidOCR 已产生的坐标，供阅读器构建透明文字层。"""
+    if cache_dir is None or not result or width <= 0 or height <= 0:
+        return
+    import json
+    items = []
+    for row in result:
+        try:
+            points, text = row[0], str(row[1] or "").strip()
+            if not points or not text:
+                continue
+            xs, ys = [float(p[0]) for p in points], [float(p[1]) for p in points]
+            x0, x1 = max(0.0, min(xs)), min(float(width), max(xs))
+            y0, y1 = max(0.0, min(ys)), min(float(height), max(ys))
+            if x1 <= x0 or y1 <= y0:
+                continue
+            score = float(row[2]) if len(row) > 2 and row[2] is not None else None
+            items.append({
+                "text": text, "confidence": round(score, 4) if score is not None else None,
+                "x": round(x0 / width, 6), "y": round(y0 / height, 6),
+                "w": round((x1 - x0) / width, 6), "h": round((y1 - y0) / height, 6),
+            })
+        except (TypeError, ValueError, IndexError):
+            continue
+    payload = {"version": 1, "page": page_no, "source": "ocr", "status": "ready",
+               "image_width": width, "image_height": height, "cached": False, "items": items}
+    target = cache_dir / f"page_{page_no:04d}.layout.json"
+    temporary = target.with_suffix(".json.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        temporary.replace(target)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+
+
 def _prepare_cached_targets(
     total: int,
     texts: list[str],
@@ -261,6 +296,7 @@ def _ocr_rapid(p: Path, cache_dir: Path | None = None,
         else:
             text = ""
         texts[i - 1] = text
+        _cache_rapid_layout(cache_dir, i, result or [], img.width, img.height)
         # 3. 写缓存
         if cache_file is not None:
             try:

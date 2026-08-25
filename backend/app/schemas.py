@@ -25,6 +25,7 @@ class BookListItem(BaseModel):
     reading_status: str = "unread"
     favorite: bool = False
     progress_page: int = 1
+    shelf_ids: list[int] = []
     created_at: datetime
 
 
@@ -349,9 +350,36 @@ class KnowledgeSourceResp(BaseModel):
 
 
 # ---------- PDF 标注 ----------
+class AnnotationRect(BaseModel):
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    w: float = Field(gt=0, le=1)
+    h: float = Field(gt=0, le=1)
+
+
+class AnnotationSegment(BaseModel):
+    page: int = Field(ge=1)
+    source: str = Field(default="pdf-text", pattern="^(pdf-text|ocr)$")
+    rects: list[AnnotationRect] = Field(min_length=1)
+
+
+class AnnotationQuote(BaseModel):
+    exact: str = ""
+    prefix: str = ""
+    suffix: str = ""
+
+
+class AnnotationAnchor(BaseModel):
+    schema_version: int = 2
+    document_fingerprint: str | None = None
+    quote: AnnotationQuote = Field(default_factory=AnnotationQuote)
+    segments: list[AnnotationSegment] = Field(min_length=1)
+
+
 class AnnotationCreateReq(BaseModel):
     page: int = Field(ge=0)  # 0 = 文本标注（docx/pptx 无页码）
-    rect_json: str  # [{x,y,w,h}] 归一化坐标
+    rect_json: str = "[]"  # v1 兼容字段
+    anchor: AnnotationAnchor | None = None
     text: str | None = None
     color: str = "#f9e572"
     note: str | None = None
@@ -362,6 +390,11 @@ class AnnotationUpdateReq(BaseModel):
     note: str | None = None
     color: str | None = None
     knowledge_node_id: int | None = None
+    page: int | None = Field(default=None, ge=0)
+    rect_json: str | None = None
+    text: str | None = None
+    anchor: AnnotationAnchor | None = None
+    status: str | None = Field(default=None, pattern="^(active|needs_reanchor)$")
 
 
 class AnnotationResp(BaseModel):
@@ -373,6 +406,9 @@ class AnnotationResp(BaseModel):
     color: str
     note: str | None = None
     knowledge_node_id: int | None = None
+    schema_version: int = 1
+    anchor_json: str | None = None
+    status: str = "active"
     created_at: datetime
 
 
@@ -407,6 +443,7 @@ class SettingsResp(BaseModel):
     deepseek_api_key: str  # 脱敏
     deepseek_model: str    # flash / pro
     vision_api_key: str    # 脱敏（Qwen-VL 视觉分析）
+    vision_base_url: str
     vision_model: str
     rag_top_k: str
     vector_search: bool
@@ -418,6 +455,7 @@ class SettingsUpdateReq(BaseModel):
     deepseek_api_key: str | None = None
     deepseek_model: str | None = None  # flash / pro
     vision_api_key: str | None = None
+    vision_base_url: str | None = None
     vision_model: str | None = None
     rag_top_k: int | None = None
     vector_search: bool | None = None

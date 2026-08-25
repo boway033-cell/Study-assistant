@@ -1,7 +1,7 @@
 # 项目交接文档 · Study assistant（学习助手）
 
 > **用途**：供新对话/新协作者快速接管项目。阅读本文件 + 启动项目即可继续开发。
-> **最后更新**：Nature 文献工作流本地化（结构补缺/source map/证据卡片/归档阅读/中文 PPTX/合法全文入口）+ 阅读工作台 UI 重构之后
+> **最后更新**：目录逻辑校正闭环 + “我的资料”个人知识库布局优化
 
 ---
 
@@ -45,6 +45,37 @@
 - 全部页面改为路由懒加载，并拆分 Element Plus、ECharts、PDF.js 和内容渲染依赖；浏览器实测知识库首屏 JavaScript 由约 2.94 MB 降至 1.21 MB，PDF.js 仅在打开原文时加载。
 - 卡片视觉令牌统一为 `border-gray-200`（`#E5E7EB`）与 shadow-sm；覆盖 Element Plus 卡片以及任务、来源、批注、设置等自定义卡片。按钮统一提供 hover 上移、active 回落缩放、disabled 静止反馈，并支持 `prefers-reduced-motion`。
 
+### 第三阶段文献汇报与书架闭环（2026-08-24）
+
+- 书架是层级化虚拟集合：资料可同时归入多个书架，支持子书架、未归档筛选与批量归档，不移动或复制原文件。
+- PPTX 默认改为两阶段：先生成可编辑提纲，人工调整顺序、标题、主张、要点和来源后，再进入后台渲染。
+- 证据选择采用章节分层取样，对章节或 SI 组别分配字符预算，报告内容覆盖率、结构覆盖率和各组覆盖。
+- 每页主张执行来源一致性审计：检查 source ID、数字一致性、关键词重叠和页码/章节定位；不支持的主张需人工确认才允许继续。
+- 补充材料与图表统一使用来源权利模型，记录资源角色、许可证表达、RightsStatements URI、权利状态、归属文字、授权说明与 provenance。
+- 个人/内部使用可在确认风险后继续；公开/商业用途自动排除权利不明的图像。
+- Windows 安装 PowerPoint 时，输出会由 PowerPoint COM 实际渲染为逐页 PNG，保存预览并与上一版做像素差异报告；未安装时明确标记“未完成视觉验收”。
+- 前端路由改为 History 模式，FastAPI 静态托管提供 SPA fallback，`/literature-workbench` 与 `/reader/{id}?page=N` 可被网页/自定义协议直接打开。
+
+### 第四阶段目录逻辑自修正与人工校正（2026-08-24）
+
+- 目录置信度从“单条标题特征加分”改为全书逻辑审计：按父级上下文分组检查起始号、缺号、重号、倒序、小节前缀、页码和父子层级。
+- 支持“章 → 节 → 一、 → （一）”和 `1 → 1.1 → 1.1.1` 等编号链；“一、”在没有“第X节”时可上下文化推导为二级，不再固定写死为三级。
+- 新增同页阅读顺序回看：若后置“（三）”能唯一续接前一父项的“（一）（二）”，则回挂并前移；存在多个可能父项时不自动决定。
+- 自动修正只改动有确定编号证据的层级、父级与同页顺序；不凭空创建缺失标题，不自动删除疑似正文。
+- 阅读器新增“目录校正”：显示高/复核/低置信、具体问题、自修正数量，支持改标题、层级、页码、顺序、新增/删除节点和返回原页核对。
+- 人工保存为单一事务，同步重建 chunk 章节归属、source map 和 FTS 冗余定位，使问答/PPTX/知识节点不继续引用旧目录。
+
+### 第五阶段“我的资料”阅读导向布局（2026-08-24）
+
+- 资料区从十列后台表格改为“文献与来源 / 阅读进度 / 知识加工 / 主操作”四段式条目，长题名与作者信息拥有稳定宽度。
+- “继续阅读”成为阅读中资料的主操作；详情、生成汇报和删除收纳进次级菜单，减少横向按钮竞争。
+- 书架名称、当前结果数与生效筛选在标题区集中反馈；支持一键清除筛选、全选当前结果和批量加入书架。
+- 单篇导入、批量导入、智能归类重新分级；批量文件先进入确认队列，再交给全局任务中心处理。
+- 沿用节气古籍视觉、gray-200 细边框和 shadow-sm；仅使用 CSS Grid 与已有 Element Plus 组件，不增加图表实例、常驻监听或额外运行内存。
+- `/api/health` 带应用标识、API 修订号和关键能力；VBS、BAT、PowerShell、自定义协议入口不再复用缺少新路由的旧后端进程，避免新版前端请求旧 API 出现 404/405。
+- `toc_revisions` 保存自动/人工修订前后快照和备注，便于追溯；数据层版本为 6。
+- 《行政管理学夏书章》已应用 16 项无歧义修正，主要是同页子项回挂；529 项中高置信 518 项，剩余 8 个非确定问题保留给人工核对。
+
 **体验目标**：本地部署（无网可用核心功能）、流畅（解析/检索毫秒级、大任务后台化）、功能完备（学-练-测-复盘全流程）。
 
 **启动方式（2026-08 更新）**：桌面「启动学习助手.vbs」一键启动（无窗口、后台常驻、自动开浏览器）；auto_start.ps1 / auto_stop.ps1 为底层脚本。
@@ -57,11 +88,11 @@
 |---|---|
 | 项目根目录 | `D:/86153/Documents/study-assistant` |
 | 后端 | Python 3.14 + FastAPI + SQLAlchemy + SQLite（WAL）+ cryptography（Key 加密） |
-| 前端 | Vue3 + Vite 6 + Element Plus + ECharts 6 + pdf.js + marked + DOMPurify（hash 路由，构建产物由 FastAPI 托管） |
+| 前端 | Vue3 + Vite 6 + Element Plus + ECharts 6 + pdf.js + marked + DOMPurify（History 路由 + FastAPI SPA fallback） |
 | 虚拟环境 | 项目内 `.venv`（已装全部依赖，含 cryptography） |
-| 启动 | 双击 `start.bat` 或 `python launcher.py [端口]`；停止 `stop.bat`（PID 文件 + 归属校验） |
+| 启动 | 双击 `start.bat`；停止 `stop.bat`（PID 文件 + 归属校验）；旧启动器归档于 `scripts/legacy/` |
 | 前端开发 | `cd frontend && npm run dev`（5173，代理 /api 到 8000）；改完 `npm run build` 后重启后端 |
-| 数据 | `backend/data/`（study.db + uploads/ + chroma/ + models/ + .secret_key），备份=复制该目录或 `backup.bat` |
+| 数据 | `backend/data/`（study.db + uploads/ + chroma/ + models/ + .secret_key），备份=复制该目录或运行 `scripts/maintenance/backup.bat` |
 | API Key | `.env`（DeepSeek + Qwen-VL，git 忽略）；设置页写入的 Key 加密存 DB（Fernet） |
 | git / GitHub | 分支 `main`，远程 `git@github.com:boway033-cell/Study-assistant.git`，已开源（MIT） |
 
@@ -102,7 +133,9 @@
 
 ### 3.8 PDF 阅读器（本地渲染 + AI 可选）
 - 连续/单页/双页、适应宽度、目录跳转、深色、位置记忆、键盘翻页
-- 四色高亮 + 批注卡片（笔记/挂知识树/导出）、AI 选中解释翻译/总结本章/Qwen-VL 视觉解读
+- 四色高亮 + 固定批注面板（笔记/挂知识树/导出）、AI 选中解释翻译/总结本章/Qwen-VL 视觉解读
+- PDF.js 官方文字缩放/旋转命中规则；跨页选区按页分段保存，原文引用含前后文锚点
+- 扫描页按当前页生成 RapidOCR 透明文字层，页级 JSON 缓存，离开可见缓冲区即释放 DOM
 
 ### 3.9 Word/PPT 阅读器（DocReader）
 - 章节树 + 正文渲染、批注、目录编辑、选中 AI 翻译/询问
@@ -186,11 +219,32 @@
 
 **已知安全边界**（SECURITY.md 已声明）：本地单用户工具，不防「同权限本机程序」（它们可直接读 SQLite/内存）；未做登录鉴权，勿改绑 `0.0.0.0` 暴露公网。
 
-## 7. 测试情况
+## 7. 2026-08-25 阅读与导入专项修复
+
+- **PDF 阅读器**：缩放时失效旧 Canvas、取消过期 render task，并在 140ms 稳定后按新倍率重绘；单页限制约 8MP 像素预算，仅保留可见页及相邻页，页面失败可单独重试。视觉解读改用异步 `toBlob`，书名直接请求单本 API。
+- **Word/PPT 原版阅读**：新增 `GET /api/books/{id}/rendered-file`。本机 Office 只读、禁用宏后按需导出 PDF，中文源文件先复制到 ASCII 临时路径规避 COM 代码页问题；按 SHA256 缓存，完成后退出 Office。真实 DOCX 已验证生成 1.66MB PDF。
+- **结构抽取**：DOCX 保留正文顺序中的表格和图片标记；PPTX 按坐标读取文本、表格、图片、图表及分组对象并生成逐页标题。结构化 PDF JSON 升级为 v2，加入图像资源 ID、坐标、图注关系和阅读顺序；双栏内容不再跨栏续句。
+- **目录工作台**：旧 1180px 全量表格改为虚拟折叠树、原页 iframe、节点检查器三栏布局；支持问题队列、撤销、整组移动、升降级、新增删除和完整阅读器跳转。DocReader 内的重复简易目录编辑入口已移除。
+- **网页 PDF 获取**：HTTPS 页面先探测内容类型，再解析 `citation_pdf_url`、下载链接、iframe/embed 和受控站点规则。人大复印报刊资料详情页可发现 `/qw/DownPdf?id=...`；用无 Cookie 新会话复核后判定为 Chrome 登录交接，避免解析成功但导入失败。
+- **模型边界**：没有引入 MinerU。问答、总结和深度分析仍由 `LLMRouter` 固定返回 DeepSeek。设置页新增备用 OpenAI Chat Completions 兼容接口登记/检测，以及可配置的兼容视觉 Base URL；不会静默切换默认厂家。
+- **附加修复**：设置页不再声称全部 AI 本地完成；视觉 Key 检测改为真实 `/models` 探测；结构阅读字号限制为 12–24px；网页登录失败返回可操作状态而非笼统 400。
+- **验证**：后端 92 项测试通过；前端 5 项单测和 Vite 生产构建通过；真实 DOCX 与自动生成 PPTX 的 Office→PDF 渲染、rdfybk 精确入口均已验证。
+
+### 7.1 PDF 划线与批注锚点修复（2026-08-25）
+
+- 补齐 PDF.js 6 文本层的 `--font-height`、`--scale-x`、旋转与缩放样式；高亮覆盖层不再截获文字拖选。
+- 修复浮动工具条重复叠加 `scrollTop/scrollLeft` 的坐标错误；批注编辑改为阅读器右侧固定面板。
+- 批注 schema v2 使用 `anchor_json` 保存文档指纹、原文 exact/prefix/suffix 与多页 segments；后端拒绝越界、零宽高和超页码坐标，同时保留 v1 `page/rect_json` 投影。
+- 新增扫描页 `GET /api/books/{id}/pdf-text-layer/{page}`：RapidOCR 只识别当前页，保存文字框后释放引擎；实测《行政管理学夏书章》第17页生成 28 个文字框，首次约 5.9 秒、缓存命中约 29ms，稳定工作集约 186MB。
+- 历史 PDF 批注已按原文重新校准：book 3 与 book 6 共 3 条均迁移为 v2，原第68页越界坐标已恢复；无法自动定位时保留记录并支持用户重新选择。
+- 修复 `/reader/{id}?page=N` 首次加载被宽度适配滚动事件重置为第1页的问题。
+- 回归：后端相关测试 46 项、前端单测 7 项及生产构建通过；浏览器实测原生 PDF 跨页2段零越界、扫描页只加载当前页 OCR 层。
+
+## 8. 测试情况
 
 | 测试 | 位置 | 结果 |
 |---|---|---|
-| 单元/架构测试 | `backend/tests/`（含 reliability_phase1 + literature_workbench） | 78 项全过（新增弱页 OCR、缓存前置、单页惰性渲染、OCR 任务后释放、结构化 Markdown、目录/AI 证据硬约束、PP-DocLayout-M 单模块与原文保护） |
+| 单元/架构测试 | `backend/tests/`（含 reliability_phase1 + literature_workbench） | 92 项全过（含网页 PDF 发现、代理 fake-IP 安全边界和 DeepSeek 默认路由） |
 | 前端单测 | `frontend/tests/` | 5 项全过（SVG 颜色属性注入、XML 转义、卡片视觉令牌与按钮交互反馈） |
 | UI 测试 | `backend/tests/ui_test.py`（Playwright） | 18 项全过（需先起后端） |
 | CI | `.github/workflows/ci.yml` | push/PR 自动跑单测 + 前端构建 |
@@ -198,7 +252,7 @@
 
 标准运行：`.venv/Scripts/python -m pytest -q`；前端运行：`cd frontend && npm run test:unit && npm run build`
 
-## 8. 关键踩坑记录（新对话必读）
+## 9. 关键踩坑记录（新对话必读）
 
 1. **FastAPI sync 端点线程池**：`asyncio.get_event_loop()` 崩溃 → 独立后台线程 + `run_coroutine_threadsafe`
 2. **SQLite 锁冲突**：FTS 写入与 ORM 同事务冲突 → 先批量 commit 再写索引
@@ -227,10 +281,12 @@
 25. **上传流式读取**：`UploadFile.read()` 一次读入内存，改 `read(chunk)` 循环 + 魔数/压缩炸弹校验
 26. **OCR 任务无进展卡死**：152 MB 扫描 PDF 曾停在缓存 `1/174` 约 53 分钟；重启后任务自动恢复。需补页级心跳、无进展超时和可取消检查点，不能只显示笼统“版面分析”。
 27. **章名页眉污染目录**：教材隔页重复章名会生成数十个根节点；仅对有编号的一级章/部分标题做全书去重，普通按章重复的小结标题不可全局去重。
+28. **Office COM 中文路径**：Python 3.14/Windows 代码页可能把中文文件名传成乱码；渲染前复制到受控 ASCII 临时路径，输出验证 `%PDF-` 后再原子写入哈希缓存。
+29. **网页候选会话假阳性**：详情页请求建立的临时 Cookie 可能让候选探测成功，但后续独立下载失败；候选必须用无 Cookie 新会话复核，不能把解析会话带入“开放获取”判断。
 
-## 9. 已知边界
+## 10. 已知边界
 
-- OCR 后端（tesseract/paddle）代码就绪未安装，扫描版 PDF 会提示
+- OCR 默认使用已安装的 RapidOCR/ONNX；Tesseract/Paddle 仅为可选后端
 - 向量检索默认关（省内存），开启需加载 fastembed 模型
 - 思维训练会话为内存态（重启后端后会话丢失；上限 100 个，超了删最旧）
 - 知识图谱概念来自 `book_analysis`（需资料做过智能分析才有节点）
@@ -239,19 +295,20 @@
 - PPTX 已支持主要内嵌图像提取；复杂多面板智能裁剪、矢量图重绘和低置信度公式原图保留仍待实现
 - DOI/OA/arXiv 与馆藏浏览器交接已接入；出版社授权 API 仍作为 provider 扩展点，未实现也不会模拟绕过
 - Paper Card 与 PPTX 导出已接入；周期性文献订阅尚未实现
+- 视觉回归依赖本机 Microsoft PowerPoint；当 Office 不可用时仍可生成 PPTX，但质量门会保留未验收警告
 
-## 10. 开源发布状态
+## 11. 开源发布状态
 
 - 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，tag v1.0.0）
 - 许可证 MIT、PRIVACY.md、SECURITY.md、CHANGELOG.md、CONTRIBUTING.md、.gitattributes
 - CI（ci.yml）+ Release 自动打包（release.yml）
 - 分享给朋友：下载 Release 的 zip（含前端产物，不装 Node 也能用），或 git clone 后 `cd frontend && npm i && npm run build`
 
-## 11. 快速上手命令
+## 12. 快速上手命令
 
 ```bash
 cd D:/86153/Documents/study-assistant
-.venv/Scripts/python launcher.py          # 启动（自动开浏览器）
+start.bat                                 # 稳定启动（自动开浏览器）
 .venv/Scripts/python -m uvicorn backend.app.main:app --port 8000  # 直接启动
 
 cd frontend && npm run build               # 改完前端构建（需 npm.cmd）
