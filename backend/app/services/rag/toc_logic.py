@@ -100,6 +100,12 @@ def _infer_level(token: NumberToken | None, stack: list[tuple[int, int, NumberTo
                               if parent_token and parent_token.scheme in {"section", "decimal"} and level >= 2), None)
         return min(4, section_level + 1) if section_level else (2 if stack else 1)
     if token.scheme in {"cn_paren", "arabic_paren"}:
+        # 同一编号体系连续出现时必为同级兄弟；旧逻辑会把前一个“（一）”当父级，
+        # 于是“（一）→（四）”被拆到不同组，跳号完全漏检。
+        sibling_level = next((level for level, _, parent_token in reversed(stack)
+                              if parent_token and parent_token.scheme == token.scheme), None)
+        if sibling_level:
+            return sibling_level
         dot_level = next((level for level, _, parent_token in reversed(stack)
                           if parent_token and parent_token.scheme == "cn_dot"), None)
         if dot_level:
@@ -115,6 +121,7 @@ def analyze_toc_rows(rows: list[dict]) -> dict:
     sequence_state: dict[tuple[int | None, str, tuple[int, ...]], tuple[int, int]] = {}
     issues: list[dict] = []
     previous_page = 0
+    missing_candidates: list[dict] = []
 
     for index, raw in enumerate(rows):
         title = str(raw.get("title") or "").strip()
@@ -192,6 +199,14 @@ def analyze_toc_rows(rows: list[dict]) -> dict:
                 elif token.number > prior_number + 1:
                     missing = list(range(prior_number + 1, token.number))[:20]
                     item_issues.append({"type": "sequence_gap", "message": f"编号链缺少 {missing}", "missing": missing})
+                    missing_candidates.append({
+                        "type": "missing_number_placeholder", "scheme": token.scheme,
+                        "numbers": missing, "parent_index": parent_index,
+                        "after_index": prior_index, "before_index": index,
+                        "page_range": [analyzed[prior_index]["page"], page],
+                        "status": "suggested",
+                        "message": "疑似漏识或阅读顺序错位；仅生成编号占位建议，不编造标题正文",
+                    })
             elif token.number != 1:
                 item_issues.append({"type": "sequence_start", "message": f"本组从 {token.number} 开始，需确认前序标题是否漏识"})
             sequence_state[group_key] = (token.number, index)
@@ -225,6 +240,7 @@ def analyze_toc_rows(rows: list[dict]) -> dict:
         "level_mismatch", "parent_mismatch", "misordered_continuation",
     })
     return {"ok": not issues, "items": analyzed, "issues": issues,
+            "missing_candidates": missing_candidates,
             "summary": {"total": len(analyzed), "high": sum(i["review_status"] == "high" for i in analyzed),
                         "review": sum(i["review_status"] == "review" for i in analyzed),
                         "low": sum(i["review_status"] == "low" for i in analyzed),
@@ -243,6 +259,13 @@ def auto_repair_toc_rows(rows: list[dict]) -> tuple[list[dict], dict]:
             "review_status", "issues", "repairs",
         }}
         row["level"] = item["inferred_level"]
+        # unresolved 问题不得被“自动修复完成”掩盖，供目录工作台显式展示。
+        unresolved_types = {issue["type"] for issue in item.get("issues", [])} - {
+            "level_mismatch", "parent_mismatch", "misordered_continuation",
+        }
+        if unresolved_types:
+            row["review_status"] = "needs_review"
+            row["review_issue_types"] = sorted(unresolved_types)
         repaired_by_index[index] = row
         target = item.get("repairs", {}).get("move_before_index")
         if isinstance(target, int) and target < index:

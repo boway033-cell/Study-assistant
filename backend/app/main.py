@@ -43,6 +43,28 @@ def _migrate():
                 conn.execute(text("UPDATE book_deep SET status='pending', error_msg='服务重启，任务中断，可重新分析' WHERE status='running'"))
             except Exception:  # noqa: BLE001
                 pass
+            try:
+                report_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(study_reports)")).fetchall()]
+                if "selection_json" not in report_cols:
+                    conn.execute(text("ALTER TABLE study_reports ADD COLUMN selection_json TEXT NOT NULL DEFAULT '{}'"))
+                if "focus" not in report_cols:
+                    conn.execute(text("ALTER TABLE study_reports ADD COLUMN focus TEXT"))
+                if "framework" not in report_cols:
+                    conn.execute(text("ALTER TABLE study_reports ADD COLUMN framework TEXT"))
+                if "claims_json" not in report_cols:
+                    conn.execute(text("ALTER TABLE study_reports ADD COLUMN claims_json TEXT NOT NULL DEFAULT '[]'"))
+            except Exception:  # noqa: BLE001
+                pass
+            # 旧版把普通笔记存成 knowledge_nodes(node_type='note')；幂等复制到独立笔记表。
+            try:
+                conn.execute(text("""
+                    INSERT OR IGNORE INTO knowledge_notes
+                    (book_id, chapter_id, page, title, content, source_legacy_node_id, tags_json, origin, created_at)
+                    SELECT book_id, chapter_id, NULL, title, COALESCE(note, ''), id, '[]', 'user', COALESCE(created_at, CURRENT_TIMESTAMP)
+                    FROM knowledge_nodes WHERE node_type='note' AND book_id IS NOT NULL
+                """))
+            except Exception:  # noqa: BLE001
+                pass
             # 导入任务持久化表中的 running 任务复位为 pending（启动时自动恢复入队）
             try:
                 conn.execute(text("UPDATE import_tasks SET status='pending', message='服务重启，自动恢复' WHERE status='running' AND name IN ('import','reimport')"))
@@ -80,6 +102,10 @@ def _migrate():
                     conn.execute(text("ALTER TABLE annotations ADD COLUMN anchor_json TEXT"))
                 if "status" not in ann_cols:
                     conn.execute(text("ALTER TABLE annotations ADD COLUMN status VARCHAR(24) NOT NULL DEFAULT 'active'"))
+                if "mark_type" not in ann_cols:
+                    conn.execute(text("ALTER TABLE annotations ADD COLUMN mark_type VARCHAR(20) NOT NULL DEFAULT 'highlight'"))
+                if "origin" not in ann_cols:
+                    conn.execute(text("ALTER TABLE annotations ADD COLUMN origin VARCHAR(20) NOT NULL DEFAULT 'user'"))
             except Exception:  # noqa: BLE001
                 pass
             # 加密旧的明文 API Key（向后兼容：旧版直接存明文，新版加密存储）
@@ -162,7 +188,7 @@ async def lifespan(_app: FastAPI):
         pass
 
 
-app = FastAPI(title="Study assistant", version="1.1.0", lifespan=lifespan)
+app = FastAPI(title="Study assistant", version="1.2.0", lifespan=lifespan)
 
 
 class SPAStaticFiles(StaticFiles):
@@ -229,8 +255,8 @@ def health():
     return {
         "status": "ok",
         "app": "study-assistant",
-        "api_revision": 2,
-        "capabilities": {"shelves_write": True},
+        "api_revision": 3,
+        "capabilities": {"shelves_write": True, "knowledge_records": True, "annotation_underline": True},
     }
 
 

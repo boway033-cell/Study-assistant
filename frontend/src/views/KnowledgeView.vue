@@ -1,5 +1,8 @@
 <template>
-  <div>
+  <div class="knowledge-page study-page">
+    <KnowledgeScopeSelector v-if="!embedded" />
+    <div v-if="!scopeBookIds.length" class="scope-required"><b>先选择需要组织的书目</b><span>知识树不会默认展示或混合整个资料库。</span></div>
+    <template v-else>
     <el-row :gutter="16">
       <!-- 左：知识树（大纲 / 导图 双视图） -->
       <el-col :span="9">
@@ -25,14 +28,10 @@
             <el-tag size="small" type="warning">🟡 模糊 {{ statFuzzy }}</el-tag>
             <el-tag size="small" type="danger">🔴 未掌握 {{ statMiss }}</el-tag>
           </div>
-          <el-select v-model="scopeBookIds" multiple collapse-tags filterable clearable
-            placeholder="筛选一本或多本知识树（不选择则显示全部）" style="width: 100%; margin-bottom: 8px" @change="loadTree">
-            <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
-          </el-select>
           <el-input v-model="treeFilter" size="small" placeholder="搜索节点…" clearable style="margin-bottom: 8px" prefix-icon="Search" />
           <div class="gen-buttons">
-            <el-button size="small" type="success" plain @click="showImport = true">📚 从章节导入</el-button>
-            <el-button size="small" type="warning" plain @click="showAi = true">🤖 AI 生成框架</el-button>
+            <el-button size="small" type="success" plain @click="openImport">从章节导入</el-button>
+            <el-button size="small" type="warning" plain @click="openAi">AI 生成框架</el-button>
           </div>
 
           <!-- 大纲视图 -->
@@ -51,7 +50,6 @@
               node-key="id"
               :show-checkbox="multiSelect"
               draggable
-              default-expand-all
               :allow-drop="allowDrop"
               highlight-current
               :expand-on-click-node="false"
@@ -61,6 +59,7 @@
               <template #default="{ node, data }">
                 <span class="tree-node">
                   <span class="tree-label">{{ data.title }}</span>
+                  <span v-if="scopeBookIds.length > 1 && data.book_id" class="book-badge">{{ bookShortName(data.book_id) }}</span>
                   <span class="tree-actions" @click.stop>
                     <el-button link size="small" type="primary" @click="addChild(data)">＋</el-button>
                     <el-button link size="small" @click="renameNode(data)">改</el-button>
@@ -149,16 +148,8 @@
               <el-tag size="small" type="warning">{{ source.chapter_title }}</el-tag>
               <el-tag size="small" type="success">第 {{ source.page_start }} - {{ source.page_end }} 页</el-tag>
               <el-button link size="small" type="primary" @click="goReadSource" style="margin-left: auto">⛶ 全屏阅读</el-button>
-              <el-radio-group v-model="sourceView" size="small">
-                <el-radio-button value="text">文本</el-radio-button>
-                <el-radio-button value="pdf" v-if="source.book_id && pdfBookType === 'pdf'">📄 PDF 原文</el-radio-button>
-              </el-radio-group>
             </div>
-            <div v-if="sourceView === 'text'" class="source-text">{{ source.text }}</div>
-            <div v-else-if="sourceView === 'pdf'" class="pdf-box">
-              <PdfReader :src="pdfUrl" :book-id="source.book_id" :initial-page="source.page_start || 1"
-                :toc="tocFlat" show-toc show-ai :use-saved-pos="false" />
-            </div>
+            <div class="source-text">{{ source.text }}</div>
           </template>
           <el-empty v-else description="该节点尚未关联书籍章节，或该章节暂无内容" :image-size="80" />
 
@@ -174,6 +165,7 @@
         <el-empty v-else description="点击左侧节点查看详情" style="margin-top: 80px" />
       </el-col>
     </el-row>
+    </template>
 
     <!-- AI 批改笔记弹窗 -->
     <el-dialog v-model="reviewDialog" title="AI 批改笔记" width="560px">
@@ -219,18 +211,20 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { renderMarkdown } from '../utils/markdown'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MindMap from '../components/MindMap.vue'
-import PdfReader from '../components/PdfReader.vue'
+import KnowledgeScopeSelector from '../components/KnowledgeScopeSelector.vue'
+import { knowledgeBooks, knowledgeBookIds, loadKnowledgeBooks } from '../stores/knowledgeScope'
+defineProps({ embedded: { type: Boolean, default: false } })
 import {
   getKnowledgeTree, createKnowledgeNode, updateKnowledgeNode,
   deleteKnowledgeNode, moveKnowledgeNode, getKnowledgeSource,
-  importKnowledgeChapters, aiGenerateKnowledge, expandKnowledgeNode,
+  importKnowledgeChapters, aiGenerateKnowledge, expandKnowledgeNode, applyKnowledgeSuggestions,
   batchDeleteKnowledge, reviewKnowledgeNote,
-  listBooks, getBook, getTask, bookFileUrl, getNodeAnnotations,
+  getBook, getTask, getNodeAnnotations,
 } from '../api'
 
 const router = useRouter()
@@ -242,8 +236,8 @@ const allNodeOptions = ref([])
 const reviewDialog = ref(false)
 const reviewText = ref('')
 const tree = ref([])
-const scopeBookIds = ref([])
-const books = ref([])
+const scopeBookIds = knowledgeBookIds
+const books = knowledgeBooks
 const nodeAnns = ref([])
 const viewMode = ref('outline')
 const current = ref(null)
@@ -252,8 +246,6 @@ const expanding = ref(false)
 const chapterOptions = ref([])
 const source = ref({})
 const sourceLoading = ref(false)
-const sourceView = ref('text')
-const pdfBookType = ref('')
 const showImport = ref(false)
 const importBook = ref([])
 const importing = ref(false)
@@ -262,15 +254,10 @@ const aiBook = ref([])
 const aiRunning = ref(false)
 const aiStage = ref('')
 
-const tocFlat = ref([])
 const statTotal = ref(0)
 const statKnown = ref(0)
 const statFuzzy = ref(0)
 const statMiss = ref(0)
-const pdfUrl = computed(() => {
-  if (!source.value.book_id || !source.value.page_start) return ''
-  return bookFileUrl(source.value.book_id)
-})
 
 const filteredTree = computed(() => {
   const q = treeFilter.value.trim().toLowerCase()
@@ -299,23 +286,12 @@ const updateStats = () => {
   allNodeOptions.value = opts
 }
 
-const loadBooks = async () => {
-  try {
-    const resp = await listBooks({ page_size: 100 })
-    books.value = resp.items.filter((b) => b.status === 'ready')
-  } catch { /* ignore */ }
-}
-
 const selectNode = async (data) => {
   current.value = data
   edit.value = { title: data.title, book_id: data.book_id, chapter_id: data.chapter_id, note: data.note || '', node_type: data.node_type || 'concept', mastery: data.mastery || 'unknown', ref_node_id: data.ref_node_id || null }
   source.value = {}
-  sourceView.value = 'text'
   if (data.book_id) {
-    const book = books.value.find((b) => b.id === data.book_id)
-    pdfBookType.value = book?.file_type || ''
     await loadChapters(data.book_id)
-    loadToc(data.book_id)
   }
   if (data.chapter_id) loadSource()
   loadNodeAnns(data.id)
@@ -362,30 +338,15 @@ const onBookChange = () => {
   loadChapters(edit.value.book_id)
 }
 
-const loadToc = async (bookId) => {
-  if (!bookId) { tocFlat.value = []; return }
-  try {
-    const detail = await getBook(bookId)
-    const flat = []
-    const walk = (nodes, level) => {
-      for (const n of nodes) {
-        flat.push({ id: n.id, title: n.title, level: n.level || level, start_page: n.start_page })
-        if (n.children?.length) walk(n.children, level + 1)
-      }
-    }
-    walk(detail.chapters || [], 1)
-    tocFlat.value = flat
-  } catch { tocFlat.value = [] }
-}
-
 const addRoot = async () => {
+  if (scopeBookIds.value.length !== 1) { ElMessage.info('新建知识树时请将书目范围限定为一本；多本文献可分别建树后再建立跨树引用'); return }
   try {
     const { value } = await ElMessageBox.prompt('输入知识树名称', '新建知识树', {
       confirmButtonText: '创建',
       cancelButtonText: '取消',
       inputPlaceholder: '如：公共管理学 · 核心框架',
     })
-    await createKnowledgeNode({ parent_id: null, title: value.trim() })
+    await createKnowledgeNode({ parent_id: null, title: value.trim(), book_id: scopeBookIds.value[0] })
     ElMessage.success('已创建')
     loadTree()
   } catch { /* 取消 */ }
@@ -496,8 +457,13 @@ const expandNode = async () => {
       await new Promise((r) => setTimeout(r, 2000))
       const t = await getTask(resp.task_id)
       if (t.status === 'done') {
-        ElMessage.success('已展开 ' + (t.result?.created || 0) + ' 个子节点')
-        loadTree()
+        const suggestions=t.result?.suggestions||[]
+        if(!suggestions.length){ElMessage.warning('没有生成可用建议节点');break}
+        const preview=suggestions.map((item,index)=>`${index+1}. ${item.title}`).join('\n')
+        await ElMessageBox.confirm(`AI 仅生成建议，尚未写入知识树：\n\n${preview}\n\n确认后才会添加到「${current.value.title}」下。`,'确认建议节点',{confirmButtonText:'确认写入',cancelButtonText:'暂不写入',type:'warning',customClass:'suggestion-confirm'})
+        await applyKnowledgeSuggestions(current.value.id,suggestions)
+        ElMessage.success(`已确认写入 ${suggestions.length} 个建议节点`)
+        await loadTree()
         break
       }
       if (t.status === 'failed') { ElMessage.error('展开失败：' + (t.error || '')); break }
@@ -514,10 +480,6 @@ const loadSource = async () => {
   sourceLoading.value = true
   try {
     source.value = await getKnowledgeSource(current.value.id)
-    if (source.value.book_id) {
-      const book = books.value.find((b) => b.id === source.value.book_id)
-      pdfBookType.value = book?.file_type || ''
-    }
   } catch (e) {
     ElMessage.error(e.message)
   } finally {
@@ -527,16 +489,27 @@ const loadSource = async () => {
 
 const allowDrop = () => true
 
+const subtreeSize = data => 1 + (data.children || []).reduce((sum, child) => sum + subtreeSize(child), 0)
+const bookShortName = id => {
+  const title = books.value.find(book => book.id === id)?.title || `书目 ${id}`
+  return title.length > 8 ? title.slice(0, 8) + '…' : title
+}
+
 const handleDrop = async (draggingNode, dropNode, dropType) => {
   const newParentId = dropType === 'inner' ? dropNode.data.id : (dropNode.data.parent_id ?? null)
   if (newParentId === draggingNode.data.id) return
+  // Element Tree 已在前端临时移动；先恢复正式结构，确认后再提交，避免误拖即写库。
+  await loadTree()
   try {
+    const affected = subtreeSize(draggingNode.data)
+    const target = newParentId ? `「${dropNode.data.title}」所在层级` : '知识树根层级'
+    await ElMessageBox.confirm(`将移动「${draggingNode.data.title}」及其 ${affected - 1} 个下级节点到${target}。来源关联不会改变，是否保存？`,'确认层级变更',{confirmButtonText:'保存变更',cancelButtonText:'取消',type:'warning'})
     await moveKnowledgeNode(draggingNode.data.id, newParentId)
-    ElMessage.success('已移动')
-    loadTree()
+    ElMessage.success(`已移动，影响 ${affected} 个节点`)
+    await loadTree()
   } catch (e) {
-    ElMessage.error(e.message)
-    loadTree()
+    if(e!=='cancel'&&e!=='close')ElMessage.error(e.message)
+    await loadTree()
   }
 }
 
@@ -599,10 +572,11 @@ const doAiGenerate = async () => {
   }
 }
 
-onMounted(async () => {
-  loadTree()
-  await loadBooks()
-})
+const openImport = () => { importBook.value = [...scopeBookIds.value]; showImport.value = true }
+const openAi = () => { aiBook.value = [...scopeBookIds.value]; showAi.value = true }
+const onScopeChange = async () => { current.value=null; source.value={}; await loadTree() }
+watch(scopeBookIds, onScopeChange, { deep: true })
+onMounted(async () => { await loadKnowledgeBooks(); await loadTree() })
 </script>
 
 <style scoped>
@@ -614,6 +588,7 @@ onMounted(async () => {
 .tree-tip { margin-top: 12px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.8; }
 .tree-node { display: flex; align-items: center; justify-content: space-between; flex: 1; padding-right: 8px; }
 .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.book-badge { flex:none; margin-left:6px; padding:1px 6px; border:1px solid #decdb7; border-radius:8px; background:#faf3e8; color:#8a623c; font-size:10px; }
 .tree-actions { display: none; gap: 2px; flex-shrink: 0; }
 :deep(.el-tree-node__content:hover) .tree-actions { display: inline-flex; }
 .tree-drag-tip { margin-top: 10px; font-size: 12px; color: var(--el-text-color-placeholder); }
@@ -627,4 +602,6 @@ onMounted(async () => {
   border: 1px solid var(--el-border-color-extra-light);
 }
 .pdf-box { border-radius: 8px; overflow: hidden; height: 560px; }
+.knowledge-page{max-width:1500px}.scope-required{display:flex;flex-direction:column;gap:6px;padding:40px;border:1px dashed #d8c7b0;border-radius:var(--study-radius-md);background:#f7f2e9;text-align:center}.scope-required span{color:var(--el-text-color-secondary)}
+@media(max-width:1100px){.knowledge-page :deep(.el-row){display:flex;flex-direction:column}.knowledge-page :deep(.el-col){max-width:100%;flex:0 0 100%}.kt-card{margin-bottom:14px}}
 </style>

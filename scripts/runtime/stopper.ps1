@@ -1,5 +1,5 @@
 ﻿# Study Assistant - Stop Service (only a verified process owned by this workspace)
-$root = $PSScriptRoot
+$root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
 $pidFile = Join-Path $root "server.pid"
 $candidateIds = @()
 if (Test-Path -LiteralPath $pidFile) {

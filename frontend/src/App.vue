@@ -15,7 +15,7 @@
       </div>
     </el-aside>
     <el-container>
-      <el-header class="header">
+      <el-header class="header" :class="{ 'reader-app-header': $route.name === 'reader' }">
         <div class="header-leading">
           <el-button text circle class="mobile-menu" aria-label="打开导航" @click="mobileNav = true"><el-icon><Menu /></el-icon></el-button>
           <el-button text circle class="collapse-button" aria-label="折叠侧栏" @click="toggleSidebar"><el-icon><component :is="sidebarCollapsed ? Expand : Fold" /></el-icon></el-button>
@@ -28,7 +28,7 @@
           </el-badge>
         </div>
       </el-header>
-      <el-main class="main">
+      <el-main class="main" :class="{ 'reader-main': $route.name === 'reader' }">
         <router-view />
       </el-main>
     </el-container>
@@ -224,6 +224,11 @@ html, body, #app { height: 100%; }
 }
 .header-leading,.header-actions{display:flex;align-items:center;gap:10px}.header-leading>div{display:flex;flex-direction:column}.page-context{margin-top:2px;font-size:10px;letter-spacing:1px;color:#8f806e}.collapse-button{color:var(--bailu-text-deep)}.mobile-menu{display:none}.task-button{border-color:rgba(139,90,43,.22);background:rgba(245,240,232,.66);color:#6f4721}.task-button span{margin-left:5px}.mobile-logo{display:flex;align-items:center;gap:10px;padding:14px 10px 22px;color:#f5f0e8}.mobile-logo>span{font-size:24px}.mobile-logo div{display:flex;flex-direction:column}.mobile-logo small{margin-top:3px;color:rgba(245,240,232,.6)}
 .page-title { font-size: 17px; font-weight: 600; color: var(--bailu-text-deep); letter-spacing: 1px; }
+.reader-app-header { height: 44px; padding-top: 0; padding-bottom: 0; }
+.reader-app-header .page-context,
+.reader-app-header .header-slogan { display: none; }
+.reader-app-header .page-title { font-size: 14px; letter-spacing: .5px; }
+.reader-main { padding: 8px 12px 12px; }
 .header-slogan {
   font-size: 11px; color: rgba(245, 240, 232, 0.55);
   letter-spacing: 2px;
@@ -232,7 +237,7 @@ html, body, #app { height: 100%; }
 .main { background: var(--el-bg-color-page); overflow: auto; padding: 12px; }
 
 @media (max-width: 820px) {
-  .desktop-aside{display:none}.collapse-button,.header-slogan{display:none}.mobile-menu{display:inline-flex}.header{padding:0 10px}.main{padding:8px}.task-button{padding:7px 10px}.page-title{font-size:15px}.mobile-drawer .el-drawer__body{padding:0;background:var(--bailu-bg-gradient)}
+  .desktop-aside{display:none}.collapse-button,.header-slogan{display:none}.mobile-menu{display:inline-flex}.header{padding:0 10px}.main{padding:8px}.task-badge{margin-right:8px}.task-button{padding:7px 10px}.page-title{font-size:15px}.mobile-drawer .el-drawer__body{padding:0;background:var(--bailu-bg-gradient)}
 }
 
 /* —— Markdown 排版层级（H1 醒目 / 层级分明 / 行高舒适） —— */

@@ -38,6 +38,18 @@ _ENGLISH_RE = re.compile(
 _BODY_END = re.compile(r"[。！？!?；;.]\s*$")
 _SENTENCE_PUNCT = re.compile(r"[。！？!?；;]")
 _TOC_DOTS = re.compile(r"[.．·…]{4,}\s*\d*\s*$")
+_AUTHOR_META_RE = re.compile(
+    r"(?:作者|基金项目|通讯作者|责任编辑|收稿日期|doi\s*:|e-?mail|@|大学|学院|研究院|研究所)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_author_or_metadata(title: str) -> bool:
+    compact = re.sub(r"\s+", "", title)
+    if _AUTHOR_META_RE.search(compact):
+        return True
+    # 姓名串常被版面模型误判为大标题；要求短、无章节语义且由 2-4 字姓名分隔组成。
+    return bool(re.fullmatch(r"[\u4e00-\u9fff]{2,4}(?:[，,、·]\s*[\u4e00-\u9fff]{2,4}){1,8}", title.strip()))
 
 
 def _clean_title(raw: str) -> str:
@@ -211,6 +223,7 @@ def extract_toc_from_layout(layout) -> list[dict]:
                 or re.match(r"^[（(]\d+[）)]\s*[\d.．－—-]", title)
                 or compact in {"公共管理学报", "作者简介", "内容简介", "版权所有侵权必究印装差错负责调换"}
                 or re.fullmatch(r"[\u4e00-\u9fff]{2,4}[，、][\u4e00-\u9fff]{2,4}", compact)
+                or (blk.page <= 2 and _looks_like_author_or_metadata(title))
             ):
                 continue
             classified = classify_heading(title)

@@ -1,2 +1,2 @@
 @echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0auto_start.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\runtime\auto_start.ps1"

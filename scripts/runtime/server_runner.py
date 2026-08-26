@@ -8,7 +8,7 @@ from pathlib import Path
 import uvicorn
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def main() -> None:
@@ -16,6 +16,8 @@ def main() -> None:
     if not 8000 <= port <= 8010:
         raise SystemExit("port outside allowed range")
     os.chdir(ROOT)
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
     # pythonw 没有控制台；日志由进程自身持有，启动 shell 退出不影响文件句柄。
     with (ROOT / "server.log").open("a", encoding="utf-8", buffering=1) as stdout, \
          (ROOT / "server.err.log").open("a", encoding="utf-8", buffering=1) as stderr:

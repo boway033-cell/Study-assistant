@@ -229,6 +229,8 @@ class Annotation(Base):
     rect_json: Mapped[str] = mapped_column(Text, nullable=False)  # [{x,y,w,h} 归一化坐标]
     text: Mapped[str | None] = mapped_column(Text)                # 选中的原文
     color: Mapped[str] = mapped_column(String(20), default="#f9e572")
+    mark_type: Mapped[str] = mapped_column(String(20), default="highlight", nullable=False)
+    origin: Mapped[str] = mapped_column(String(20), default="user", nullable=False)
     note: Mapped[str | None] = mapped_column(Text)                # 用户笔记
     knowledge_node_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_nodes.id"))
     schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
@@ -238,6 +240,43 @@ class Annotation(Base):
 
     book: Mapped["Book"] = relationship()
     knowledge_node: Mapped["KnowledgeNode | None"] = relationship()
+
+
+class EvidenceCard(Base):
+    """独立证据卡片；与 PDF 标注、知识树节点分表保存，只在知识沉淀首页聚合。"""
+
+    __tablename__ = "evidence_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id", ondelete="SET NULL"), index=True)
+    page: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    evidence_text: Mapped[str] = mapped_column(Text, nullable=False)
+    claim_text: Mapped[str | None] = mapped_column(Text)
+    source_ref_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    tags_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    origin: Mapped[str] = mapped_column(String(20), default="user", nullable=False)
+    verification_status: Mapped[str] = mapped_column(String(24), default="needs_review", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class KnowledgeNote(Base):
+    """普通知识笔记；不以知识树节点或 PDF 标注冒充笔记。"""
+
+    __tablename__ = "knowledge_notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id", ondelete="SET NULL"), index=True)
+    page: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    source_annotation_id: Mapped[int | None] = mapped_column(ForeignKey("annotations.id", ondelete="SET NULL"), unique=True)
+    source_legacy_node_id: Mapped[int | None] = mapped_column(Integer, unique=True)
+    tags_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    origin: Mapped[str] = mapped_column(String(20), default="user", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 
 class BookDeep(Base):
@@ -265,6 +304,10 @@ class StudyReport(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     book_ids_json: Mapped[str | None] = mapped_column(Text)
+    selection_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    focus: Mapped[str | None] = mapped_column(Text)
+    framework: Mapped[str | None] = mapped_column(Text)
+    claims_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 

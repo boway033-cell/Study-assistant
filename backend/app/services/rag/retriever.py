@@ -33,8 +33,11 @@ def retrieve(question: str, book_id: int | None = None, book_ids: list[int] | No
     # 1. 向量检索
     if vector.is_enabled():
         vec_items = []
-        for it in vector.vector_search(question, book_id=book_id, top_k=k * 2):
-            vec_items.append(_enrich_vector_item(it, book_id))
+        # 多书范围必须逐书检索；向量接口当前只接受单个 book_id，传 None 会泄漏到未选书目。
+        vector_scope = search_book_ids or [book_id]
+        for scoped_book_id in vector_scope:
+            for it in vector.vector_search(question, book_id=scoped_book_id, top_k=k * 2):
+                vec_items.append(_enrich_vector_item(it, scoped_book_id))
         ranked_lists.append(vec_items)
 
     # 2. FTS5 关键词

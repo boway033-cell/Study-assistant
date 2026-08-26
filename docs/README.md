@@ -11,6 +11,7 @@
 | [PROJECT_HANDOVER.md](PROJECT_HANDOVER.md) | 当前开发状态、运行方式、已知边界和交接记录 |
 | [LIGHTWEIGHT_DOCUMENT_PIPELINE.md](LIGHTWEIGHT_DOCUMENT_PIPELINE.md) | 当前文档解析、OCR、目录证据与内存约束 |
 | [nature-literature-workflow.md](nature-literature-workflow.md) | 文献归档、证据卡片、PPTX 与合法全文工作流 |
+| [RESEARCH_REPORT_METHOD.md](RESEARCH_REPORT_METHOD.md) | AI 自主研读、精确来源审计与资源边界 |
 
 ## 技术参考
 
@@ -23,5 +24,5 @@
 ## 维护规则
 
 - 阶段性决策、一次性审计和已经完成的旧路线图不再长期保留；结论应合并进产品文档或交接文档。
-- 新增专项文档前，先确认无法合理归入上述四份权威文档。
+- 新增专项文档前，先确认无法合理归入上述权威文档。
 - 删除的历史文档仍可通过 Git 提交记录恢复，不在仓库当前版本重复保存。

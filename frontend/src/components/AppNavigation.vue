@@ -6,9 +6,7 @@
     </el-menu-item-group>
     <el-menu-item-group title="阅读与沉淀">
       <el-menu-item index="/chat"><el-icon><ChatDotRound /></el-icon><template #title>知识库问答</template></el-menu-item>
-      <el-menu-item index="/knowledge"><el-icon><Share /></el-icon><template #title>知识树</template></el-menu-item>
-      <el-menu-item index="/graph"><el-icon><Connection /></el-icon><template #title>知识图谱</template></el-menu-item>
-      <el-menu-item index="/study"><el-icon><MagicStick /></el-icon><template #title>综合研读</template></el-menu-item>
+      <el-menu-item index="/knowledge-hub"><el-icon><Notebook /></el-icon><template #title>知识沉淀</template></el-menu-item>
     </el-menu-item-group>
     <el-sub-menu index="more">
       <template #title><el-icon><Grid /></el-icon><span>更多学习工具</span></template>
@@ -22,7 +20,7 @@
 </template>
 
 <script setup>
-import { Folder, ChatDotRound, Share, Setting, MagicStick, Connection, Tickets, Grid } from '@element-plus/icons-vue'
+import { Folder, ChatDotRound, Setting, Tickets, Grid, Notebook } from '@element-plus/icons-vue'
 
 defineProps({ collapsed: { type: Boolean, default: false } })
 defineEmits(['navigate'])

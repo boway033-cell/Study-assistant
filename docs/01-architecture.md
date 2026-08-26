@@ -55,7 +55,7 @@
 | **云端 LLM** | **DeepSeek API（deepseek-v4-flash / deepseek-v4-pro）** | httpx | **唯一 AI 后端（本地 Ollama 已取消）**；质量高、成本低 |
 | 前端 | Vue3 + Vite + Element Plus | — | 组件全、开发快 |
 | PDF 阅读器 | **pdf.js（pdfjs-dist）** | ≥4 | Mozilla 开源（~48k★），Firefox 同内核；页面内直接渲染，无需下载 |
-| 启动器 | start.bat/stop.bat + auto_start.ps1 | — | 自检端口/已在运行，自动开浏览器 |
+| 启动器 | `start.bat` / `stop.bat` + `scripts/runtime/` | — | 自检端口/已在运行，自动开浏览器 |
 | 思维导图 | 自绘 SVG（零依赖） | — | 知识树导图视图，低内存 |
 
 | 图表 | ECharts | — | 趋势图、掌握度柱状图 |
@@ -66,7 +66,10 @@
 ```
 study-assistant/
 ├── start.bat                 # 一键启动（Windows）
+├── stop.bat                  # 安全停止当前工作区服务
 ├── requirements.txt
+├── requirements/             # 开发与可选版面依赖
+├── scripts/                  # runtime / protocol / launchers / maintenance
 ├── .env                      # DEEPSEEK_API_KEY 等（不纳入 git）
 ├── backend/
 │   ├── app/
@@ -86,7 +89,7 @@ study-assistant/
 │       ├── views/            # Library / Chat / Knowledge / Quiz / Stats / Settings
 │       ├── components/       # OriginalViewer.vue
 │       ├── api/              # axios 封装
-│       └── router/           # hash 路由
+│       └── router/           # History 路由（后端提供 SPA fallback）
 └── docs/                     # 本文档系列
 ```
 

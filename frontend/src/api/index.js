@@ -6,7 +6,12 @@ const http = axios.create({ baseURL: '/api', timeout: 60000 })
 http.interceptors.response.use(
   (res) => res.data,
   (err) => {
-    const msg = err.response?.data?.detail || err.message || '请求失败'
+    const detail = err.response?.data?.detail
+    const msg = Array.isArray(detail)
+      ? detail.map(item => item?.msg || String(item)).join('；')
+      : typeof detail === 'object' && detail
+        ? detail.msg || JSON.stringify(detail)
+        : detail || err.message || '请求失败'
     return Promise.reject(new Error(msg))
   }
 )
@@ -131,8 +136,21 @@ export const getNodeAnnotations = (id) => http.get(`/knowledge/nodes/${id}/annot
 export const importKnowledgeChapters = (data) => http.post('/knowledge/import-chapters', data)
 export const aiGenerateKnowledge = (data) => http.post('/knowledge/ai-generate', data)
 export const expandKnowledgeNode = (nodeId) => http.post('/knowledge/nodes/expand', { node_id: nodeId })
+export const applyKnowledgeSuggestions = (nodeId, suggestions) => http.post(`/knowledge/nodes/${nodeId}/apply-suggestions`, { suggestions })
 export const batchDeleteKnowledge = (nodeIds) => http.post('/knowledge/batch-delete', { node_ids: nodeIds })
 export const reviewKnowledgeNote = (nodeId) => http.post(`/knowledge/nodes/${nodeId}/review-note`)
+export const listKnowledgeNotes = (bookIds, q = '') => http.get('/knowledge/notes', {
+  params: { book_ids: bookIds, q: q || undefined }, paramsSerializer: repeatedParams,
+})
+export const listKnowledgeRecords = (params = {}) => http.get('/knowledge/records', { params, paramsSerializer: repeatedParams })
+export const promoteAnnotation = (annotationId) => http.post(`/knowledge/annotations/${annotationId}/promote`)
+export const createKnowledgeNote = (data) => http.post('/knowledge/notes', data)
+export const updateKnowledgeNote = (id, data) => http.patch(`/knowledge/notes/${id}`, data)
+export const deleteKnowledgeNote = (id) => http.delete(`/knowledge/notes/${id}`)
+export const addKnowledgeNoteToTree = (id, parentId = null) => http.post(`/knowledge/notes/${id}/add-to-tree`, null, { params: { parent_id: parentId } })
+export const createEvidenceCard = (data) => http.post('/knowledge/evidence-cards', data)
+export const updateEvidenceCard = (id, data) => http.patch(`/knowledge/evidence-cards/${id}`, data)
+export const deleteEvidenceCard = (id) => http.delete(`/knowledge/evidence-cards/${id}`)
 
 // ===== PDF 标注 =====
 export const listAnnotations = (bookId, params) => http.get(`/books/${bookId}/annotations`, { params })

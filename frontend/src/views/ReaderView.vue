@@ -1,34 +1,40 @@
 <template>
   <div class="reader-page" :class="{ 'focus-reading': focusMode }">
     <header class="reader-top">
-      <div class="reader-identity">
-        <el-button circle plain @click="$router.push('/library')">←</el-button>
-        <div>
-          <div class="reader-title">{{ book?.title || '阅读器' }}</div>
-          <div class="reader-meta">
-            {{ [book?.archive?.authors, book?.archive?.journal, book?.archive?.published_year].filter(Boolean).join(' · ') || '本地文献' }}
+      <div class="reader-primary-row">
+        <div class="reader-identity">
+          <el-button circle plain aria-label="返回文献知识库" @click="$router.push('/library')">←</el-button>
+          <div class="reader-heading">
+            <div class="reader-title" :title="book?.title || '阅读器'">{{ book?.title || '阅读器' }}</div>
+            <div class="reader-meta">
+              {{ [book?.archive?.authors, book?.archive?.journal, book?.archive?.published_year].filter(Boolean).join(' · ') || '本地文献' }}
+            </div>
           </div>
         </div>
-        <el-button v-if="book" class="toc-review-btn" size="small" @click="openTocEditor">目录校正</el-button>
+        <div v-if="book" class="reader-actions">
+          <el-button size="small" @click="askKnowledgeBase">围绕本文提问</el-button>
+          <el-button size="small" type="primary" plain @click="sendToDeck">选段生成汇报</el-button>
+          <el-tooltip content="专注阅读"><el-button size="small" circle aria-label="切换专注阅读" @click="focusMode = !focusMode">{{ focusMode ? '↙' : '⛶' }}</el-button></el-tooltip>
+        </div>
       </div>
-      <el-radio-group v-model="mode" size="small" @change="onModeChange">
-        <el-radio-button value="source">原版阅读</el-radio-button>
-        <el-radio-button value="deep">结构精读</el-radio-button>
-        <el-radio-button value="card">证据卡片</el-radio-button>
-      </el-radio-group>
-      <div class="reader-actions" v-if="book">
-        <el-button size="small" @click="askKnowledgeBase">围绕本文提问</el-button>
-        <el-button size="small" type="primary" plain @click="sendToDeck">选段生成汇报</el-button>
-        <el-tooltip content="专注阅读"><el-button size="small" circle @click="focusMode = !focusMode">{{ focusMode ? '↙' : '⛶' }}</el-button></el-tooltip>
-        <el-tag size="small" type="info">{{ sourceMap.locator_mode === 'page-grounded' ? '页码可回溯' : '结构定位' }}</el-tag>
-        <el-select v-model="readingStatus" size="small" style="width: 96px" @change="saveReadingStatus">
-          <el-option label="未读" value="unread" />
-          <el-option label="阅读中" value="reading" />
-          <el-option label="已读完" value="read" />
-        </el-select>
-        <el-button size="small" :type="book.archive?.favorite ? 'warning' : ''" plain @click="toggleFavorite">
-          {{ book.archive?.favorite ? '★ 已收藏' : '☆ 收藏' }}
-        </el-button>
+      <div class="reader-secondary-row">
+        <el-radio-group v-model="mode" size="small" aria-label="阅读视图" @change="onModeChange">
+          <el-radio-button value="source">原版阅读</el-radio-button>
+          <el-radio-button value="deep">结构精读</el-radio-button>
+          <el-radio-button value="card">证据卡片</el-radio-button>
+        </el-radio-group>
+        <div v-if="book" class="reader-status-actions">
+          <el-tag size="small" type="info">{{ sourceMap.locator_mode === 'page-grounded' ? '页码可回溯' : '结构定位' }}</el-tag>
+          <el-select v-model="readingStatus" size="small" aria-label="阅读状态" style="width: 96px" @change="saveReadingStatus">
+            <el-option label="未读" value="unread" />
+            <el-option label="阅读中" value="reading" />
+            <el-option label="已读完" value="read" />
+          </el-select>
+          <el-button class="toc-review-btn" size="small" @click="openTocEditor">校正目录</el-button>
+          <el-button size="small" :type="book.archive?.favorite ? 'warning' : ''" plain @click="toggleFavorite">
+            {{ book.archive?.favorite ? '★ 已收藏' : '☆ 收藏' }}
+          </el-button>
+        </div>
       </div>
     </header>
 
@@ -36,7 +42,8 @@
       <template v-if="book && mode === 'source'">
         <DocReader v-if="book.file_type !== 'pdf'" :book-id="book.id" />
         <PdfReader v-else :key="pdfReaderKey" :src="fileUrl" :book-id="book.id" :initial-page="initialPage"
-          :toc="tocFlat" show-toc show-ai :use-saved-pos="!hasQueryPage" @page-change="onPageChange" />
+          :toc="tocFlat" show-toc show-ai :use-saved-pos="!hasQueryPage" @page-change="onPageChange"
+          @request-toc-review="openTocEditor" />
       </template>
 
       <section v-else-if="book" class="artifact-view">
@@ -104,6 +111,13 @@
           <el-checkbox v-model="tocReviewOnly">仅看待复核</el-checkbox>
           <el-button size="small" :disabled="!tocIssueItems.length" @click="selectNextTocIssue">下一处问题</el-button>
           <el-button size="small" :disabled="!tocHistory.length" @click="undoToc">撤销</el-button>
+        </div>
+        <div v-if="tocAudit.missing_candidates?.length" class="toc-missing-suggestions">
+          <b>疑似缺项 {{ tocAudit.missing_candidates.length }} 组</b>
+          <span>系统只给出编号与页区间，不编造标题；添加后请对照中间原页补全。</span>
+          <el-button v-for="(candidate,index) in tocAudit.missing_candidates.slice(0,8)" :key="index" size="small" plain @click="insertMissingCandidate(candidate)">
+            添加 {{ missingCandidateLabel(candidate) }} · 第 {{ candidate.page_range?.join('–') }} 页
+          </el-button>
         </div>
         <div class="toc-workspace">
           <section class="toc-tree-panel">
@@ -348,6 +362,22 @@ const addSelectedToc = () => {
   checkpointToc(); addTocAfter(index)
   selectedTocKey.value = `new:${tocTempId}`
 }
+const cnNumbers=['零','一','二','三','四','五','六','七','八','九','十']
+const missingMarker=(scheme,number)=>scheme==='cn_paren'?`（${cnNumbers[number]||number}）`:`（${number}）`
+const missingCandidateLabel=candidate=>(candidate.numbers||[]).map(number=>missingMarker(candidate.scheme,number)).join('、')
+const insertMissingCandidate = async candidate => {
+  const numbers=candidate.numbers||[]
+  if(!numbers.length)return
+  try{
+    await ElMessageBox.confirm(`将在目录中加入 ${missingCandidateLabel(candidate)} 的“标题待核对”占位。保存前仍可修改或删除；系统不会生成虚构标题。`,'添加缺项占位',{confirmButtonText:'加入草稿',cancelButtonText:'取消',type:'warning'})
+    checkpointToc()
+    const target=Math.max(0,Math.min(tocDraft.value.length,Number(candidate.before_index)||0))
+    const reference=tocDraft.value[target]||tocDraft.value.at(-1)
+    const rows=numbers.map(number=>({client_key:`new:${++tocTempId}`,id:null,title:`${missingMarker(candidate.scheme,number)}【标题待核对】`,level:reference?.level||1,start_page:candidate.page_range?.[0]||reference?.start_page||1,review_status:'review',issueText:'编号链提示此处可能漏识或错序；请对照原页补全标题',edited:true}))
+    tocDraft.value.splice(target,0,...rows);normalizeAllTocLevels();selectedTocKey.value=rows[0].client_key
+    ElMessage.info('已加入目录草稿，核对标题后再保存')
+  }catch(e){if(e!=='cancel'&&e!=='close')ElMessage.error(e.message||String(e))}
+}
 const inspectTocPage = async (item) => {
   tocEditorOpen.value = false
   mode.value = 'source'
@@ -485,13 +515,16 @@ onMounted(() => loadBook(Number(route.params.bookId)))
 </script>
 
 <style scoped>
-.reader-page { display: flex; flex-direction: column; height: calc(100vh - 70px); max-width: 1800px; margin: 0 auto; }
-.reader-top { min-height: 58px; display: grid; grid-template-columns: minmax(360px, 1fr) auto minmax(430px, 1.25fr); align-items: center; gap: 18px; padding: 8px 14px; margin-bottom: 8px; background: rgba(245,240,232,.96); border: 1px solid var(--el-border-color-lighter); border-radius: 14px; box-shadow: 0 4px 18px rgba(20,30,31,.08); }
-.reader-identity, .reader-actions { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.reader-actions { justify-content: flex-end; }
-.reader-title { max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; color: var(--el-text-color-primary); }
+.reader-page { display: flex; flex-direction: column; height: calc(100vh - 64px); max-width: 1800px; margin: 0 auto; }
+.reader-top { display:flex; flex-direction:column; gap:7px; padding:8px 12px; margin-bottom:8px; background:rgba(245,240,232,.97); border:1px solid var(--study-card-border); border-radius:var(--study-radius-md); box-shadow:var(--study-shadow-sm); }
+.reader-primary-row,.reader-secondary-row { display:flex; align-items:center; justify-content:space-between; gap:16px; min-width:0; }
+.reader-identity, .reader-actions, .reader-status-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.reader-identity { flex:1; }
+.reader-heading { min-width:0; max-width:860px; }
+.reader-actions,.reader-status-actions { flex:none; justify-content:flex-end; }
+.reader-title { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; font-family:var(--study-font-reading); font-size:16px; line-height:1.35; font-weight:700; color:var(--el-text-color-primary); }
 .toc-review-btn { flex:none; }
-.reader-meta { margin-top: 2px; font-size: 11px; color: var(--el-text-color-secondary); }
+.reader-meta { margin-top: 2px; font-size: var(--study-font-size-xs); color: var(--el-text-color-secondary); }
 .reader-body { flex: 1; min-height: 0; }
 .artifact-view { display: grid; grid-template-columns: 240px minmax(0, 1fr); height: 100%; overflow: hidden; border: 1px solid var(--el-border-color-lighter); border-radius: 14px; background: #f8f4ec; }
 .artifact-aside { overflow-y: auto; padding: 18px 10px; border-right: 1px solid var(--el-border-color-lighter); background: #e9e2d5; }
@@ -503,7 +536,7 @@ onMounted(() => loadBook(Number(route.params.bookId)))
 .source-summary { display: flex; flex-direction: column; margin: 18px 10px 0; padding: 12px; border-top: 1px solid rgba(111,71,33,.15); color: #756958; }
 .source-summary strong { font: 700 22px Georgia, serif; }
 .source-summary span { font-size: 11px; }
-.artifact-content { overflow-y: auto; padding: 24px clamp(28px, 6vw, 92px) 80px; background: #f8f4ec; color: #2f302d; font-family: Georgia, 'Noto Serif SC', 'STSong', serif; }
+.artifact-content { overflow-y: auto; padding: 24px clamp(28px, 6vw, 92px) 80px; background: #f8f4ec; color: #2f302d; font-family: var(--study-font-reading); }
 .artifact-content :deep(p), .artifact-content :deep(li), .artifact-content :deep(blockquote) { max-width: var(--reading-max-width); font-size: var(--reading-font-size); line-height: 2; text-align: justify; }
 .artifact-banner { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 22px; padding: 12px 14px; border-left: 3px solid #8b5a2b; background: rgba(139,90,43,.06); }
 .artifact-banner div { display: flex; flex-direction: column; gap: 3px; }
@@ -512,7 +545,7 @@ onMounted(() => loadBook(Number(route.params.bookId)))
 .type-controls button { border:1px solid rgba(111,71,33,.16); border-radius:6px; padding:4px 7px; background:rgba(255,255,255,.55); color:#6f4721; cursor:pointer; }
 .type-controls span { min-width:22px; text-align:center; font-size:11px; color:#887762; }
 .focus-reading { position:fixed; inset:0; z-index:2000; height:100vh; max-width:none; padding:10px; background:#eee8dd; }
-.focus-reading .reader-top { grid-template-columns:minmax(260px,1fr) auto minmax(340px,1fr); }
+.focus-reading .reader-top { border-radius:10px; }
 .artifact-loading { height: 240px; }
 .toc-editor { min-height: 280px; }
 .toc-audit-bar { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:12px; padding:12px 14px; border:1px solid #e5e7eb; border-radius:10px; background:#f7f2e9; box-shadow:0 1px 2px rgba(15,23,42,.06); }
@@ -522,6 +555,8 @@ onMounted(() => loadBook(Number(route.params.bookId)))
 .toc-editor-help { margin:10px 2px; }
 .toc-workspace-actions { display:flex; align-items:center; gap:10px; min-height:38px; color:var(--el-text-color-secondary); font-size:12px; }
 .toc-workspace-actions > span { flex:1; }
+.toc-missing-suggestions { display:flex; align-items:center; gap:7px; margin-bottom:10px; padding:8px 10px; overflow-x:auto; border:1px solid #ead6b8; border-radius:9px; background:#fff8ed; color:#766552; font-size:12px; white-space:nowrap; }
+.toc-missing-suggestions>span { color:var(--el-text-color-secondary); }
 .toc-workspace { display:grid; grid-template-columns:minmax(280px,.8fr) minmax(420px,1.3fr) minmax(300px,.85fr); gap:10px; height:570px; }
 .toc-tree-panel,.toc-page-panel,.toc-inspector-panel { min-width:0; overflow:hidden; border:1px solid #e5e7eb; border-radius:10px; background:#fbf8f1; box-shadow:0 1px 2px rgba(15,23,42,.06); }
 .toc-panel-title { display:flex; justify-content:space-between; align-items:center; height:40px; padding:0 12px; border-bottom:1px solid #e5e7eb; color:#635744; background:#e9e2d5; font-size:13px; font-weight:700; }
@@ -552,13 +587,22 @@ onMounted(() => loadBook(Number(route.params.bookId)))
 .toc-row-actions { white-space:nowrap; }
 .toc-revisions { margin-top:10px; }
 .privacy-tip { max-width: 520px; margin-top: 12px; color: var(--el-text-color-secondary); font-size: 12px; text-align: center; }
-@media (max-width: 1050px) {
-  .reader-top { grid-template-columns: 1fr auto; }
-  .reader-actions { grid-column: 1 / -1; justify-content: flex-start; }
+@media (max-width: 1280px) {
+  .reader-primary-row { align-items:flex-start; }
+  .reader-heading { max-width:none; }
+  .reader-actions .el-button:not(:last-child) { padding-inline:9px; }
+  .reader-secondary-row { overflow-x:auto; padding-bottom:2px; }
+  .reader-status-actions { white-space:nowrap; }
   .artifact-view { grid-template-columns: 190px minmax(0, 1fr); }
 }
+@media (max-width: 900px) {
+  .reader-primary-row { flex-direction:column; }
+  .reader-actions { width:100%; justify-content:flex-start; }
+  .reader-secondary-row { align-items:flex-start; flex-direction:column; overflow:visible; }
+  .reader-status-actions { width:100%; overflow-x:auto; justify-content:flex-start; padding-bottom:2px; }
+}
 @media (max-width: 720px) {
-  .reader-top { display: flex; align-items: flex-start; flex-direction: column; }
+  .reader-title { font-size:15px; }
   .artifact-view { grid-template-columns: 1fr; }
   .artifact-aside { display: none; }
   .artifact-content { padding: 20px 18px 60px; }

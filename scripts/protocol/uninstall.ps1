@@ -5,3 +5,4 @@ if (Test-Path -LiteralPath $rootKey) {
 } else {
     Write-Host "协议尚未注册"
 }
+# This script only changes the current user's URL protocol registration.

@@ -3,7 +3,7 @@
 $scheme = "study-assistant"
 $rootKey = "HKCU:\Software\Classes\$scheme"
 $commandKey = Join-Path $rootKey "shell\open\command"
-$handler = Join-Path $PSScriptRoot "protocol_handler.ps1"
+$handler = Join-Path $PSScriptRoot "handler.ps1"
 
 if (-not (Test-Path -LiteralPath $handler)) {
     throw "找不到协议处理器：$handler"

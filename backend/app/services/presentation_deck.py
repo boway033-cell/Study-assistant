@@ -226,9 +226,11 @@ async def _ai_outline(provider, title: str, paper_type: str, sources: list[dict]
     )
     prompt = f"""你是严谨的中文学术汇报编辑。论文类型：{PAPER_TYPE_LABELS[paper_type]}。
 受众：{options['audience']}；目的：{options['purpose']}；目标 {options['slide_count']} 页，{options['duration_minutes']} 分钟。
-按“为什么重要→知识缺口→作者做了什么→关键证据→可信度→意义/复用→边界”建立证据链。
+先确定整场汇报的一句核心结论，再按“为什么重要→知识缺口→作者做了什么→关键证据→可信度→意义/复用→边界”建立证据链；不要机械复刻论文目录。
 只使用下方来源。不得补造数字、因果关系、实验或结论；不确定就写“原文未说明”。
-每页只表达一个结论，中文短句，术语和数值逐字忠于来源。每个事实页必须列 source_ids。
+每页只有一个叙事职责和一个可直接讲出的主张；标题优先写结论，不写“研究背景”“结果分析”等空泛栏目名。
+中文短句，术语首次出现时可保留英文或缩写，后续称谓必须一致；数值逐字忠于来源。证据后紧跟它支持的意义，局限与外推边界必须显式呈现。
+不得把流程提示、编辑说明或证据不足的猜测写到观众可见页面。每个事实页必须列 source_ids。
 输出严格 JSON 数组，每项字段：title, kind(cover/content/evidence/limitations/summary), claim,
 bullets(0-4条，每条不超过45字), source_ids(只能引用给定ID)。封面可无来源。不要 markdown。
 
@@ -401,10 +403,14 @@ def render_pptx(path: Path, book: Book, profile: PaperProfile | None, outline: l
                 refs.append(f"{sid}" + (f" · p.{page}" if page else ""))
             _add_textbox(slide, Inches(.76), Inches(6.78), Inches(11.8), Inches(.28), "来源：" + "；".join(refs), Pt(9), (125,119,108))
         _add_textbox(slide, Inches(12.25), Inches(6.84), Inches(.45), Inches(.25), f"{idx+1:02d}", Pt(9), (125,119,108), True)
-        notes = [f"[Deck] {book.title}", f"[PaperType] {paper_type}", "[Sources]"]
+        notes = [f"[Deck] {book.title}", f"[PaperType] {paper_type}", f"[Claim] {item.get('claim', '')}", "[Sources]"]
         for sid in item.get("source_ids", []):
             src = source_map.get(sid, {})
-            notes.append(f"- {sid}; pages={src.get('page_start')}-{src.get('page_end')}")
+            locator = f"pages={src.get('page_start')}-{src.get('page_end')}"
+            if src.get("chapter_title"):
+                locator += f"; chapter={src.get('chapter_title')}"
+            excerpt = re.sub(r"\s+", " ", str(src.get("text") or "")).strip()[:360]
+            notes.append(f"- {sid}; {locator}\n  evidence: {excerpt}")
         try:
             slide.notes_slide.notes_text_frame.text = "\n".join(notes)
         except Exception:

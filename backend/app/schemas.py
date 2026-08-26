@@ -302,6 +302,10 @@ class KnowledgeTreeResp(BaseModel):
 class KnowledgeNodeCreateReq(BaseModel):
     parent_id: int | None = None
     title: str = Field(min_length=1, max_length=255)
+    book_id: int | None = None
+    chapter_id: int | None = None
+    note: str | None = None
+    node_type: str = "concept"
 
 
 class KnowledgeNodeUpdateReq(BaseModel):
@@ -382,6 +386,8 @@ class AnnotationCreateReq(BaseModel):
     anchor: AnnotationAnchor | None = None
     text: str | None = None
     color: str = "#f9e572"
+    mark_type: str = Field(default="highlight", pattern="^(highlight|underline)$")
+    origin: str = Field(default="user", pattern="^(user|ai)$")
     note: str | None = None
     knowledge_node_id: int | None = None
 
@@ -389,6 +395,7 @@ class AnnotationCreateReq(BaseModel):
 class AnnotationUpdateReq(BaseModel):
     note: str | None = None
     color: str | None = None
+    mark_type: str | None = Field(default=None, pattern="^(highlight|underline)$")
     knowledge_node_id: int | None = None
     page: int | None = Field(default=None, ge=0)
     rect_json: str | None = None
@@ -404,12 +411,50 @@ class AnnotationResp(BaseModel):
     rect_json: str
     text: str | None = None
     color: str
+    mark_type: str = "highlight"
+    origin: str = "user"
     note: str | None = None
     knowledge_node_id: int | None = None
     schema_version: int = 1
     anchor_json: str | None = None
     status: str = "active"
     created_at: datetime
+
+
+class EvidenceCardCreateReq(BaseModel):
+    book_id: int
+    chapter_id: int | None = None
+    page: int | None = Field(default=None, ge=1)
+    title: str = Field(min_length=1, max_length=255)
+    evidence_text: str = Field(min_length=1, max_length=12000)
+    claim_text: str | None = Field(default=None, max_length=6000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    origin: str = Field(default="user", pattern="^(user|ai)$")
+    verification_status: str = Field(default="needs_review", pattern="^(supported|partial|needs_review|unsupported)$")
+
+
+class EvidenceCardUpdateReq(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    evidence_text: str | None = Field(default=None, min_length=1, max_length=12000)
+    claim_text: str | None = Field(default=None, max_length=6000)
+    tags: list[str] | None = Field(default=None, max_length=20)
+    verification_status: str | None = Field(default=None, pattern="^(supported|partial|needs_review|unsupported)$")
+
+
+class KnowledgeNoteCreateReq(BaseModel):
+    book_id: int
+    chapter_id: int | None = None
+    page: int | None = Field(default=None, ge=1)
+    title: str = Field(min_length=1, max_length=255)
+    content: str = Field(default="", max_length=30000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    origin: str = Field(default="user", pattern="^(user|ai)$")
+
+
+class KnowledgeNoteUpdateReq(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    content: str | None = Field(default=None, max_length=30000)
+    tags: list[str] | None = Field(default=None, max_length=20)
 
 
 # ---------- AI 增强 ----------

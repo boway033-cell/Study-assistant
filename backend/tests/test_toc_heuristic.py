@@ -168,6 +168,39 @@ class TestTocHeuristic:
         assert len(repaired) == len(rows)  # 不凭空创建“二、”
         assert [row["level"] for row in repaired[:3]] == [1, 2, 3]
 
+    def test_screenshot_like_number_chains_are_blocked_for_review(self):
+        from backend.app.services.rag.toc_logic import analyze_toc_rows, auto_repair_toc_rows
+
+        rows = [
+            {"title": "1.4 公共管理的理论变迁", "level": 2, "page": 27},
+            {"title": "（1）公共行政研究的焦点", "level": 3, "page": 29},
+            {"title": "（4）公众需求发生改变", "level": 3, "page": 29},
+            {"title": "（7）决策方式变化", "level": 3, "page": 30},
+            {"title": "（4）关注公共行政", "level": 3, "page": 30},
+        ]
+        audit = analyze_toc_rows(rows)
+        assert [x["numbers"] for x in audit["missing_candidates"]] == [[2, 3], [5, 6]]
+        assert any(issue["type"] == "sequence_reversal" for issue in audit["issues"])
+        repaired, _ = auto_repair_toc_rows(rows)
+        assert repaired[2]["review_status"] == "needs_review"
+        assert "sequence_gap" in repaired[2]["review_issue_types"]
+
+    def test_restarted_chinese_parentheses_stay_same_level_and_need_review(self):
+        from backend.app.services.rag.toc_logic import analyze_toc_rows
+
+        rows = [
+            {"title": "四、案例深描", "level": 2, "page": 5},
+            {"title": "（一）共同缔造理念的发包", "level": 3, "page": 5},
+            {"title": "（二）理念接包", "level": 4, "page": 6},
+            {"title": "（三）循环实践", "level": 3, "page": 7},
+            {"title": "（一）名实相生", "level": 4, "page": 8},
+            {"title": "（二）基层社会治理", "level": 3, "page": 9},
+        ]
+        audit = analyze_toc_rows(rows)
+        # 即使来源把同组条目标成 3/4 级，编号体系必须统一为同一层。
+        assert len({item["inferred_level"] for item in audit["items"][1:]}) == 1
+        assert any(issue["type"] == "sequence_reversal" and issue["index"] == 4 for issue in audit["issues"])
+
     def test_same_page_misordered_child_continues_previous_parent(self):
         from backend.app.services.rag.toc_logic import analyze_toc_rows, auto_repair_toc_rows
 

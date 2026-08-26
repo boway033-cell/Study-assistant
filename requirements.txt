@@ -1,5 +1,5 @@
 # 学习助手（Study assistant）运行依赖 —— 锁定精确版本，保证不同电脑一致安装
-# start.bat 首次运行会自动执行：pip install -r requirements.txt
+# 首次运行前执行：pip install -r requirements.txt
 
 fastapi==0.141.1
 uvicorn[standard]==0.52.3

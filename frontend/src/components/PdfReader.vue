@@ -1,43 +1,64 @@
 <!-- PdfReader v2.1：本地渲染为底层（滚动/单页/双页、文本层、四色高亮+批注卡片、目录、位置记忆、深色），AI 为可选增强 -->
 <template>
   <div ref="rootEl" class="pdf-reader" :class="{ 'pr-dark': dark }">
-    <div class="pr-toolbar">
-      <el-button v-if="showToc" size="small" :type="showTocPanel ? 'primary' : ''" @click="showTocPanel = !showTocPanel">📑 目录</el-button>
-      <el-radio-group v-model="mode" size="small" class="pr-mode">
-        <el-radio-button value="scroll">连续</el-radio-button>
-        <el-radio-button value="single">单页</el-radio-button>
-        <el-radio-button value="double">双页</el-radio-button>
-      </el-radio-group>
-      <el-button-group>
-        <el-button size="small" :disabled="page <= 1" @click="goPage(-1)">上一页</el-button>
-        <el-button size="small" :disabled="page >= numPages" @click="goPage(1)">下一页</el-button>
-      </el-button-group>
-      <span class="pr-pageinfo">
-        <el-input-number v-model="page" :min="1" :max="numPages || 1" size="small" controls-position="right" style="width: 100px" @change="onPageInput" />
-        <span class="pr-total">/ {{ numPages || '…' }} 页</span>
-      </span>
-      <el-button-group>
-        <el-button size="small" @click="zoomBy(-0.15)">−</el-button>
+    <div class="pr-toolbar" aria-label="PDF 阅读控制栏">
+      <div class="pr-toolbar-group pr-view-controls">
+        <el-button v-if="showToc" size="small" :type="showTocPanel ? 'primary' : ''" @click="toggleTocPanel">📑 <span class="pr-control-label">文档导航</span></el-button>
+        <el-radio-group v-model="mode" size="small" class="pr-mode" aria-label="翻页方式">
+          <el-radio-button value="scroll">连续</el-radio-button>
+          <el-radio-button value="single">单页</el-radio-button>
+          <el-radio-button value="double">双页</el-radio-button>
+        </el-radio-group>
+      </div>
+      <div class="pr-toolbar-group pr-page-controls">
+        <el-button size="small" aria-label="上一页" :disabled="page <= 1" @click="goPage(-1)">←</el-button>
+        <span class="pr-pageinfo">
+          <el-input-number v-model="page" :min="1" :max="numPages || 1" size="small" controls-position="right" aria-label="当前页" @change="onPageInput" />
+          <span class="pr-total">/ {{ numPages || '…' }} 页</span>
+        </span>
+        <el-button size="small" aria-label="下一页" :disabled="page >= numPages" @click="goPage(1)">→</el-button>
+      </div>
+      <div class="pr-toolbar-group pr-display-controls">
+        <el-button size="small" aria-label="缩小" @click="zoomBy(-0.15)">−</el-button>
         <span class="pr-zoom">{{ Math.round(scale * 100) }}%</span>
-        <el-button size="small" @click="zoomBy(0.15)">＋</el-button>
+        <el-button size="small" aria-label="放大" @click="zoomBy(0.15)">＋</el-button>
         <el-button size="small" @click="fitWidth">适应宽</el-button>
         <el-button size="small" @click="fitPage">适应页</el-button>
-        <el-button size="small" :type="dark ? 'primary' : ''" @click="dark = !dark">{{ dark ? '☀️' : '🌙' }}</el-button>
-      </el-button-group>
-      <template v-if="bookId && showAi">
-        <el-button size="small" type="warning" plain @click="analyzePage">🤖 解读本页</el-button>
-        <el-button size="small" type="success" plain @click="summarizeChapter" :loading="aiBusy">{{ aiBusy ? '生成中…' : '📝 总结本章' }}</el-button>
-      </template>
-      <el-button v-if="bookId" size="small" @click="showAnnPanel = true">🖍 标注({{ annotations.length }})</el-button>
+        <el-button size="small" :type="dark ? 'primary' : ''" :aria-label="dark ? '切换浅色阅读' : '切换深色阅读'" @click="dark = !dark">{{ dark ? '☀️' : '🌙' }}</el-button>
+      </div>
+      <div v-if="bookId" class="pr-toolbar-group pr-research-controls pr-research-full">
+        <template v-if="showAi">
+          <el-button size="small" type="warning" plain @click="analyzePage">解读本页</el-button>
+          <el-button size="small" type="success" plain :loading="aiBusy" @click="summarizeChapter">{{ aiBusy ? '生成中…' : '总结本章' }}</el-button>
+        </template>
+        <el-button size="small" @click="showAnnPanel = true">标注 {{ annotations.length }}</el-button>
+      </div>
+      <el-dropdown v-if="bookId" trigger="click" class="pr-research-menu">
+        <el-button size="small">研究工具⌄</el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item v-if="showAi" @click="analyzePage">解读本页</el-dropdown-item>
+            <el-dropdown-item v-if="showAi" :disabled="aiBusy" @click="summarizeChapter">总结本章</el-dropdown-item>
+            <el-dropdown-item divided @click="showAnnPanel = true">查看标注（{{ annotations.length }}）</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
     </div>
 
     <div class="pr-body-wrap">
-      <aside v-if="showToc && showTocPanel" class="pr-toc">
-        <div class="pr-toc-title">目录</div>
-        <div v-for="t in toc" :key="t.id" class="pr-toc-item"
-          :style="{ paddingLeft: (t.level - 1) * 14 + 8 + 'px' }"
-          :class="{ active: t.start_page === page }"
-          @click="jumpToPage(t.start_page)">{{ t.title }}</div>
+      <aside v-if="showToc && showTocPanel" class="pr-toc" aria-label="文档导航">
+        <div class="pr-toc-title"><span>文档目录</span><small>{{ toc.length }} 项</small></div>
+        <div v-if="toc.length" class="pr-toc-list">
+          <button v-for="t in toc" :key="t.id" class="pr-toc-item"
+            :style="{ paddingLeft: (Math.max(1, t.level) - 1) * 14 + 12 + 'px' }"
+            :class="{ active: t.start_page === page }"
+            :title="t.title" @click="jumpToPage(t.start_page)"><span>{{ t.title }}</span><small>{{ t.start_page }}</small></button>
+        </div>
+        <div v-else class="pr-toc-empty">
+          <b>尚未识别到目录</b>
+          <span>可继续阅读，或进入目录工作台检查结构。</span>
+        </div>
+        <button class="pr-toc-review" type="button" @click="emit('request-toc-review')">校正目录结构</button>
       </aside>
 
       <div ref="scroller" class="pr-body" :class="'pr-mode-' + mode"
@@ -52,6 +73,7 @@
             本页渲染失败，点击重试
           </button>
           <div v-for="(st, i) in hlStyles(p)" :key="st.id + '-' + i" class="pr-hl"
+            :class="'pr-hl-' + st.markType"
             :style="st.style" :title="st.ann.text || ''" />
         </div>
         <div v-if="loading" class="pr-loading" v-loading="true" element-loading-text="正在渲染原文…" />
@@ -64,17 +86,25 @@
       <el-button size="small" type="primary" @click="aiAction('explain')">💡 解释</el-button>
       <el-button size="small" type="success" @click="aiAction('translate')">🌐 翻译</el-button>
       <el-button v-if="reanchorId" size="small" type="danger" @click="saveReanchor">更新批注位置</el-button>
-      <el-button v-else size="small" type="warning" @click="openAnnCard('create')">🖍 高亮</el-button>
+      <template v-else>
+        <el-button size="small" type="warning" @click="saveQuickMark('highlight')">高亮</el-button>
+        <el-button size="small" @click="saveQuickMark('underline')">划线</el-button>
+        <el-button size="small" type="primary" plain @click="openAnnCard('create')">批注</el-button>
+      </template>
     </div>
 
     <!-- 批注卡片（创建/编辑） -->
     <div v-if="annCard.visible" class="pr-ann-card">
       <div class="ann-card-title">{{ annCard.mode === 'edit' ? '编辑批注' : '添加批注' }}</div>
+      <el-radio-group v-model="annCard.markType" size="small" class="ann-mark-types">
+        <el-radio-button value="highlight">高亮</el-radio-button>
+        <el-radio-button value="underline">划线</el-radio-button>
+      </el-radio-group>
       <div class="ann-colors">
         <span v-for="c in COLORS" :key="c" class="ann-color"
           :class="{ active: annCard.color === c }" :style="{ background: c }" @click="annCard.color = c" />
       </div>
-      <el-input v-model="annCard.note" type="textarea" :rows="2" size="small" placeholder="写笔记…" />
+      <el-input v-model="annCard.note" type="textarea" :rows="2" size="small" placeholder="批注可选；留空也能保存" />
       <el-select v-model="annCard.knowledgeNodeId" placeholder="挂到知识树节点（可选）" clearable size="small" style="width: 100%; margin-top: 6px">
         <el-option v-for="n in nodeOptions" :key="n.id" :label="n.label" :value="n.id" />
       </el-select>
@@ -105,7 +135,8 @@
       <div v-if="!annotations.length" class="form-tip">还没有标注：在正文中选中文字 → 点「🖍 高亮」即可添加</div>
       <div v-for="a in annotations" :key="a.id" class="ann-item">
         <div class="ann-head">
-          <span class="ann-dot" :style="{ background: a.color }"></span>
+          <span class="ann-dot" :class="{ underline: a.mark_type === 'underline' }" :style="{ '--ann-color': a.color, background: a.mark_type === 'underline' ? 'transparent' : a.color }"></span>
+          <el-tag size="small" effect="plain">{{ a.mark_type === 'underline' ? '划线' : (a.note ? '批注' : '高亮') }}</el-tag>
           <el-tag size="small" type="warning">第 {{ a.page }} 页</el-tag>
           <el-button link size="small" @click="jumpToPage(a.page)">跳转</el-button>
           <el-button link size="small" @click="openAnnCard('edit', a)">编辑</el-button>
@@ -135,7 +166,7 @@ import {
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
 
-const emit = defineEmits(['page-change'])
+const emit = defineEmits(['page-change', 'request-toc-review'])
 const COLORS = ['#f9e572', '#9be5a0', '#8ec8f5', '#f5b8c8']  // 黄/绿/蓝/粉
 
 const props = defineProps({
@@ -158,7 +189,8 @@ const scale = ref(1.1)
 const dark = ref(false)
 const loading = ref(false)
 const errorMsg = ref('')
-const showTocPanel = ref(false)
+const showTocPanel = ref(props.showToc)
+const tocPanelTouched = ref(false)
 const pageList = ref([])
 
 // 非连续模式只保留当前页/跨页 DOM，避免数百页空 canvas 常驻内存。
@@ -185,6 +217,15 @@ const ocrStates = ref({})
 const showAnnPanel = ref(false)
 const nodeOptions = ref([])
 
+const toggleTocPanel = () => {
+  tocPanelTouched.value = true
+  showTocPanel.value = !showTocPanel.value
+}
+
+watch(() => props.toc.length, (length) => {
+  if (props.showToc && length && !tocPanelTouched.value) showTocPanel.value = true
+})
+
 // AI 状态
 const aiPanel = ref(false)
 const aiTitle = ref('AI 解读')
@@ -200,7 +241,7 @@ let pendingSel = null   // AI 解释后保存为批注用的选区快照
 const reanchorId = ref(null)
 
 // 批注卡片
-const annCard = ref({ visible: false, mode: 'create', page: 1, anchor: null, text: '', color: COLORS[0], note: '', knowledgeNodeId: null, editingId: null })
+const annCard = ref({ visible: false, mode: 'create', page: 1, anchor: null, text: '', color: COLORS[0], markType: 'highlight', note: '', knowledgeNodeId: null, editingId: null })
 
 let pdfDoc = null
 let renderTasks = {}
@@ -600,12 +641,13 @@ const hlStyles = (p) => {
       out.push({
         id: a.id,
         ann: a,
+        markType: a.mark_type || 'highlight',
         style: {
           left: (r.x * 100) + '%',
-          top: (r.y * 100) + '%',
+          top: (((a.mark_type || 'highlight') === 'underline' ? r.y + r.h : r.y) * 100) + '%',
           width: (r.w * 100) + '%',
           height: (r.h * 100) + '%',
-          background: (a.color || COLORS[0]) + '99',
+          '--mark-color': a.color || COLORS[0],
         },
       })
     }
@@ -681,13 +723,14 @@ const openAnnCard = (modeName, ann = null, ev = null) => {
       visible: true, mode: 'edit', page: ann.page,
       anchor: null, text: ann.text || '',
       color: ann.color || COLORS[0], note: ann.note || '',
+      markType: ann.mark_type || 'highlight',
       knowledgeNodeId: ann.knowledge_node_id || null, editingId: ann.id,
     }
   } else {
     annCard.value = {
       visible: true, mode: 'create', page: selPage,
       anchor: selAnchor, text: selText || '',
-      color: COLORS[0], note: '', knowledgeNodeId: null, editingId: null,
+      color: COLORS[0], markType: 'highlight', note: '', knowledgeNodeId: null, editingId: null,
     }
   }
   window.getSelection()?.removeAllRanges()
@@ -697,7 +740,7 @@ const saveAnnCard = async () => {
   const c = annCard.value
   if (c.mode === 'edit') {
     try {
-      await updateAnnotation(c.editingId, { note: c.note, color: c.color, knowledge_node_id: c.knowledgeNodeId || null })
+      await updateAnnotation(c.editingId, { note: c.note, color: c.color, mark_type: c.markType, knowledge_node_id: c.knowledgeNodeId || null })
       ElMessage.success('批注已保存')
     } catch (e) { ElMessage.error(e.message) }
   } else {
@@ -707,13 +750,28 @@ const saveAnnCard = async () => {
     try {
       await createAnnotation(props.bookId, {
         page: first.page, rect_json: JSON.stringify(first.rects), anchor: c.anchor, text: c.text,
-        color: c.color, note: c.note || '', knowledge_node_id: c.knowledgeNodeId || null,
+        color: c.color, mark_type: c.markType, note: c.note || '', knowledge_node_id: c.knowledgeNodeId || null,
       })
-      ElMessage.success('已添加高亮')
+      ElMessage.success(c.note ? '批注已保存' : (c.markType === 'underline' ? '已添加划线' : '已添加高亮'))
     } catch (e) { ElMessage.error(e.message) }
   }
   annCard.value.visible = false
   loadAnnotations()
+}
+
+const saveQuickMark = async (markType) => {
+  selToolbar.value = false
+  if (!props.bookId || !selAnchor?.segments?.length) return ElMessage.warning('没有可保存的文字位置')
+  const first = selAnchor.segments[0]
+  try {
+    await createAnnotation(props.bookId, {
+      page: first.page, rect_json: JSON.stringify(first.rects), anchor: selAnchor,
+      text: selText, color: COLORS[0], mark_type: markType, note: '', origin: 'user',
+    })
+    window.getSelection()?.removeAllRanges()
+    await loadAnnotations()
+    ElMessage.success(markType === 'underline' ? '已添加划线' : '已添加高亮')
+  } catch (e) { ElMessage.error(e.message) }
 }
 
 const deleteAnnFromCard = async () => {
@@ -812,6 +870,7 @@ const saveAiAsAnnotation = async () => {
       anchor: pendingSel.anchor,
       text: pendingSel.text,
       color: COLORS[0],
+      mark_type: 'highlight', origin: 'ai',
       note: '💡 AI 解读：' + aiResult.value.slice(0, 1500),
       knowledge_node_id: null,
     })
@@ -910,26 +969,51 @@ onBeforeUnmount(() => {
 .pr-page-retry { position:absolute; inset:50% auto auto 50%; transform:translate(-50%,-50%); z-index:4; padding:8px 12px; border:1px solid #e5e7eb; border-radius:8px; background:rgba(255,255,255,.94); color:#8b5a2b; box-shadow:0 1px 2px rgba(15,23,42,.08); cursor:pointer; }
 .pr-page-retry:hover { transform:translate(-50%,-52%); box-shadow:0 4px 12px rgba(15,23,42,.12); }
 .pr-toolbar {
-  display: flex; align-items: center; gap: 8px; padding: 6px 10px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px; flex-wrap: nowrap; overflow-x:auto;
   background: var(--el-fill-color-lighter); border-radius: 8px 8px 0 0;
   border: 1px solid var(--el-border-color-extra-light);
 }
+.pr-toolbar-group { display:flex; align-items:center; gap:6px; flex:none; }
+.pr-toolbar-group + .pr-toolbar-group { padding-left:10px; border-left:1px solid var(--el-border-color-lighter); }
+.pr-page-controls { margin-left:auto; }
+.pr-research-controls { margin-left:auto; }
+.pr-research-menu { display:none; flex:none; margin-left:auto; }
 .pr-mode :deep(.el-radio-button__inner) { padding: 6px 10px; font-size: 12px; }
 .pr-pageinfo { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--el-text-color-secondary); }
+.pr-pageinfo :deep(.el-input-number) { width:82px; }
 .pr-total { white-space: nowrap; }
 .pr-zoom { font-size: 12px; color: var(--el-text-color-secondary); min-width: 44px; text-align: center; }
 .pr-body-wrap { display: flex; flex: 1; min-height: 300px; overflow: hidden; border: 1px solid var(--el-border-color-extra-light); border-radius: 0 0 8px 8px; }
-.pr-toc { width: 180px; flex-shrink: 0; overflow-y: auto; background: #f6f9fb; border-right: 1px solid var(--el-border-color-extra-light); padding: 6px 0; }
-.pr-toc-title { font-weight: 600; font-size: 12px; padding: 4px 10px; color: var(--el-text-color-primary); }
-.pr-toc-item { font-size: 12px; padding: 4px 8px; cursor: pointer; color: var(--el-text-color-regular); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pr-toc { width:clamp(250px,22vw,320px); flex-shrink:0; display:flex; flex-direction:column; overflow:hidden; background:var(--study-surface-paper); border-right:1px solid var(--el-border-color-extra-light); }
+.pr-toc-title { display:flex; align-items:center; justify-content:space-between; min-height:40px; padding:8px 12px; border-bottom:1px solid var(--el-border-color-lighter); color:var(--el-text-color-primary); font-size:13px; font-weight:700; }
+.pr-toc-title small { color:var(--el-text-color-secondary); font-weight:400; }
+.pr-toc-list { flex:1; overflow-y:auto; padding:6px; }
+.pr-toc-item { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; width:100%; min-height:34px; padding-top:7px; padding-right:8px; padding-bottom:7px; border:0; border-radius:7px; background:transparent; color:var(--el-text-color-regular); font-size:13px; line-height:1.45; text-align:left; cursor:pointer; }
+.pr-toc-item span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pr-toc-item small { flex:none; color:var(--el-text-color-placeholder); font:12px Georgia,serif; }
 .pr-toc-item:hover { background: var(--el-color-primary-light-9); }
 .pr-toc-item.active { background: var(--el-color-primary-light-8); color: var(--el-color-primary); font-weight: 600; }
+.pr-toc-empty { display:flex; flex:1; flex-direction:column; justify-content:center; gap:7px; padding:20px; color:var(--el-text-color-secondary); text-align:center; }
+.pr-toc-empty b { color:var(--el-text-color-primary); }
+.pr-toc-review { margin:8px; padding:8px 10px; border:1px solid var(--el-border-color); border-radius:8px; background:#fffaf2; color:var(--el-color-primary); cursor:pointer; }
 .pr-body { position: relative; flex: 1; overflow: auto; padding: 10px 14px; background: #525659; }
 .pr-body.pr-mode-scroll, .pr-body.pr-mode-single { text-align: center; }
 .pr-body.pr-mode-double { text-align: center; white-space: nowrap; }
 .pr-page { position: relative; box-shadow: 0 2px 10px rgba(0,0,0,.4); background: #fff; }
 .pr-mode-scroll .pr-page, .pr-mode-single .pr-page { display: block; margin: 0 auto 10px; }
 .pr-mode-double .pr-page { display: inline-block; vertical-align: top; margin: 0 4px; }
+@media (max-width:1400px) {
+  .pr-research-full { display:none; }
+  .pr-research-menu { display:inline-flex; }
+}
+@media (max-width:1280px) {
+  .pr-control-label { display:none; }
+  .pr-research-controls { margin-left:0; }
+  .pr-display-controls .el-button:nth-of-type(3),.pr-display-controls .el-button:nth-of-type(4) { display:none; }
+}
+@media (max-width:820px) {
+  .pr-toc { position:absolute; inset:43px auto 0 0; z-index:8; width:min(82vw,320px); box-shadow:6px 0 18px rgba(15,23,42,.16); }
+}
 .pr-canvas { display: block; }
 .text-layer {
   position: absolute; inset: 0; overflow: clip; line-height: 1; cursor: text;
@@ -950,6 +1034,8 @@ onBeforeUnmount(() => {
 }
 .text-layer :deep(span::selection) { background: rgba(59, 130, 246, 0.4); }
 .pr-hl { position: absolute; z-index: 2; border-radius: 2px; pointer-events: none; }
+.pr-hl-highlight { background:var(--mark-color); opacity:.24; mix-blend-mode:multiply; }
+.pr-hl-underline { height:0!important; margin-top:-2px; border-bottom:2px solid var(--mark-color); border-radius:0; }
 .pr-hl:hover { outline: 1px solid #c45656; }
 .pr-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .pr-error { color: #ffd9a0; padding: 20px; font-size: 13px; }
@@ -968,6 +1054,7 @@ onBeforeUnmount(() => {
 .pr-ocr-state { position:absolute; right:8px; top:8px; z-index:3; padding:3px 7px; border-radius:10px; background:rgba(15,23,42,.72); color:#fff; font-size:11px; pointer-events:none; }
 .pr-ocr-state.ready { opacity:.55; }
 .ann-card-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.ann-mark-types { margin-bottom:8px; }
 .ann-colors { display: flex; gap: 6px; margin-bottom: 8px; }
 .ann-color { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
 .ann-color.active { border-color: #3e7fa3; }
@@ -978,6 +1065,7 @@ onBeforeUnmount(() => {
 .ann-item { padding: 10px; border: 1px solid var(--el-border-color-extra-light); border-radius: 8px; margin-bottom: 8px; }
 .ann-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .ann-dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.ann-dot.underline { height:8px; border-bottom:2px solid var(--ann-color); border-radius:0; }
 .ann-text { font-size: 13px; color: var(--el-text-color-regular); margin-bottom: 4px; }
 .ann-note { font-size: 12px; color: var(--el-text-color-secondary); }
 .form-tip { color: var(--el-text-color-secondary); font-size: 12px; }

@@ -1,4 +1,4 @@
-# Compatibility wrapper for the workspace-safe stopper.
+# Compatibility wrapper for the workspace-safe runtime stopper.
 if ($PSScriptRoot) {
     $baseDir = $PSScriptRoot
 } else {

@@ -1,4 +1,5 @@
 # 可选版面检测环境；建议安装到独立虚拟环境，并通过 PP_DOCLAYOUT_PYTHON 指向其 Python。
+# 安装：pip install -r requirements/pp-doclayout.txt
 # 只调用 LayoutDetection + PP-DocLayout-M，不安装/启动 PP-StructureV3 完整流水线。
 paddleocr==3.7.0
 onnxruntime==1.28.0

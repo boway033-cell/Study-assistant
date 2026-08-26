@@ -1,11 +1,11 @@
 ﻿# 学习助手 - 一键稳定启动（后台常驻，无控制台窗口，日志写文件）
 param([string]$TargetUri = "")
 
-$root = $PSScriptRoot
+$root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
 $port = 8000
 $pidFile = Join-Path $root "server.pid"
 $py = Join-Path $root ".venv\Scripts\pythonw.exe"
-$runner = Join-Path $root "server_runner.py"
+$runner = Join-Path $PSScriptRoot "server_runner.py"
 
 function Test-StudyAssistant([int]$candidatePort) {
     try {

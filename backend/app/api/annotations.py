@@ -19,6 +19,8 @@ def _to_resp(a: Annotation) -> AnnotationResp:
     return AnnotationResp(
         id=a.id, book_id=a.book_id, page=a.page, rect_json=a.rect_json,
         text=a.text, color=a.color, note=a.note,
+        mark_type=getattr(a, "mark_type", "highlight") or "highlight",
+        origin=getattr(a, "origin", "user") or "user",
         knowledge_node_id=a.knowledge_node_id,
         schema_version=getattr(a, "schema_version", 1) or 1,
         anchor_json=getattr(a, "anchor_json", None),
@@ -101,18 +103,14 @@ def create_annotation(book_id: int, req: AnnotationCreateReq, db: Session = Depe
     if not book:
         raise HTTPException(404, "书籍不存在")
     page, rect_json, anchor_json, schema_version = _anchor_payload(req, book)
-    # 批注自动回流知识树：未显式指定节点时，用笔记/原文自动创建知识树节点并关联
+    # 标注与知识树是不同数据类型：只有用户显式指定/提升时才建立关联。
     node_id = req.knowledge_node_id
-    if node_id is None:
-        seed = (req.note or req.text or "").strip()
-        if seed:
-            node = KnowledgeNode(title=seed[:40] or "批注", book_id=book_id, node_type="note", note=seed[:500])
-            db.add(node)
-            db.flush()
-            node_id = node.id
+    if node_id is not None and not db.get(KnowledgeNode, node_id):
+        raise HTTPException(404, "知识树节点不存在")
     a = Annotation(
         book_id=book_id, page=page, rect_json=rect_json,
         text=req.text, color=req.color, note=req.note,
+        mark_type=req.mark_type, origin=req.origin,
         knowledge_node_id=node_id, schema_version=schema_version,
         anchor_json=anchor_json, status="active",
     )
@@ -131,6 +129,8 @@ def update_annotation(annotation_id: int, req: AnnotationUpdateReq, db: Session 
         a.note = req.note
     if req.color is not None:
         a.color = req.color
+    if req.mark_type is not None:
+        a.mark_type = req.mark_type
     if req.knowledge_node_id is not None:
         a.knowledge_node_id = req.knowledge_node_id
     if req.text is not None:

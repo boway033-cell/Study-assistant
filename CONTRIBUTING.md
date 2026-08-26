@@ -4,7 +4,7 @@
 
 ## 环境
 
-- Python 3.12+，运行依赖见 `requirements.txt`，测试依赖见 `requirements-dev.txt`
+- Python 3.12+，运行依赖见 `requirements.txt`，测试依赖见 `requirements/dev.txt`
 - 前端：`cd frontend && npm install`
 
 ## 提交前

@@ -47,7 +47,7 @@ MinerU 不再作为标准安装或默认导入依赖。默认链路为：
 - 不实例化 `PPStructureV3`，不加载 OCR、公式、图表、表格识别子管线；
 - CPU 线程默认 2、批量固定 1、输入边长默认 960；
 - 以独立子进程运行，完成后退出；模型只下载和缓存一次；
-- 建议用独立环境安装 `requirements-pp-doclayout.txt`，通过 `PP_DOCLAYOUT_PYTHON` 指向它；
+- 建议用独立环境安装 `requirements/pp-doclayout.txt`，通过 `PP_DOCLAYOUT_PYTHON` 指向它；
 - 启动前要求至少 3 GB 可用内存；资源不足或可选环境不存在时自动回退内置分析。
 
 模型输出只能为已有原文块增加角色标签，不能采用模型生成的替代文本。
@@ -58,7 +58,7 @@ Windows 可选安装示例：
 
 ```powershell
 py -3.12 -m venv .pp-doclayout-venv
-.\.pp-doclayout-venv\Scripts\python.exe -m pip install -r requirements-pp-doclayout.txt
+.\.pp-doclayout-venv\Scripts\python.exe -m pip install -r requirements/pp-doclayout.txt
 ```
 
 环境位于项目内时会自动发现；放在其他位置则在 `.env` 设置 `PP_DOCLAYOUT_PYTHON`。
