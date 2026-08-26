@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install deps
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -r requirements/dev.txt
       - name: Unit tests
         run: python -m pytest -q
 
