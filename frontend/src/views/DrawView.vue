@@ -1,5 +1,5 @@
 <template>
-  <div class="draw-page">
+  <div class="draw-page study-page">
     <el-row :gutter="16">
       <!-- Left: AI Agent Panel -->
       <el-col :span="7">
@@ -77,16 +77,16 @@
           <div v-else-if="hasDiagram" class="diagram-container">
             <div class="diagram-canvas" v-html="renderedSvg"></div>
           </div>
-          <el-empty v-else description="在左侧输入描述，AI 将为你生成流程图、架构图或思维导图" :image-size="100">
-            <div class="empty-tips">
+          <StudyEmptyState v-else title="描述需要表达的关系" description="可选择书目作为来源，再生成流程图、架构图、思维导图、ER 图或组织结构。">
+            <template #actions><div class="empty-tips">
               <p>💡 支持的图表类型：</p>
               <el-tag size="small" type="info" style="margin: 2px">流程图</el-tag>
               <el-tag size="small" type="success" style="margin: 2px">架构图</el-tag>
               <el-tag size="small" type="warning" style="margin: 2px">思维导图</el-tag>
               <el-tag size="small" type="danger" style="margin: 2px">ER 图</el-tag>
               <el-tag size="small" style="margin: 2px">组织架构</el-tag>
-            </div>
-          </el-empty>
+            </div></template>
+          </StudyEmptyState>
         </el-card>
       </el-col>
     </el-row>
@@ -99,6 +99,7 @@ import { ElMessage } from 'element-plus'
 import { drawGenerate, drawModify, listBooks } from '../api'
 import { escapeXml, safeSvgColor } from '../utils/diagram'
 import { sanitizeSvg } from '../utils/markdown'
+import StudyEmptyState from '../components/StudyEmptyState.vue'
 
 const description = ref('')
 const books = ref([])
@@ -319,7 +320,7 @@ function getStyleColor(style, key, fallback) {
 </script>
 
 <style scoped>
-.draw-page { height: calc(100vh - 120px); }
+.draw-page { height: calc(100vh - 76px); }
 .agent-card { height: 100%; display: flex; flex-direction: column; }
 .agent-header { display: flex; align-items: center; gap: 8px; }
 .agent-input-section { margin-bottom: 8px; }
@@ -349,4 +350,7 @@ function getStyleColor(style, key, fallback) {
 .diagram-canvas { display: flex; justify-content: center; }
 .empty-tips { margin-top: 16px; text-align: center; }
 .empty-tips p { color: var(--el-text-color-secondary); font-size: 13px; margin-bottom: 8px; }
+.draw-page :deep(.el-row),.draw-page :deep(.el-col){height:100%}.agent-card,.preview-card{border-radius:var(--study-radius-md)}
+@media(max-width:1050px){.draw-page{height:auto}.draw-page :deep(.el-row){display:grid;grid-template-columns:minmax(280px,.7fr) minmax(0,1.3fr);gap:10px;margin:0!important}.draw-page :deep(.el-col){width:auto;max-width:none;padding:0!important}.diagram-container{min-height:560px}}
+@media(max-width:760px){.draw-page :deep(.el-row){grid-template-columns:1fr}.diagram-container{min-height:420px}.preview-actions{flex-wrap:wrap}}
 </style>

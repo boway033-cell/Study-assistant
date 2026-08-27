@@ -30,6 +30,19 @@ def _migrate():
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_books_file_hash ON books(file_hash)"))
             if "duplicate_of" not in cols:
                 conn.execute(text("ALTER TABLE books ADD COLUMN duplicate_of INTEGER"))
+            # 文献档案的发布、可见性与元数据可信度由用户明确维护，不再从题名推断。
+            try:
+                profile_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(paper_profiles)")).fetchall()]
+                for col, ddl in (
+                    ("publication_status", "VARCHAR(24) NOT NULL DEFAULT 'unknown'"),
+                    ("visibility", "VARCHAR(20) NOT NULL DEFAULT 'private'"),
+                    ("demo_allowed", "INTEGER NOT NULL DEFAULT 0"),
+                    ("metadata_confidence", "FLOAT NOT NULL DEFAULT 0.0"),
+                ):
+                    if col not in profile_cols:
+                        conn.execute(text(f"ALTER TABLE paper_profiles ADD COLUMN {col} {ddl}"))
+            except Exception:  # noqa: BLE001
+                pass
             # 知识树节点新列（类型/掌握度/跨树引用）
             for col, ddl in (("node_type", "VARCHAR(20) DEFAULT 'concept'"), ("mastery", "VARCHAR(10) DEFAULT 'unknown'"), ("ref_node_id", "INTEGER")):
                 try:
@@ -69,6 +82,7 @@ def _migrate():
             try:
                 conn.execute(text("UPDATE import_tasks SET status='pending', message='服务重启，自动恢复' WHERE status='running' AND name IN ('import','reimport')"))
                 conn.execute(text("UPDATE import_tasks SET status='failed', error='服务重启，请重新生成', message='任务已中断' WHERE status IN ('pending','running') AND name NOT IN ('import','reimport')"))
+                conn.execute(text("UPDATE import_tasks SET status='cancelled', message='任务已取消' WHERE status='cancelling'"))
             except Exception:  # noqa: BLE001
                 pass
             try:

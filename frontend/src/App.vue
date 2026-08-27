@@ -1,14 +1,14 @@
 <template>
-  <el-container class="layout">
-    <el-aside :width="sidebarCollapsed ? '76px' : '224px'" class="aside desktop-aside">
+  <el-container class="layout" :class="{ 'is-reader-layout': $route.name === 'reader' }">
+    <el-aside :width="$route.name === 'reader' || sidebarCollapsed ? '76px' : '224px'" class="aside desktop-aside">
       <div class="logo">
         <span class="logo-dew">💧</span>
-        <div v-if="!sidebarCollapsed" class="logo-text">
+        <div v-if="$route.name !== 'reader' && !sidebarCollapsed" class="logo-text">
           <span class="logo-title">Study assistant</span>
           <span class="logo-sub">{{ term.name }} · {{ dateStr }}</span>
         </div>
       </div>
-      <AppNavigation :collapsed="sidebarCollapsed" />
+      <AppNavigation :collapsed="$route.name === 'reader' || sidebarCollapsed" />
       <div class="aside-footer">
         <div class="dew-dot" v-for="i in 3" :key="i" :style="{ left: 24 + i * 44 + 'px', animationDelay: i * 0.6 + 's' }"></div>
         <span class="aside-poem">{{ term.name }} · {{ dateStr }}</span>
@@ -74,7 +74,7 @@ const showKeyGuide = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
 const mobileNav = ref(false)
 const taskDrawerOpen = ref(false)
-const activeTaskCount = computed(() => taskCenter.items.filter((task) => ['pending', 'running'].includes(task.status)).length)
+const activeTaskCount = computed(() => taskCenter.items.filter((task) => ['pending', 'running', 'cancelling'].includes(task.status)).length)
 const term = getSolarTerm()
 const dateStr = (() => {
   const d = new Date()
@@ -178,8 +178,9 @@ html, body, #app { height: 100%; }
   border-radius: 10px;
 }
 .menu .el-menu-item.is-active {
-  background: rgba(245, 240, 232, 0.14);
-  color: #F5F0E8;
+  background: rgba(185, 138, 88, .2);
+  color: #f2d4ad;
+  box-shadow: inset 3px 0 0 #b98a58;
   border-right: none;
   font-weight: 600;
 }
@@ -218,6 +219,7 @@ html, body, #app { height: 100%; }
 /* —— 页头：白露晨光 —— */
 .header {
   display: flex; align-items: center; justify-content: space-between;
+  height: 48px;
   border-bottom: 1px solid var(--el-border-color-light);
   background: var(--bailu-header-bg);
   padding: 0 20px;
@@ -238,6 +240,11 @@ html, body, #app { height: 100%; }
 
 @media (max-width: 820px) {
   .desktop-aside{display:none}.collapse-button,.header-slogan{display:none}.mobile-menu{display:inline-flex}.header{padding:0 10px}.main{padding:8px}.task-badge{margin-right:8px}.task-button{padding:7px 10px}.page-title{font-size:15px}.mobile-drawer .el-drawer__body{padding:0;background:var(--bailu-bg-gradient)}
+}
+@media (max-width: 1180px) {
+  .layout.is-reader-layout .desktop-aside { display:none; }
+  .layout.is-reader-layout .collapse-button { display:none; }
+  .layout.is-reader-layout .mobile-menu { display:inline-flex; }
 }
 
 /* —— Markdown 排版层级（H1 醒目 / 层级分明 / 行高舒适） —— */

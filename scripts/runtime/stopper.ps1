@@ -1,6 +1,7 @@
 ﻿# Study Assistant - Stop Service (only a verified process owned by this workspace)
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
 $pidFile = Join-Path $root "server.pid"
+$runtimeUrlFile = Join-Path $root "backend\data\runtime\server.url"
 $candidateIds = @()
 if (Test-Path -LiteralPath $pidFile) {
     $stored = Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -21,4 +22,5 @@ foreach ($candidateId in ($candidateIds | Sort-Object -Unique)) {
     $stopped = $true
 }
 Remove-Item -LiteralPath $pidFile -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $runtimeUrlFile -ErrorAction SilentlyContinue
 if ($stopped) { Write-Host "[OK] Service stopped" } else { Write-Host "Service not running" }

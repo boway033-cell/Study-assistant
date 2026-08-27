@@ -136,19 +136,21 @@ cd ..
 .\start.bat
 ```
 
-应用默认位于 `http://127.0.0.1:8000`，使用 `stop.bat` 停止。若只运行后端，也可以执行：
+启动器会在服务健康后打开实际页面（默认 `http://127.0.0.1:8000`，冲突时自动选择 8001–8010），使用 `stop.bat` 停止。固定的 `127.0.0.1` 地址只能访问已经运行的服务，不能自行唤醒已停止的本地程序。若只运行后端，也可以执行：
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 ```
 
-### 注册网页唤醒入口（可选）
+### 注册稳定网页唤醒入口（推荐）
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\protocol\install.ps1
 ```
 
-注册后可由网页或 Windows 运行框打开 `study-assistant://open`。协议处理器会先启动并完成健康检查，再打开浏览器，避免出现“拒绝连接”页面。
+注册后，安装脚本会在桌面创建“打开学习助手”网页快捷方式；也可由网页或 Windows 运行框打开 `study-assistant://open`。协议处理器会按需启动本地服务、等待健康检查并打开实际端口，避免把“拒绝连接”页面交给用户。应用不设开机常驻，关闭服务后不占用运行内存。
+
+启动页、阅读器和资料库资源均随前端构建保存在本机，不依赖 Google Fonts、jsDelivr、unpkg 等境外 CDN；本地资料管理、解析与阅读无需 VPN。DeepSeek 与默认视觉接口使用中国大陆可访问的官方端点，开放获取或馆藏页面是否可达则取决于对应文献站点自身。
 
 ### 启用 AI（可选）
 

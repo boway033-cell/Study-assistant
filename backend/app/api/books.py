@@ -28,7 +28,7 @@ from backend.app.schemas import (
 )
 from backend.app.services.rag import fts
 from backend.app.worker.import_task import run_import
-from backend.app.worker.tasks import get_task, submit
+from backend.app.worker.tasks import cancel_task, get_task, submit
 
 router = APIRouter(prefix="/api", tags=["books"])
 
@@ -100,7 +100,7 @@ def list_books(
     # 进行中任务消息（导入/OCR 进度等）
     task_msgs = dict(db.execute(
         select(ImportTask.book_id, ImportTask.message)
-        .where(ImportTask.status.in_(["pending", "running"]))
+        .where(ImportTask.status.in_(["pending", "running", "cancelling"]))
     ).all())
     profiles = {
         p.book_id: p for p in db.scalars(
@@ -125,6 +125,10 @@ def list_books(
             journal=profiles[b.id].journal if b.id in profiles else None,
             published_year=profiles[b.id].published_year if b.id in profiles else None,
             doi=profiles[b.id].doi if b.id in profiles else None,
+            publication_status=profiles[b.id].publication_status if b.id in profiles else "unknown",
+            visibility=profiles[b.id].visibility if b.id in profiles else "private",
+            demo_allowed=bool(profiles[b.id].demo_allowed) if b.id in profiles else False,
+            metadata_confidence=profiles[b.id].metadata_confidence if b.id in profiles else 0.0,
             reading_status=profiles[b.id].reading_status if b.id in profiles else "unread",
             favorite=bool(profiles[b.id].favorite) if b.id in profiles else False,
             progress_page=profiles[b.id].progress_page if b.id in profiles else 1,
@@ -165,6 +169,9 @@ def _profile_resp(profile: PaperProfile) -> PaperProfileResp:
         published_year=profile.published_year, doi=profile.doi, arxiv_id=profile.arxiv_id,
         language=profile.language, abstract=profile.abstract, source_url=profile.source_url,
         access_route=profile.access_route or "local_upload",
+        publication_status=profile.publication_status or "unknown",
+        visibility=profile.visibility or "private", demo_allowed=bool(profile.demo_allowed),
+        metadata_confidence=profile.metadata_confidence or 0.0,
         reading_status=profile.reading_status or "unread", favorite=bool(profile.favorite),
         rating=profile.rating, progress_page=profile.progress_page or 1,
         last_read_at=profile.last_read_at,
@@ -630,6 +637,18 @@ def get_task_status(task_id: str):
     )
 
 
+@router.post("/tasks/{task_id}/cancel")
+def cancel_task_status(task_id: str):
+    record = cancel_task(task_id)
+    if not record:
+        raise HTTPException(404, "任务不存在")
+    return {
+        "task_id": record.id,
+        "status": record.status,
+        "message": record.message,
+    }
+
+
 @router.get("/tasks")
 def list_task_statuses(
     active_only: bool = Query(default=False),
@@ -643,14 +662,14 @@ def list_task_statuses(
         select(ImportTask, Book.title)
         .outerjoin(Book, Book.id == ImportTask.book_id)
         .order_by(
-            case((ImportTask.status.in_(["pending", "running"]), 0), else_=1),
+            case((ImportTask.status.in_(["pending", "running", "cancelling"]), 0), else_=1),
             ImportTask.updated_at.desc(),
             ImportTask.created_at.desc(),
         )
         .limit(limit)
     )
     if active_only:
-        query = query.where(ImportTask.status.in_(["pending", "running"]))
+        query = query.where(ImportTask.status.in_(["pending", "running", "cancelling"]))
     rows = db.execute(query).all()
     return {
         "items": [

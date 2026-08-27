@@ -162,9 +162,16 @@ def test_archive_api_roundtrip():
         updated = client.patch(
             f"/api/books/{book_id}/archive",
             json={"authors": "A. Author", "doi": "10.1000/test", "reading_status": "reading",
-                  "favorite": True, "progress_page": 4},
+                  "favorite": True, "progress_page": 4, "publication_status": "unpublished",
+                  "visibility": "private", "demo_allowed": False, "metadata_confidence": 0.8},
         )
         assert updated.status_code == 200
         payload = updated.json()
         assert payload["favorite"] is True
         assert payload["progress_page"] == 4
+        assert payload["publication_status"] == "unpublished"
+        assert payload["visibility"] == "private"
+        assert payload["demo_allowed"] is False
+        assert payload["metadata_confidence"] == 0.8
+        invalid_year = client.patch(f"/api/books/{book_id}/archive", json={"published_year": 2095})
+        assert invalid_year.status_code == 422

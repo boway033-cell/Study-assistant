@@ -192,6 +192,10 @@ const errorMsg = ref('')
 const showTocPanel = ref(props.showToc)
 const tocPanelTouched = ref(false)
 const pageList = ref([])
+const compactReaderMedia = window.matchMedia('(max-width: 1100px)')
+const syncTocViewport = (event) => {
+  if (event.matches && !tocPanelTouched.value) showTocPanel.value = false
+}
 
 // 非连续模式只保留当前页/跨页 DOM，避免数百页空 canvas 常驻内存。
 const renderPageList = computed(() => {
@@ -945,6 +949,8 @@ const onKeydown = (e) => {
 }
 
 onMounted(async () => {
+  syncTocViewport(compactReaderMedia)
+  compactReaderMedia.addEventListener('change', syncTocViewport)
   try {
     const b = props.bookId ? await getBook(props.bookId) : null
     bookTitle = b?.title || ''
@@ -954,6 +960,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  compactReaderMedia.removeEventListener('change', syncTocViewport)
   window.removeEventListener('keydown', onKeydown)
   savePos()
   clearTimeout(zoomTimer)
@@ -983,7 +990,7 @@ onBeforeUnmount(() => {
 .pr-pageinfo :deep(.el-input-number) { width:82px; }
 .pr-total { white-space: nowrap; }
 .pr-zoom { font-size: 12px; color: var(--el-text-color-secondary); min-width: 44px; text-align: center; }
-.pr-body-wrap { display: flex; flex: 1; min-height: 300px; overflow: hidden; border: 1px solid var(--el-border-color-extra-light); border-radius: 0 0 8px 8px; }
+.pr-body-wrap { position:relative; display: flex; flex: 1; min-height: 300px; overflow: hidden; border: 1px solid var(--el-border-color-extra-light); border-radius: 0 0 8px 8px; }
 .pr-toc { width:clamp(250px,22vw,320px); flex-shrink:0; display:flex; flex-direction:column; overflow:hidden; background:var(--study-surface-paper); border-right:1px solid var(--el-border-color-extra-light); }
 .pr-toc-title { display:flex; align-items:center; justify-content:space-between; min-height:40px; padding:8px 12px; border-bottom:1px solid var(--el-border-color-lighter); color:var(--el-text-color-primary); font-size:13px; font-weight:700; }
 .pr-toc-title small { color:var(--el-text-color-secondary); font-weight:400; }
@@ -1011,8 +1018,16 @@ onBeforeUnmount(() => {
   .pr-research-controls { margin-left:0; }
   .pr-display-controls .el-button:nth-of-type(3),.pr-display-controls .el-button:nth-of-type(4) { display:none; }
 }
-@media (max-width:820px) {
-  .pr-toc { position:absolute; inset:43px auto 0 0; z-index:8; width:min(82vw,320px); box-shadow:6px 0 18px rgba(15,23,42,.16); }
+@media (max-width:1100px) {
+  .pr-toc { position:absolute; inset:0 auto 0 0; z-index:8; width:min(82vw,320px); box-shadow:6px 0 18px rgba(15,23,42,.16); }
+  .pr-toolbar { gap:6px; }
+  .pr-toolbar-group + .pr-toolbar-group { padding-left:6px; }
+}
+@media (max-width:680px) {
+  .pr-toolbar { padding:5px; }
+  .pr-page-controls { margin-left:0; }
+  .pr-pageinfo :deep(.el-input-number) { width:70px; }
+  .pr-mode :deep(.el-radio-button__inner) { padding-inline:7px; }
 }
 .pr-canvas { display: block; }
 .text-layer {

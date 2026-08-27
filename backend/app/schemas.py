@@ -22,6 +22,10 @@ class BookListItem(BaseModel):
     journal: str | None = None
     published_year: int | None = None
     doi: str | None = None
+    publication_status: str = "unknown"
+    visibility: str = "private"
+    demo_allowed: bool = False
+    metadata_confidence: float = 0.0
     reading_status: str = "unread"
     favorite: bool = False
     progress_page: int = 1
@@ -67,6 +71,10 @@ class PaperProfileResp(BaseModel):
     abstract: str | None = None
     source_url: str | None = None
     access_route: str = "local_upload"
+    publication_status: str = "unknown"
+    visibility: str = "private"
+    demo_allowed: bool = False
+    metadata_confidence: float = 0.0
     reading_status: str = "unread"
     favorite: bool = False
     rating: float | None = None
@@ -77,13 +85,17 @@ class PaperProfileResp(BaseModel):
 class PaperProfileUpdateReq(BaseModel):
     authors: str | None = None
     journal: str | None = None
-    published_year: int | None = Field(default=None, ge=1000, le=3000)
+    published_year: int | None = Field(default=None, ge=1000, le=datetime.now().year + 1)
     doi: str | None = None
     arxiv_id: str | None = None
     language: str | None = None
     abstract: str | None = None
     source_url: str | None = None
     access_route: str | None = None
+    publication_status: str | None = Field(default=None, pattern="^(unknown|published|preprint|submitted|unpublished)$")
+    visibility: str | None = Field(default=None, pattern="^(private|shareable|public)$")
+    demo_allowed: bool | None = None
+    metadata_confidence: float | None = Field(default=None, ge=0, le=1)
     reading_status: str | None = None
     favorite: bool | None = None
     rating: float | None = Field(default=None, ge=0, le=5)

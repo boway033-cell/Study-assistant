@@ -1,4 +1,7 @@
-﻿param([switch]$NoPrompt)
+﻿param(
+    [switch]$NoPrompt,
+    [switch]$NoShortcut
+)
 
 $scheme = "study-assistant"
 $rootKey = "HKCU:\Software\Classes\$scheme"
@@ -17,4 +20,13 @@ Set-Item -Path $commandKey -Value $command
 
 Write-Host "已注册：study-assistant://open"
 Write-Host "处理器：$handler"
+if (-not $NoShortcut) {
+    $desktop = [Environment]::GetFolderPath("DesktopDirectory")
+    if ($desktop) {
+        $shortcut = Join-Path $desktop "打开学习助手.url"
+        $shortcutText = "[InternetShortcut]`r`nURL=study-assistant://open`r`n"
+        [IO.File]::WriteAllText($shortcut, $shortcutText, (New-Object Text.UTF8Encoding($false)))
+        Write-Host "桌面入口：$shortcut"
+    }
+}
 if (-not $NoPrompt) { Read-Host "按 Enter 关闭" | Out-Null }

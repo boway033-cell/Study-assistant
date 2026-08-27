@@ -36,6 +36,7 @@ export const renameBook = (id, title) => http.patch(`/books/${id}`, { title })
 export const searchBooks = (params) => http.get('/search', { params })
 export const getTask = (id) => http.get(`/tasks/${id}`)
 export const listTasks = (params = {}) => http.get('/tasks', { params })
+export const cancelTask = (id) => http.post(`/tasks/${id}/cancel`)
 
 // ===== 原文定位 =====
 export const getChunkOriginal = (bookId, chunkId) => http.get(`/books/${bookId}/chunk/${chunkId}`)

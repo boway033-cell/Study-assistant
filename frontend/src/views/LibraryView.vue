@@ -1,17 +1,12 @@
 <template>
   <div class="library-page study-page">
-    <section class="library-commandbar">
-      <div class="library-heading">
-        <div class="eyebrow study-eyebrow">PERSONAL RESEARCH LIBRARY</div>
-        <h1>我的资料</h1>
-        <p>从资料入库、结构校正到阅读和知识沉淀。</p>
-      </div>
+    <StudyCommandBar compact class="library-commandbar" :title="currentShelfName" description="筛选、归档并进入阅读；解析状态集中显示在任务中心。">
       <div class="library-summary" aria-label="知识库概况">
         <div><strong>{{ books.length }}</strong><span>全部资料</span></div>
         <div><strong>{{ readingCount }}</strong><span>阅读中</span></div>
         <div><strong>{{ attentionCount }}</strong><span>待处理</span></div>
       </div>
-      <div class="library-primary-actions">
+      <template #actions><div class="library-primary-actions">
         <el-button :type="searchPanelOpen ? 'primary' : ''" plain @click="searchPanelOpen = !searchPanelOpen">全文检索</el-button>
         <el-upload :show-file-list="false" :auto-upload="false" :on-change="handleBatchSelect" multiple accept=".pdf,.docx,.pptx" :disabled="uploading">
           <el-button plain :loading="uploading">批量导入</el-button>
@@ -19,20 +14,21 @@
         <el-upload :show-file-list="false" :before-upload="handleUpload" accept=".pdf,.docx,.pptx" :disabled="uploading">
           <el-button type="primary" :loading="uploading">{{ uploading ? '正在导入…' : '＋ 导入文献' }}</el-button>
         </el-upload>
-      </div>
-    </section>
+      </div></template>
+    </StudyCommandBar>
     <div v-if="batchFiles.length" class="import-queue library-import-queue"><div><b>已选择 {{ batchFiles.length }} 个文件</b><small>确认后进入全局任务中心依次解析，你可以继续使用资料库。</small></div><el-button type="primary" :loading="uploading" @click="submitBatch">导入所选文件</el-button><el-button link @click="batchFiles=[]">取消选择</el-button></div>
+    <button class="mobile-shelf-toggle" type="button" @click="shelfPanelOpen=!shelfPanelOpen"><span>范围：{{ currentShelfName }}</span><b>{{ shelfPanelOpen ? '收起' : '切换' }}</b></button>
     <div class="library-workspace">
-      <aside class="bookshelf-panel">
+      <aside class="bookshelf-panel" :class="{ 'mobile-open': shelfPanelOpen }">
         <div class="bookshelf-section-label">智能视图</div>
-        <button class="shelf-static" :class="{active:selectedShelf==='all'}" @click="selectedShelf='all'"><span>全部资料</span><b>{{ books.length }}</b></button>
-        <button class="shelf-static" :class="{active:selectedShelf==='reading'}" @click="selectedShelf='reading'"><span>阅读中</span><b>{{ readingCount }}</b></button>
-        <button class="shelf-static" :class="{active:selectedShelf==='favorite'}" @click="selectedShelf='favorite'"><span>我的收藏</span><b>{{ favoriteCount }}</b></button>
-        <button class="shelf-static" :class="{active:selectedShelf==='attention'}" @click="selectedShelf='attention'"><span>待处理</span><b>{{ attentionCount }}</b></button>
-        <button class="shelf-static" :class="{active:selectedShelf==='unfiled'}" @click="selectedShelf='unfiled'"><span>未归档</span><b>{{ unfiledCount }}</b></button>
+        <button class="shelf-static" :class="{active:selectedShelf==='all'}" @click="chooseShelf('all')"><span>全部资料</span><b>{{ books.length }}</b></button>
+        <button class="shelf-static" :class="{active:selectedShelf==='reading'}" @click="chooseShelf('reading')"><span>阅读中</span><b>{{ readingCount }}</b></button>
+        <button class="shelf-static" :class="{active:selectedShelf==='favorite'}" @click="chooseShelf('favorite')"><span>我的收藏</span><b>{{ favoriteCount }}</b></button>
+        <button class="shelf-static" :class="{active:selectedShelf==='attention'}" @click="chooseShelf('attention')"><span>待处理</span><b>{{ attentionCount }}</b></button>
+        <button class="shelf-static" :class="{active:selectedShelf==='unfiled'}" @click="chooseShelf('unfiled')"><span>未归档</span><b>{{ unfiledCount }}</b></button>
         <div class="bookshelf-head"><div><b>我的书架</b><small>按课程、主题或项目归档</small></div><el-button class="create-shelf-head" plain size="small" @click="createBookshelf(null)">＋ 新建</el-button></div>
         <el-tree v-if="shelves.length" :data="shelfTree" node-key="id" default-expand-all :expand-on-click-node="false" class="shelf-tree">
-          <template #default="{data}"><div class="shelf-node" :class="{active:selectedShelf===data.id}" @click.stop="selectedShelf=data.id"><span><i :style="{background:data.color}"></i>{{ data.name }}</span><div><small>{{ data.book_count }}</small><el-dropdown trigger="click" @command="cmd=>shelfCommand(cmd,data)"><el-button text size="small">···</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="child">新建子书架</el-dropdown-item><el-dropdown-item command="rename">重命名</el-dropdown-item><el-dropdown-item command="delete" divided>删除书架</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div></div></template>
+          <template #default="{data}"><div class="shelf-node" :class="{active:selectedShelf===data.id}" @click.stop="chooseShelf(data.id)"><span><i :style="{background:data.color}"></i>{{ data.name }}</span><div><small>{{ data.book_count }}</small><el-dropdown trigger="click" @command="cmd=>shelfCommand(cmd,data)"><el-button text size="small">···</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="child">新建子书架</el-dropdown-item><el-dropdown-item command="rename">重命名</el-dropdown-item><el-dropdown-item command="delete" divided>删除书架</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div></div></template>
         </el-tree>
         <div v-else class="shelf-empty"><span>还没有自建书架</span><small>按主题、课程或项目整理文献</small><el-button plain size="small" @click="createBookshelf(null)">建立第一个书架</el-button></div>
       </aside>
@@ -71,11 +67,11 @@
               <el-checkbox :model-value="allFilteredSelected" @change="toggleAllFiltered" />
               <span>文献与来源</span><span>阅读进度</span><span>知识加工</span><span></span>
             </div>
-            <article v-for="row in filteredBooks" :key="row.id" class="paper-row" :class="{selected:currentBook?.id===row.id}" tabindex="0" @click="selectBook(row)" @keydown.enter="selectBook(row)">
+            <StudyListRow v-for="row in filteredBooks" :key="row.id" class="paper-row" :active="currentBook?.id===row.id" tabindex="0" @click="selectBook(row)" @keydown.enter="selectBook(row)">
               <div class="paper-select" @click.stop><el-checkbox :model-value="selectedBookIds.includes(row.id)" @change="checked=>toggleBookSelection(row.id,checked)" /><button class="star" :class="{ active: row.favorite }" title="收藏" @click="toggleFavorite(row)">★</button></div>
               <div class="paper-identity">
                 <div class="paper-title">{{ row.title }}</div>
-                <div class="paper-meta">{{ [row.authors, row.journal, row.published_year].filter(Boolean).join(' · ') || '等待补充书目信息' }}</div>
+                <div class="paper-meta">{{ [row.authors, row.journal, displayYear(row.published_year)].filter(Boolean).join(' · ') || '等待补充书目信息' }}<span class="publication-state">{{ publicationLabel(row.publication_status) }}</span></div>
                 <div class="paper-facts"><span>{{ (row.file_type || 'file').toUpperCase() }}</span><span v-if="row.total_pages">{{ row.total_pages }} 页</span><span v-if="row.quiz_count">{{ row.quiz_count }} 道题</span></div>
               </div>
               <div class="paper-reading">
@@ -98,8 +94,8 @@
                   <template #dropdown><el-dropdown-menu><el-dropdown-item command="detail">资料详情</el-dropdown-item><el-dropdown-item command="deck">生成文献汇报</el-dropdown-item><el-dropdown-item command="delete" divided>删除资料</el-dropdown-item></el-dropdown-menu></template>
                 </el-dropdown>
               </div>
-            </article>
-            <el-empty v-if="!filteredBooks.length && !loading" :description="activeFilterCount ? '没有符合当前筛选的资料' : '当前视图还没有资料'" :image-size="72"><el-button v-if="activeFilterCount" type="primary" plain @click="clearLibraryFilters">清除筛选并查看全部</el-button></el-empty>
+            </StudyListRow>
+            <StudyEmptyState v-if="!filteredBooks.length && !loading" compact :title="activeFilterCount ? '没有符合当前筛选的资料' : '当前范围还没有资料'" :description="activeFilterCount ? '清除部分筛选条件，或切换到其他书架。' : '导入 PDF、Word 或 PowerPoint 后会在这里建立可检索档案。'"><template #actions><el-button v-if="activeFilterCount" type="primary" plain @click="clearLibraryFilters">清除筛选</el-button></template></StudyEmptyState>
           </div>
         </el-card>
 
@@ -141,13 +137,13 @@
         </el-card>
       </main>
 
-      <aside class="library-inspector">
+      <StudyInspector class="library-inspector" title="资料检查器" :closable="!!currentBook" @close="currentBook=null">
         <template v-if="currentBook">
-          <div class="inspector-head"><span>资料检查器</span><button type="button" aria-label="关闭资料检查器" @click="currentBook=null">×</button></div>
           <div class="inspector-scroll">
-            <div class="inspector-type">{{ (currentBook.file_type || 'file').toUpperCase() }} · KNOWLEDGE SOURCE</div>
+            <div class="inspector-type">{{ (currentBook.file_type || 'file').toUpperCase() }} · {{ publicationLabel(currentBook.archive?.publication_status) }}</div>
             <h2>{{ currentBook.title }}</h2>
-            <p class="inspector-meta">{{ [currentBook.archive?.authors, currentBook.archive?.journal, currentBook.archive?.published_year].filter(Boolean).join(' · ') || '书目信息待补充' }}</p>
+            <p class="inspector-meta">{{ [currentBook.archive?.authors, currentBook.archive?.journal, displayYear(currentBook.archive?.published_year)].filter(Boolean).join(' · ') || '书目信息待补充' }}</p>
+            <div class="trust-row"><el-tag size="small" effect="plain">{{ visibilityLabel(currentBook.archive?.visibility) }}</el-tag><el-tag size="small" :type="currentBook.archive?.demo_allowed ? 'success' : 'info'" effect="plain">{{ currentBook.archive?.demo_allowed ? '允许演示' : '禁止演示' }}</el-tag><span>元数据 {{ confidenceLabel(currentBook.archive?.metadata_confidence) }}</span></div>
             <div class="inspector-actions"><el-button type="primary" @click="readBook(currentBook)">进入阅读</el-button><el-button @click="openWorkbench(currentBook)">生成汇报</el-button></div>
             <section class="inspector-section">
               <div class="inspector-section-title"><b>阅读与加工</b><el-tag size="small" :type="readingTagType(currentBook.archive?.reading_status)">{{ readingLabel(currentBook.archive?.reading_status) }}</el-tag></div>
@@ -166,7 +162,7 @@
           </div>
         </template>
         <div v-else class="inspector-empty"><span>资料检查器</span><b>选择一篇文献查看详情</b><p>这里会显示阅读进度、解析状态、章节结构和知识沉淀入口。</p></div>
-      </aside>
+      </StudyInspector>
 
       <el-drawer v-model="detailVisible" size="min(520px, 94vw)" append-to-body class="paper-drawer">
         <template #header><div><div class="drawer-eyebrow">KNOWLEDGE SOURCE</div><b>{{ currentBook?.title }}</b></div></template>
@@ -187,8 +183,16 @@
             <div class="archive-grid">
               <label>作者<el-input v-model="currentBook.archive.authors" size="small" /></label>
               <label>期刊<el-input v-model="currentBook.archive.journal" size="small" /></label>
-              <label>年份<el-input-number v-model="currentBook.archive.published_year" :min="1000" :max="3000" size="small" /></label>
+              <label>年份<el-input-number v-model="currentBook.archive.published_year" :min="1000" :max="currentYear + 1" size="small" /></label>
               <label>DOI<el-input v-model="currentBook.archive.doi" size="small" /></label>
+              <label>发表
+                <el-select v-model="currentBook.archive.publication_status" size="small"><el-option label="待确认" value="unknown"/><el-option label="已发表" value="published"/><el-option label="预印本" value="preprint"/><el-option label="投稿中" value="submitted"/><el-option label="未发表" value="unpublished"/></el-select>
+              </label>
+              <label>可见
+                <el-select v-model="currentBook.archive.visibility" size="small"><el-option label="仅自己" value="private"/><el-option label="可分享" value="shareable"/><el-option label="公开" value="public"/></el-select>
+              </label>
+              <label>演示<el-switch v-model="currentBook.archive.demo_allowed" inline-prompt active-text="允许" inactive-text="禁止" /></label>
+              <label>可信<el-slider v-model="currentBook.archive.metadata_confidence" :min="0" :max="1" :step="0.1" /></label>
               <label>状态
                 <el-select v-model="currentBook.archive.reading_status" size="small">
                   <el-option label="未读" value="unread" /><el-option label="阅读中" value="reading" /><el-option label="已读完" value="read" />
@@ -244,6 +248,10 @@ import { listBooks, uploadBook, uploadBookBatch, deleteBook, getBook, searchBook
   listShelves, createShelf, updateShelf, deleteShelf as deleteShelfApi, putShelfBooks } from '../api'
 import { sanitizeHtml } from '../utils/markdown'
 import { notifyTaskSubmitted } from '../stores/taskCenter'
+import StudyCommandBar from '../components/StudyCommandBar.vue'
+import StudyEmptyState from '../components/StudyEmptyState.vue'
+import StudyListRow from '../components/StudyListRow.vue'
+import StudyInspector from '../components/StudyInspector.vue'
 
 const router = useRouter()
 const books = ref([])
@@ -267,6 +275,8 @@ const currentBook = ref(null)
 const detailVisible = ref(false)
 const searchPanelOpen = ref(false)
 const compactLibrary = ref(false)
+const shelfPanelOpen = ref(false)
+const currentYear = new Date().getFullYear()
 const chapterTree = ref([])
 const originalViewer = ref(null)
 const originalViewerComponent = shallowRef(null)
@@ -312,6 +322,11 @@ const activeFilterCount = computed(() => [libraryQ.value.trim(), libraryCategory
 const allFilteredSelected = computed(() => filteredBooks.value.length > 0 && filteredBooks.value.every(book => selectedBookIds.value.includes(book.id)))
 const readingLabel = (status) => ({ unread: '未读', reading: '阅读中', read: '已读完' }[status] || '未读')
 const readingTagType = (status) => ({ unread: 'info', reading: 'warning', read: 'success' }[status] || 'info')
+const publicationLabel = (status) => ({ unknown: '发表状态待确认', published: '已发表', preprint: '预印本', submitted: '投稿中', unpublished: '未发表' }[status] || '发表状态待确认')
+const visibilityLabel = (status) => ({ private: '仅自己可见', shareable: '可分享', public: '公开' }[status] || '仅自己可见')
+const confidenceLabel = (value) => value >= .8 ? '已核对' : value >= .5 ? '部分核对' : '待核对'
+const displayYear = (value) => value && value <= currentYear + 1 ? value : value ? '年份待核对' : null
+const chooseShelf = (shelf) => { selectedShelf.value = shelf; shelfPanelOpen.value = false }
 const detailStatusText = computed(() => {
   if (!currentBook.value) return ''
   if (currentBook.value.status === 'ready') return '解析完成，原文、目录与检索结构已就绪。'
@@ -498,6 +513,8 @@ const saveArchive = async () => {
     currentBook.value.archive = await updateArchiveProfile(currentBook.value.id, {
       authors: a.authors || null, journal: a.journal || null,
       published_year: a.published_year || null, doi: a.doi || null,
+      publication_status: a.publication_status || 'unknown', visibility: a.visibility || 'private',
+      demo_allowed: !!a.demo_allowed, metadata_confidence: a.metadata_confidence || 0,
       reading_status: a.reading_status,
     })
     ElMessage.success('归档信息已保存')
@@ -558,7 +575,7 @@ const viewOriginal = async (item) => {
   })
 }
 
-const libraryMedia = window.matchMedia('(max-width: 1399px)')
+const libraryMedia = window.matchMedia('(max-width: 1519px)')
 const syncLibraryViewport = (event) => { compactLibrary.value = event.matches }
 onMounted(async () => {
   syncLibraryViewport(libraryMedia)
@@ -587,6 +604,7 @@ onBeforeUnmount(() => libraryMedia.removeEventListener('change', syncLibraryView
 .clear-filter{justify-self:end}
 .paper-title { font-weight: 650; color: var(--el-text-color-primary); line-height: 1.35; }
 .paper-meta { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.publication-state:before{content:' · '}.publication-state{color:var(--study-text-muted)}
 .star { cursor: pointer; color: #c8c2b7; font-size: 18px; transition: .2s; }
 .star.active { color: #c08a3e; }
 .archive-grid { display: grid; gap: 9px; }
@@ -624,19 +642,18 @@ onBeforeUnmount(() => libraryMedia.removeEventListener('change', syncLibraryView
 @media (max-width: 620px){.library-hero{padding:16px}.library-hero h1{font-size:23px}.library-filters{grid-template-columns:1fr}.hero-stats{gap:12px}.hero-stats strong{font-size:20px}.header-actions :deep(.el-button){margin-left:0}.paper-row{grid-template-columns:38px minmax(0,1fr);padding:14px 4px}.paper-knowledge,.paper-reading,.paper-actions{grid-column:2}.paper-knowledge{grid-row:auto;margin-top:9px;flex-direction:row;align-items:center}.paper-actions{flex-wrap:wrap}.paper-meta{max-width:100%}.import-queue{align-items:flex-start;flex-wrap:wrap}.import-queue>div{flex-basis:100%}.materials-card :deep(.el-card__body){padding:12px}}
 
 /* 资料库迁移：紧凑命令区 + 书架/列表/检查器三层工作区 */
-.library-commandbar{display:grid;grid-template-columns:minmax(300px,1fr) auto auto;align-items:center;gap:24px;padding:16px 20px;margin-bottom:12px;border:1px solid rgba(245,240,232,.16);border-radius:var(--study-radius-lg);background:linear-gradient(120deg,rgba(28,52,54,.97),rgba(67,85,72,.92));color:#f5f0e8;box-shadow:0 8px 24px rgba(10,24,25,.16)}
-.library-heading h1{margin:2px 0;font-family:var(--study-font-reading);font-size:24px;letter-spacing:1.5px}.library-heading p{margin-top:3px;color:rgba(245,240,232,.72);font-size:var(--study-font-size-sm)}
-.library-summary{display:flex;gap:22px}.library-summary>div{display:flex;min-width:54px;flex-direction:column;text-align:right}.library-summary strong{font:700 21px Georgia,serif}.library-summary span{margin-top:2px;color:rgba(245,240,232,.72);font-size:var(--study-font-size-xs)}
+.library-commandbar{margin-bottom:12px}.library-summary{display:flex;gap:18px}.library-summary>div{display:flex;min-width:50px;flex-direction:column;text-align:right}.library-summary strong{color:var(--el-color-primary);font:700 18px Georgia,serif}.library-summary span{margin-top:1px;color:var(--study-text-secondary);font-size:var(--study-font-size-xs)}
 .library-primary-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}.library-primary-actions :deep(.el-button+.el-button){margin-left:0}.library-import-queue{margin:-2px 0 12px}
+.mobile-shelf-toggle{display:none;width:100%;align-items:center;justify-content:space-between;margin-bottom:8px;padding:9px 11px;border:1px solid var(--study-card-border);background:var(--study-surface-paper);color:var(--study-text-primary);font-size:var(--study-font-size-sm)}.mobile-shelf-toggle b{color:var(--el-color-primary);font-size:var(--study-font-size-xs)}
 .library-workspace{display:grid;grid-template-columns:220px minmax(0,1fr) 300px;align-items:start;gap:12px}.library-main{min-width:0}.bookshelf-panel{top:56px}.bookshelf-section-label{padding:2px 10px 7px;color:#8f806e;font-size:var(--study-font-size-xs);font-weight:700;letter-spacing:1px}.bookshelf-head{margin-top:16px;padding-top:14px;border-top:1px solid #dfd4c4}
 .paper-row{cursor:pointer;outline:none}.paper-row.selected{z-index:1;background:#f5eddf;box-shadow:inset 3px 0 0 var(--el-color-primary)}.paper-row:focus-visible{box-shadow:inset 0 0 0 2px var(--el-color-primary)}.paper-title{font-family:var(--study-font-reading)}.paper-facts{font-size:var(--study-font-size-xs)}.paper-reading,.paper-knowledge,.category-link,.analysis-link{font-size:var(--study-font-size-xs)}
 .fulltext-card{margin-top:12px}
 .library-inspector{position:sticky;top:56px;height:calc(100vh - 136px);min-height:480px;overflow:hidden;border:1px solid var(--study-card-border);border-radius:var(--study-radius-md);background:var(--study-surface-paper);box-shadow:var(--study-shadow-sm)}
-.inspector-head{display:flex;align-items:center;justify-content:space-between;height:44px;padding:0 14px;border-bottom:1px solid var(--el-border-color-lighter);color:#61584d;font-weight:700}.inspector-head button{width:28px;height:28px;padding:0;border:0;background:transparent;color:#82776a;font-size:20px;cursor:pointer}.inspector-scroll{height:calc(100% - 44px);overflow-y:auto;padding:15px}.inspector-type{color:#9a7958;font-size:var(--study-font-size-xs);letter-spacing:1.4px}.inspector-scroll h2{margin:7px 0 5px;font-family:var(--study-font-reading);font-size:17px;line-height:1.5;color:var(--el-text-color-primary)}.inspector-meta{color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);line-height:1.6}.inspector-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.inspector-actions .el-button{margin:0}.inspector-section{padding:13px 0;border-top:1px solid var(--el-border-color-lighter)}.inspector-section-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}.inspector-section-title span{color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);text-align:right}.inspector-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.inspector-facts span{display:flex;flex-direction:column;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);text-align:center}.inspector-facts b{margin-bottom:2px;color:#6f4721;font:700 17px Georgia,serif}.inspector-status{margin-top:10px;padding:8px 9px;border-radius:7px;background:#f0e9dc;color:#686155;font-size:var(--study-font-size-xs);line-height:1.55}.inspector-status.failed{background:#f9efed;color:#93483d}.inspector-status.needs_ocr,.inspector-status.parsing{background:#fff5e7;color:#8d6228}.inspector-chapters :deep(.el-tree){max-height:210px;overflow:auto;padding:5px;background:transparent}.inspector-chapters :deep(.el-tree-node__content){height:32px}.inspector-detail-button{width:100%;margin-top:2px}.inspector-empty{display:flex;height:100%;align-items:center;justify-content:center;flex-direction:column;padding:28px;color:var(--el-text-color-secondary);text-align:center}.inspector-empty span{color:#9a7958;font-size:var(--study-font-size-xs);letter-spacing:1.4px}.inspector-empty b{margin:12px 0 6px;color:var(--el-text-color-primary)}.inspector-empty p{font-size:var(--study-font-size-sm);line-height:1.7}
+.inspector-scroll{height:100%;overflow-y:auto;padding:15px}.inspector-type{color:#9a7958;font-size:var(--study-font-size-xs);letter-spacing:.6px}.inspector-scroll h2{margin:7px 0 5px;font-family:var(--study-font-reading);font-size:17px;line-height:1.5;color:var(--el-text-color-primary)}.inspector-meta{color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);line-height:1.6}.trust-row{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-top:9px}.trust-row>span{color:var(--study-text-secondary);font-size:var(--study-font-size-xs)}.inspector-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.inspector-actions .el-button{margin:0}.inspector-section{padding:13px 0;border-top:1px solid var(--el-border-color-lighter)}.inspector-section-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}.inspector-section-title span{color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);text-align:right}.inspector-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.inspector-facts span{display:flex;flex-direction:column;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);text-align:center}.inspector-facts b{margin-bottom:2px;color:#6f4721;font:700 17px Georgia,serif}.inspector-status{margin-top:10px;padding:8px 9px;border-radius:7px;background:#f0e9dc;color:#686155;font-size:var(--study-font-size-xs);line-height:1.55}.inspector-status.failed{background:#f9efed;color:#93483d}.inspector-status.needs_ocr,.inspector-status.parsing{background:#fff5e7;color:#8d6228}.inspector-chapters :deep(.el-tree){max-height:210px;overflow:auto;padding:5px;background:transparent}.inspector-chapters :deep(.el-tree-node__content){height:32px}.inspector-detail-button{width:100%;margin-top:2px}.inspector-empty{display:flex;height:100%;align-items:center;justify-content:center;flex-direction:column;padding:28px;color:var(--el-text-color-secondary);text-align:center}.inspector-empty span{color:#9a7958;font-size:var(--study-font-size-xs);letter-spacing:.6px}.inspector-empty b{margin:12px 0 6px;color:var(--el-text-color-primary)}.inspector-empty p{font-size:var(--study-font-size-sm);line-height:1.7}
 
-@media(max-width:1399px){.library-workspace{grid-template-columns:220px minmax(0,1fr)}.library-inspector{display:none}}
+@media(max-width:1519px){.library-workspace{grid-template-columns:220px minmax(0,1fr)}.library-inspector{display:none}}
 @media(max-width:1200px){.library-workspace{grid-template-columns:190px minmax(0,1fr)}.paper-list-head{display:none}.paper-row{grid-template-columns:42px minmax(0,1fr) 130px}.paper-reading{grid-column:2;margin-top:8px;flex-direction:row;align-items:center}.paper-knowledge{grid-column:3;grid-row:1 / span 2}.paper-actions{grid-column:2 / -1;margin-top:8px;justify-content:flex-start}}
-@media(max-width:1100px){.library-commandbar{grid-template-columns:minmax(260px,1fr) auto}.library-primary-actions{grid-column:1/-1;justify-content:flex-start}}
-@media(max-width:900px){.library-workspace{grid-template-columns:1fr}.library-commandbar{grid-template-columns:1fr}.library-summary>div{text-align:left}.library-primary-actions{grid-column:auto;flex-wrap:wrap}.bookshelf-panel{position:static}.bookshelf-head{margin-top:10px}.shelf-tree{max-height:190px;overflow:auto}}
-@media(max-width:620px){.library-commandbar{padding:15px}.library-heading h1{font-size:22px}.library-summary{width:100%;justify-content:space-between}.library-primary-actions{display:grid;grid-template-columns:1fr 1fr}.library-primary-actions>*,.library-primary-actions :deep(.el-button){width:100%}.library-primary-actions>:last-child{grid-column:1/-1}.library-import-queue{align-items:flex-start}.paper-row{padding-inline:8px}.fulltext-card :deep(.el-card__body){padding:12px}.result-meta{align-items:flex-start;flex-wrap:wrap}}
+@media(max-width:1100px){.library-primary-actions{justify-content:flex-start}}
+@media(max-width:900px){.library-workspace{grid-template-columns:1fr}.library-summary>div{text-align:left}.library-primary-actions{flex-wrap:wrap}.mobile-shelf-toggle{display:flex}.bookshelf-panel{display:none;position:static}.bookshelf-panel.mobile-open{display:block}.bookshelf-head{margin-top:10px}.shelf-tree{max-height:190px;overflow:auto}}
+@media(max-width:620px){.library-summary{width:100%;justify-content:space-between}.library-primary-actions{display:grid;grid-template-columns:1fr 1fr}.library-primary-actions>*,.library-primary-actions :deep(.el-button){width:100%}.library-primary-actions>:last-child{grid-column:1/-1}.library-import-queue{align-items:flex-start}.paper-row{padding-inline:8px}.fulltext-card :deep(.el-card__body){padding:12px}.result-meta{align-items:flex-start;flex-wrap:wrap}}
 </style>

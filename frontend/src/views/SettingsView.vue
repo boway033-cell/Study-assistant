@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="settings-page study-page">
     <el-card shadow="never">
       <template #header>AI 设置（DeepSeek 云端）</template>
       <el-form label-width="150px" style="max-width: 620px">
@@ -197,4 +197,5 @@ onMounted(() => {
 .help-list { line-height: 2; padding-left: 20px; }
 .help-list code { background: var(--el-fill-color-lighter); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
 .provider-cards { display:grid; gap:8px; margin-top:12px; }.provider-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto auto auto; align-items:center; gap:8px; padding:10px 12px; border:1px solid #e5e7eb; border-radius:9px; box-shadow:0 1px 2px rgba(15,23,42,.05); }.provider-row div { display:flex; min-width:0; flex-direction:column; }.provider-row span,.provider-row small { color:var(--el-text-color-secondary); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-page{max-width:1120px}.settings-page>.el-card{margin-top:8px!important;border-radius:var(--study-radius-md)}.settings-page>.el-card:first-child{margin-top:0!important}.settings-page :deep(.el-card__header){padding:11px 14px}.settings-page :deep(.el-card__body){padding:14px}.provider-row{border-color:var(--study-card-border);border-radius:var(--study-radius-sm);box-shadow:none}@media(max-width:760px){.provider-row{grid-template-columns:1fr auto}.provider-row>.el-button{margin-left:0}.settings-page :deep(.el-form){max-width:none!important}.settings-page :deep(.el-form-item__label){width:100%!important;text-align:left}.settings-page :deep(.el-form-item__content){margin-left:0!important}}
 </style>

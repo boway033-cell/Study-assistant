@@ -74,6 +74,10 @@ class PaperProfile(Base):
     abstract: Mapped[str | None] = mapped_column(Text)
     source_url: Mapped[str | None] = mapped_column(Text)
     access_route: Mapped[str] = mapped_column(String(50), default="local_upload")
+    publication_status: Mapped[str] = mapped_column(String(24), default="unknown")
+    visibility: Mapped[str] = mapped_column(String(20), default="private")
+    demo_allowed: Mapped[int] = mapped_column(Integer, default=0)
+    metadata_confidence: Mapped[float] = mapped_column(Float, default=0.0)
     provenance_json: Mapped[str | None] = mapped_column(Text)
     source_map_json: Mapped[str | None] = mapped_column(Text)
     reading_status: Mapped[str] = mapped_column(String(20), default="unread")  # unread/reading/read

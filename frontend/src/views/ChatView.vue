@@ -1,5 +1,5 @@
 <template>
-  <div class="chat-page">
+  <div class="chat-page study-page">
     <el-row :gutter="16" class="chat-row">
       <!-- 左：提问范围 + 历史 -->
       <el-col :span="4">
@@ -30,10 +30,7 @@
             </div>
           </template>
           <div ref="msgBox" class="msg-box">
-            <div v-if="!messages.length" class="empty-tip">
-              💡 对着教材提问，答案会标注出处页码，原文自动显示在右侧。<br />
-              试试：「解释一下拉格朗日中值定理的几何意义」
-            </div>
+            <StudyEmptyState v-if="!messages.length" compact title="从一个可核验问题开始" description="答案会标注书目、章节与页码，选择引用后可在右侧核对原文。" />
             <div v-for="(m, i) in messages" :key="i" :class="['msg', m.role]">
               <div class="msg-label">{{ m.role === 'user' ? '我' : 'AI' }}</div>
               <div class="msg-content">
@@ -98,6 +95,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { listBooks, chatStream, chatHistory, getChunkOriginal, getBook, bookFileUrl } from '../api'
 import PdfReader from '../components/PdfReader.vue'
+import StudyEmptyState from '../components/StudyEmptyState.vue'
 import { sanitizeHtml } from '../utils/markdown'
 
 const router = useRouter()
@@ -261,13 +259,12 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.chat-page { height: calc(100vh - 120px); }
+.chat-page { height: calc(100vh - 76px); }
 .chat-row { height: 100%; }
 .chat-row > .el-col { height: 100%; }
 .side-card, .chat-card, .source-card { height: 100%; display: flex; flex-direction: column; }
 .chat-header { display: flex; justify-content: space-between; align-items: center; }
 .msg-box { flex: 1; overflow-y: auto; padding: 8px; }
-.empty-tip { color: var(--el-text-color-secondary); text-align: center; margin-top: 60px; line-height: 2; }
 .msg { margin-bottom: 16px; display: flex; gap: 10px; }
 .msg.user { flex-direction: row-reverse; }
 .msg-label {
@@ -299,4 +296,7 @@ onMounted(async () => {
   border: 1px solid var(--el-border-color-extra-light);
 }
 .pdf-box { height: 480px; border-radius: 8px; overflow: hidden; border: 1px solid var(--el-border-color-extra-light); }
+.side-card,.chat-card,.source-card{border-radius:var(--study-radius-md)}
+@media(max-width:1200px){.chat-page{height:auto}.chat-row{display:grid;grid-template-columns:230px minmax(0,1fr);gap:10px}.chat-row:before,.chat-row:after{display:none}.chat-row>.el-col{width:auto;max-width:none;height:620px;padding:0!important}.chat-row>.el-col:last-child{grid-column:1/-1;height:520px}}
+@media(max-width:760px){.chat-row{grid-template-columns:1fr}.chat-row>.el-col,.chat-row>.el-col:last-child{grid-column:auto;height:auto;min-height:460px}.chat-row>.el-col:first-child{min-height:240px}.msg-content{max-width:84%}}
 </style>

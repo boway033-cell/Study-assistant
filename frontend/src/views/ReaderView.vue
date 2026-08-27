@@ -516,7 +516,7 @@ onMounted(() => loadBook(Number(route.params.bookId)))
 
 <style scoped>
 .reader-page { display: flex; flex-direction: column; height: calc(100vh - 64px); max-width: 1800px; margin: 0 auto; }
-.reader-top { display:flex; flex-direction:column; gap:7px; padding:8px 12px; margin-bottom:8px; background:rgba(245,240,232,.97); border:1px solid var(--study-card-border); border-radius:var(--study-radius-md); box-shadow:var(--study-shadow-sm); }
+.reader-top { display:flex; flex-direction:column; gap:6px; padding:7px 10px; margin-bottom:6px; background:var(--study-surface-paper); border:1px solid var(--study-card-border); border-radius:var(--study-radius-md); box-shadow:var(--study-shadow-sm); }
 .reader-primary-row,.reader-secondary-row { display:flex; align-items:center; justify-content:space-between; gap:16px; min-width:0; }
 .reader-identity, .reader-actions, .reader-status-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .reader-identity { flex:1; }

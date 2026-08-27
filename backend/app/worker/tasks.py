@@ -39,6 +39,7 @@ class TaskRecord:
     error: str | None = None
     retry_count: int = 0
     max_retries: int = 2  # 失败自动重试次数（网络抖动/限流场景）
+    cancel_requested: bool = False
     _coro: "Callable[[TaskRecord], Awaitable[Any]] | None" = field(default=None, repr=False)
 
 
@@ -46,7 +47,7 @@ def _release_completed_tasks() -> None:
     """释放已结束任务的闭包，仅在内存保留最近记录；完整历史仍在 SQLite。"""
     completed = [
         task_id for task_id, task in _task_registry.items()
-        if task.status in ("done", "failed")
+        if task.status in ("done", "failed", "cancelled")
     ]
     for task_id in completed[:-_MAX_COMPLETED_IN_MEMORY]:
         _task_registry.pop(task_id, None)
@@ -113,11 +114,20 @@ async def _worker() -> None:
     while True:
         record: TaskRecord = await _queue.get()
         try:
+            if record.cancel_requested or record.status == "cancelled":
+                raise TaskCancelled("任务已由用户取消")
             record.status = "running"
             _persist(record)
             if record._coro is not None:
                 record.result = await record._coro(record)
+            if record.cancel_requested:
+                raise TaskCancelled("任务已由用户取消")
             record.status = "done"
+            _persist(record)
+        except TaskCancelled as e:
+            record.status = "cancelled"
+            record.message = str(e)
+            record.error = None
             _persist(record)
         except Exception as e:  # noqa: BLE001
             if record.retry_count < record.max_retries:
@@ -135,7 +145,7 @@ async def _worker() -> None:
                 record.error = str(e)
                 _persist(record)
         finally:
-            if record.status in ("done", "failed"):
+            if record.status in ("done", "failed", "cancelled"):
                 record._coro = None
                 _release_completed_tasks()
             _queue.task_done()
@@ -180,6 +190,28 @@ def list_tasks() -> list[TaskRecord]:
     return list(_task_registry.values())
 
 
+class TaskCancelled(RuntimeError):
+    """由用户取消的任务；不触发自动重试。"""
+
+
+def cancel_task(task_id: str) -> TaskRecord | None:
+    """请求取消排队中或运行中的任务，并持久化取消状态。"""
+    record = _task_registry.get(task_id)
+    managed_in_process = record is not None
+    if record is None:
+        record = get_task(task_id)
+        if record is None:
+            return None
+        _task_registry[task_id] = record
+    if record.status in ("done", "failed", "cancelled"):
+        return record
+    record.cancel_requested = True
+    record.status = "cancelling" if managed_in_process and record.status == "running" else "cancelled"
+    record.message = "正在安全停止，已完成的页面缓存会保留" if record.status == "cancelling" else "任务已取消"
+    _persist(record)
+    return record
+
+
 import time as _time
 
 _last_persist_time: float = 0.0
@@ -187,6 +219,8 @@ _PERSIST_INTERVAL = 5.0  # 每 5 秒最多持久化一次进度（避免频繁 D
 
 
 def update_progress(record: TaskRecord, progress: float, stage: str = "", message: str = "") -> None:
+    if record.cancel_requested:
+        raise TaskCancelled("任务已取消；已完成的页面缓存会在下次解析时复用")
     record.progress = progress
     if stage:
         record.stage = stage

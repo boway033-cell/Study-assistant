@@ -14,29 +14,44 @@
       </div>
       <strong class="task-title">{{ task.book_title || '知识库任务' }}</strong>
       <el-progress v-if="isActive(task)" :percentage="percentage(task.progress)" :stroke-width="6" :show-text="false" />
-      <p :class="{ error: task.status === 'failed' }">{{ task.error || task.message || stageLabel(task.stage) }}</p>
-      <time>{{ formatTime(task.updated_at || task.created_at) }}</time>
+      <p :class="{ error: task.status === 'failed', stalled: isStalled(task) }">{{ isStalled(task) ? '长时间没有新进度，可取消后重试；已完成页面缓存不会删除。' : task.error || task.message || stageLabel(task.stage) }}</p>
+      <footer><time>{{ formatTime(task.updated_at || task.created_at) }}</time><el-button v-if="isActive(task)" link type="danger" :loading="cancellingId===task.task_id" @click.stop="requestCancel(task)">取消任务</el-button></footer>
     </div>
   </el-drawer>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskCenter, refreshTasks } from '../stores/taskCenter'
+import { cancelTask } from '../api'
 
 const visible = defineModel({ type: Boolean, default: false })
 const router = useRouter()
-const isActive = (task) => ['pending', 'running'].includes(task.status)
+const cancellingId = ref('')
+const isActive = (task) => ['pending', 'running', 'cancelling'].includes(task.status)
 const activeTasks = computed(() => taskCenter.items.filter(isActive))
 const finishedTasks = computed(() => taskCenter.items.filter((item) => !isActive(item)))
 const taskLabel = (name) => ({ import: '文献导入 / OCR', reimport: '重新解析', deep: '结构精读', deck: 'PPTX 汇报', deck_outline: 'PPTX 提纲', deck_render: 'PPTX 渲染' }[name] || '知识处理')
-const statusLabel = (status) => ({ pending: '排队中', running: '处理中', done: '已完成', failed: '失败' }[status] || status)
-const statusType = (status) => ({ done: 'success', failed: 'danger', running: 'warning', pending: 'info' }[status] || 'info')
+const statusLabel = (status) => ({ pending: '排队中', running: '处理中', cancelling: '取消中', cancelled: '已取消', done: '已完成', failed: '失败' }[status] || status)
+const statusType = (status) => ({ done: 'success', failed: 'danger', cancelled: 'info', cancelling: 'warning', running: 'warning', pending: 'info' }[status] || 'info')
 const stageLabel = (stage) => ({ parsing: '正在解析原文', ocr: '正在识别扫描页', deep: '正在结构化精读', generate: '正在生成汇报', deck_outline: '正在生成可编辑提纲', deck_render: '正在渲染并审计 PPTX' }[stage] || stage || '等待处理')
 const percentage = (value) => Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : ''
+const isStalled = (task) => task.status === 'running' && ['ocr', 'parsing'].includes(task.stage) && Date.now() - new Date(task.updated_at || task.created_at).getTime() > 120000
+const requestCancel = async (task) => {
+  try {
+    await ElMessageBox.confirm('停止后会保留已经完成的页面缓存。下次重新解析时可复用缓存。', '取消任务', { type: 'warning', confirmButtonText: '停止任务' })
+    cancellingId.value = task.task_id
+    await cancelTask(task.task_id)
+    await refreshTasks()
+    ElMessage.success('已提交停止请求')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.message || '任务未能停止')
+  } finally { cancellingId.value = '' }
+}
 const openTask = (task) => {
   if (!task.book_id) return
   visible.value = false
@@ -46,5 +61,5 @@ const openTask = (task) => {
 </script>
 
 <style scoped>
-.task-summary{display:grid;grid-template-columns:1fr 1fr auto;align-items:center;gap:10px;margin-bottom:14px}.task-summary>div{display:flex;flex-direction:column;padding:12px;border-radius:12px;background:#f3eee4}.task-summary strong{font:700 24px Georgia,serif;color:#6f4721}.task-summary span{font-size:11px;color:#887762}.task-item{margin-top:12px;padding:14px;border:1px solid #ded5c7;border-radius:12px;background:#faf7f0;cursor:pointer;transition:.18s}.task-item:hover{border-color:#b99570;transform:translateY(-1px)}.task-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}.task-kind{font-size:11px;letter-spacing:1px;color:#8b5a2b}.task-title{display:block;margin-bottom:8px;color:#33362f}.task-item p{min-height:18px;margin:7px 0 2px;font-size:12px;color:#746b5e}.task-item p.error{color:#b94b45}.task-item time{font-size:10px;color:#a09382}.task-empty{padding:80px 0;text-align:center;color:#9a8d7a}
+.task-summary{display:grid;grid-template-columns:1fr 1fr auto;align-items:center;gap:8px;margin-bottom:12px}.task-summary>div{display:flex;flex-direction:column;padding:10px;border-radius:var(--study-radius-md);background:var(--study-surface-muted)}.task-summary strong{font:700 20px Georgia,serif;color:var(--el-color-primary)}.task-summary span{font-size:var(--study-font-size-xs);color:var(--study-text-secondary)}.task-item{margin-top:10px;padding:12px;border:1px solid var(--study-card-border);border-radius:var(--study-radius-md);background:var(--study-surface-paper);cursor:pointer}.task-item:hover{border-color:var(--el-border-color)}.task-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}.task-kind{font-size:var(--study-font-size-xs);letter-spacing:.5px;color:var(--el-color-primary)}.task-title{display:block;margin-bottom:8px;color:var(--study-text-primary)}.task-item p{min-height:18px;margin:7px 0 2px;font-size:var(--study-font-size-xs);color:var(--study-text-secondary)}.task-item p.error{color:var(--el-color-danger)}.task-item p.stalled{color:var(--el-color-warning-dark-2)}.task-item footer{display:flex;align-items:center;justify-content:space-between}.task-item time{font-size:10px;color:var(--study-text-muted)}.task-empty{padding:36px 0;text-align:center;color:var(--study-text-muted)}
 </style>

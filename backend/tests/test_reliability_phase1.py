@@ -69,6 +69,30 @@ def test_global_task_center_reads_persisted_tasks():
         db.close()
 
 
+def test_persisted_task_can_be_cancelled():
+    from fastapi.testclient import TestClient
+    from backend.app.core.database import SessionLocal
+    from backend.app.main import app
+    from backend.app.models import Book, ImportTask
+
+    db = SessionLocal()
+    try:
+        book = Book(title="Cancellable OCR", file_path="missing.pdf", file_type="pdf", status="pending")
+        db.add(book)
+        db.flush()
+        db.add(ImportTask(id="import-cancellable", book_id=book.id, name="import", status="pending", stage="ocr"))
+        db.commit()
+        client = TestClient(app)
+        response = client.post("/api/tasks/import-cancellable/cancel")
+        client.close()
+        assert response.status_code == 200
+        assert response.json()["status"] == "cancelled"
+        db.expire_all()
+        assert db.get(ImportTask, "import-cancellable").status == "cancelled"
+    finally:
+        db.close()
+
+
 def test_sqlite_online_backup_includes_wal_commits(tmp_path: Path):
     from backend.app.core.data_manager import _sqlite_backup
 

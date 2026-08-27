@@ -1,25 +1,24 @@
 <template>
   <div class="workbench study-page">
-    <section class="workbench-commandbar">
-      <div><span class="eyebrow study-eyebrow">EVIDENCE · ACCESS · PRESENT</span><h1>文献工作台</h1><p>明确资料范围，先审提纲，再生成可追溯的中文文献汇报。</p></div>
+    <StudyCommandBar compact class="workbench-commandbar" title="文献汇报" description="限定证据范围，人工审阅提纲，完成来源审计后再生成可编辑文件。">
       <div class="workbench-summary" aria-label="汇报任务概况"><span><b>{{ decks.length }}</b>全部任务</span><span><b>{{ outlineReadyCount }}</b>待审提纲</span><span><b>{{ finishedDeckCount }}</b>可下载</span></div>
-      <div class="workbench-boundary"><b>本地优先</b><span>不读取 Chrome Cookie、密码或会话文件</span></div>
-    </section>
+      <template #actions><el-button plain @click="recordsDrawer=true">输出记录</el-button></template>
+    </StudyCommandBar>
 
-    <el-tabs v-model="tab" class="workspace-tabs workbench-tabs">
-      <el-tab-pane label="研究任务" name="deck">
+    <section class="primary-workflow">
         <div class="deck-flowbar">
-          <el-steps :active="stepActive" finish-status="success" simple>
-            <el-step title="选择证据" /><el-step title="设定汇报目标" /><el-step title="审阅提纲" /><el-step title="渲染与验收" />
+          <el-steps :active="workflowStep" finish-status="success" simple>
+            <el-step title="选择范围" /><el-step title="编辑提纲" /><el-step title="来源审计" /><el-step title="生成与验收" />
           </el-steps>
           <div class="scope-summary"><b>当前范围</b><span>{{ scopeSummary }}</span></div>
         </div>
         <div class="deck-workspace">
           <el-card shadow="never" class="scope-panel">
-            <template #header><div class="panel-heading"><span>01</span><div><b>资料与证据范围</b><small>所有输出都受这里的选择约束</small></div></div></template>
+            <template #header><div class="panel-heading"><div><b>资料与证据范围</b><small>所有输出都受这里的选择约束</small></div></div></template>
             <el-select v-model="form.book_id" filterable placeholder="选择已解析文献" style="width:100%" @change="loadBook">
               <el-option v-for="b in readyBooks" :key="b.id" :label="b.title" :value="b.id" />
             </el-select>
+            <div class="scope-secondary-actions"><el-button plain @click="accessDrawer=true">获取或导入全文</el-button><el-button plain :disabled="!form.book_id" @click="rightsDrawer=true">来源与权利</el-button></div>
             <div class="section-label">章节范围</div>
             <el-tree ref="chapterTree" :data="chapters" node-key="id" show-checkbox @check="onChapterCheck"
               :props="{ label: 'title', children: 'children' }" class="chapter-tree" empty-text="选择文献后显示章节" />
@@ -32,7 +31,7 @@
           </el-card>
 
           <el-card shadow="never" class="brief-panel">
-            <template #header><div class="panel-heading"><span>02</span><div><b>汇报目标与输出约束</b><small>先定义听众应该理解什么，再生成提纲</small></div></div></template>
+            <template #header><div class="panel-heading"><div><b>汇报目标与输出约束</b><small>先定义听众应该理解什么，再生成提纲</small></div></div></template>
             <div class="communication-job"><span>汇报目标</span><p>{{ communicationJob }}</p></div>
             <el-form label-position="top">
               <div class="two-col"><el-form-item label="目标受众"><el-input v-model="form.audience" placeholder="例如：公共管理课程同学" /></el-form-item><el-form-item label="汇报用途"><el-input v-model="form.purpose" placeholder="例如：解释核心发现并讨论局限" /></el-form-item></div>
@@ -40,10 +39,8 @@
               <el-form-item label="使用场景"><el-segmented v-model="form.use_scope" :options="useScopeOptions" /></el-form-item>
               <el-collapse class="advanced-settings"><el-collapse-item title="高级证据与图像设置" name="advanced"><el-form-item label="证据取样预算"><el-slider v-model="form.max_source_chars" :min="16000" :max="100000" :step="4000" show-input /></el-form-item><el-checkbox v-model="form.include_figures">优先选择支持核心主张的来源图像</el-checkbox><el-checkbox v-if="form.include_figures" v-model="form.rights_acknowledged">我已核对所选资源的使用范围；未知权利内容仍可能被排除</el-checkbox></el-collapse-item></el-collapse>
             </el-form>
-          </el-card>
-
-          <el-card shadow="never" class="delivery-panel">
-            <template #header><div class="panel-heading"><span>03</span><div><b>输出门禁</b><small>生成前确认范围与质量规则</small></div></div></template>
+            <section class="delivery-inline">
+              <header><b>生成条件</b><small>来源、权利与输出规则集中确认</small></header>
             <div class="gate-list">
               <div :class="{ready:form.book_id}"><i>{{ form.book_id ? '✓' : '1' }}</i><span><b>来源已限定</b><small>{{ form.book_id ? scopeSummary : '请选择主文献' }}</small></span></div>
               <div class="ready"><i>✓</i><span><b>证据叙事</b><small>一页一个主张，按论文类型组织论证</small></span></div>
@@ -53,11 +50,12 @@
             <div class="output-spec"><b>默认输出</b><span>中文可编辑 PPTX</span><span>术语保持一致</span><span>逐页演讲者备注</span><span>真实渲染与溢出检查</span></div>
             <el-button class="generate" type="primary" size="large" :loading="generating" :disabled="!form.book_id" @click="generate">生成并进入提纲审阅</el-button>
             <p class="generate-tip">AI 只使用所选来源；资料不足时保留缺口，不补写未经支持的结论。</p>
+            </section>
           </el-card>
         </div>
-      </el-tab-pane>
+    </section>
 
-      <el-tab-pane label="合法获取全文" name="access">
+    <el-drawer v-model="accessDrawer" title="获取或导入全文" size="min(1080px,96vw)" append-to-body>
         <div class="access-route" aria-label="全文获取流程">
           <div><i>1</i><span><b>识别文献</b><small>DOI、arXiv 或详情页</small></span></div>
           <div><i>2</i><span><b>选择合法路径</b><small>开放全文优先，馆藏登录接续</small></span></div>
@@ -86,9 +84,9 @@
             <div class="provider-list"><div v-for="p in config.providers || []" :key="p.id"><span>{{ p.label }}</span><el-tag size="small" :type="p.implemented?'success':'info'">{{ p.implemented ? '可用' : '扩展点' }}</el-tag></div></div>
           </el-card>
         </div>
-      </el-tab-pane>
+    </el-drawer>
 
-      <el-tab-pane label="来源与权利" name="rights">
+    <el-drawer v-model="rightsDrawer" title="来源与权利" size="min(980px,96vw)" append-to-body>
         <el-card shadow="never">
           <template #header><div class="card-head"><div><b>正文、SI 与来源权利</b><small>权利状态按资源记录，不自动推断法律许可</small></div><el-button type="primary" :disabled="!form.book_id" @click="newResource">添加资源</el-button></div></template>
           <el-select v-model="form.book_id" filterable placeholder="选择主文献" style="width:min(520px,100%)" @change="loadBook"><el-option v-for="b in readyBooks" :key="b.id" :label="b.title" :value="b.id" /></el-select>
@@ -101,9 +99,9 @@
           </el-table>
           <el-alert class="boundary" type="warning" :closable="false" title="许可证说明授权条件；Rights Statement 描述版权状态。系统不会把“开放获取”自动等同于“允许复制图表”。" />
         </el-card>
-      </el-tab-pane>
+    </el-drawer>
 
-      <el-tab-pane label="输出记录" name="records">
+    <el-drawer v-model="recordsDrawer" title="输出记录" size="min(1080px,96vw)" append-to-body>
         <el-card shadow="never" class="history records-card">
           <template #header><div class="card-head"><div><b>汇报任务与输出</b><small>提纲、审计、预览和下载集中管理</small></div><el-button plain size="small" @click="loadDecks">刷新状态</el-button></div></template>
           <el-table :data="decks" empty-text="还没有汇报任务，请先在“研究任务”中生成提纲">
@@ -115,8 +113,7 @@
             <el-table-column label="操作" width="250"><template #default="{row}"><el-button v-if="row.outline_editable" link type="primary" @click="openOutline(row)">审阅提纲</el-button><el-button v-if="row.preview_count" link @click="openPreview(row)">视觉预览</el-button><el-link v-if="row.download_ready" type="success" :href="presentationDownloadUrl(row.id)">下载 PPTX</el-link></template></el-table-column>
           </el-table>
         </el-card>
-      </el-tab-pane>
-    </el-tabs>
+    </el-drawer>
 
     <el-dialog v-model="outlineVisible" title="PPTX 提纲审阅" width="min(1320px,96vw)" destroy-on-close>
       <div v-if="editingDeck" class="outline-toolbar">
@@ -151,13 +148,17 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import StudyCommandBar from '../components/StudyCommandBar.vue'
 import { listBooks, getBook, listPresentations, presentationDownloadUrl,
   createPresentationOutline, updatePresentationOutline, renderPresentation, getPresentation, presentationPreviewUrl,
   getLiteratureConfig, updateLiteratureConfig, resolveLiterature, importOpenAccess, openLibraryHandoff, openBrowserHandoff,
   listLiteratureResources, createLiteratureResource, updateLiteratureResource } from '../api'
 import { notifyTaskSubmitted } from '../stores/taskCenter'
 
-const route = useRoute(); const tab = ref(['deck','access','rights','records'].includes(route.query.tab) ? route.query.tab : 'deck')
+const route = useRoute()
+const accessDrawer = ref(route.query.tab === 'access')
+const rightsDrawer = ref(route.query.tab === 'rights')
+const recordsDrawer = ref(route.query.tab === 'records')
 const books = ref([]); const chapters = ref([]); const chapterTree = ref(); const decks = ref([]); const checkedChapterCount = ref(0)
 const generating = ref(false); const resolving = ref(false); const candidates = ref([]); const accessSearched = ref(false); const importingUrl = ref(''); const savingConfig = ref(false)
 const submittedTaskId = ref('')
@@ -187,7 +188,14 @@ const scopeSummary = computed(() => {
 const communicationJob = computed(() => `汇报结束时，${form.value.audience || '听众'}应能够${form.value.purpose || '理解论文的核心问题、证据与边界'}。`)
 const activeSlide = computed(() => outlineDraft.value[activeSlideIndex.value] || null)
 const activeSlideAudit = computed(() => auditForSlide(activeSlideIndex.value + 1))
-const stepActive = computed(() => submittedTaskId.value ? 2 : form.value.book_id ? 1 : 0)
+const workflowStep = computed(() => {
+  const latest = decks.value[0]
+  if (!form.value.book_id || !latest) return 0
+  if (['rendering', 'running', 'done'].includes(latest.status)) return 3
+  if (latest.qa?.claim_source) return 2
+  if (latest.outline_editable || latest.status === 'outline_ready') return 1
+  return 0
+})
 const typeLabel = (x) => ({discovery:'发现 / 机制',methods:'方法 / 算法',resource:'资源 / 数据集',clinical:'临床 / 人群',materials:'材料 / 工程',review:'综述 / 观点'}[x] || '待识别')
 const onChapterCheck = (_node, state) => { checkedChapterCount.value = state.checkedKeys?.length || 0 }
 const statusLabel = (x) => ({pending:'排队中',outlining:'生成提纲',outline_ready:'待确认',rendering:'真实渲染',running:'生成中',done:'已完成',failed:'失败'}[x] || x)
@@ -224,15 +232,14 @@ onMounted(async()=>{ try{const [b,c]=await Promise.all([listBooks({page_size:100
 </script>
 
 <style scoped>
-.workbench{max-width:1500px}.hero h1{margin:5px 0;font:700 28px var(--study-font-reading);letter-spacing:2px}.hero p{color:rgba(247,241,232,.76)}.eyebrow{font-size:var(--study-font-size-xs);letter-spacing:2px;color:#d6b691}.guardrails{display:flex;flex-direction:column;text-align:right;font-size:var(--study-font-size-xs)}.guardrails span{margin-top:5px;color:rgba(247,241,232,.72)}.workspace-tabs{margin-top:12px}.workspace-tabs :deep(.el-tabs__item){color:rgba(245,240,232,.86);font-weight:650}.workspace-tabs :deep(.el-tabs__item:hover),.workspace-tabs :deep(.el-tabs__item.is-active){color:#e0ad70}.workspace-tabs :deep(.el-tabs__nav-wrap::after){background:rgba(245,240,232,.38)}.deck-grid,.access-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(360px,.72fr);gap:14px}.section-label{margin:18px 0 8px;font-size:var(--study-font-size-xs);font-weight:700;color:#756958;letter-spacing:.5px}.chapter-tree{max-height:280px;overflow:auto;padding:8px;border-radius:8px;background:var(--el-fill-color-extra-light)}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}.generate{width:100%;margin-top:24px}.history{margin-top:14px}.card-head,.candidate,.provider-list div{display:flex;align-items:center;justify-content:space-between;gap:12px}.candidate-list{margin-top:16px}.candidate{padding:12px 0;border-bottom:1px solid var(--el-border-color-lighter)}.candidate div{min-width:0}.candidate small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--el-text-color-secondary);max-width:680px}.candidate .candidate-note{margin-top:4px;color:#8b5a2b;white-space:normal}.boundary{margin-top:18px}.provider-list{margin-top:22px;padding-top:14px;border-top:1px solid var(--el-border-color-lighter)}.provider-list div{padding:7px 0;color:var(--el-text-color-regular)}@media(max-width:900px){.hero{align-items:flex-start;flex-direction:column}.guardrails{text-align:left}.deck-grid,.access-grid{grid-template-columns:1fr}.two-col{grid-template-columns:1fr}}
+.workbench{max-width:1500px}.workspace-tabs{margin-top:4px}.workspace-tabs :deep(.el-tabs__header){margin-bottom:8px}.workspace-tabs :deep(.el-tabs__item){height:40px;color:var(--study-text-secondary);font-weight:650}.workspace-tabs :deep(.el-tabs__item:hover),.workspace-tabs :deep(.el-tabs__item.is-active){color:var(--el-color-primary)}.workspace-tabs :deep(.el-tabs__nav-wrap::after){height:1px;background:var(--el-border-color)}.deck-grid,.access-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(360px,.72fr);gap:14px}.section-label{margin:18px 0 8px;font-size:var(--study-font-size-xs);font-weight:700;color:#756958;letter-spacing:.5px}.chapter-tree{max-height:280px;overflow:auto;padding:8px;border-radius:8px;background:var(--el-fill-color-extra-light)}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}.generate{width:100%;margin-top:24px}.history{margin-top:14px}.card-head,.candidate,.provider-list div{display:flex;align-items:center;justify-content:space-between;gap:12px}.candidate-list{margin-top:16px}.candidate{padding:12px 0;border-bottom:1px solid var(--el-border-color-lighter)}.candidate div{min-width:0}.candidate small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--el-text-color-secondary);max-width:680px}.candidate .candidate-note{margin-top:4px;color:#8b5a2b;white-space:normal}.boundary{margin-top:18px}.provider-list{margin-top:22px;padding-top:14px;border-top:1px solid var(--el-border-color-lighter)}.provider-list div{padding:7px 0;color:var(--el-text-color-regular)}@media(max-width:900px){.deck-grid,.access-grid{grid-template-columns:1fr}.two-col{grid-template-columns:1fr}}
 .deck-steps{display:grid;grid-template-columns:minmax(0,1fr) 250px;align-items:center;gap:20px;margin-bottom:14px;padding:16px 18px;border:1px solid rgba(139,90,43,.15);border-radius:14px;background:#f7f2e9}.scope-summary{display:flex;flex-direction:column;padding-left:18px;border-left:1px solid #ded3c3}.scope-summary b{font-size:11px;color:#8b5a2b}.scope-summary span{margin-top:5px;font-size:12px;color:#6d6559}@media(max-width:760px){.deck-steps{grid-template-columns:1fr}.scope-summary{padding:10px 0 0;border-left:0;border-top:1px solid #ded3c3}}
 .resource-checks{display:flex;flex-direction:column;gap:5px}.card-head small{display:block;margin-top:4px;color:var(--el-text-color-secondary);font-weight:400}.outline-toolbar{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;margin-bottom:12px;border:1px solid #e5e7eb;border-radius:10px;background:#f7f2e9;box-shadow:0 1px 2px rgba(15,23,42,.06)}.outline-toolbar div{display:flex;flex-direction:column}.outline-toolbar small{margin-top:4px;color:#7b7165}.outline-list{display:grid;gap:10px;max-height:62vh;overflow:auto;padding:2px 4px 10px}.outline-slide{border:1px solid #e5e7eb;box-shadow:0 1px 2px rgba(15,23,42,.06)}.outline-slide :deep(.el-card__body){display:grid;gap:9px}.audit-issues{padding:8px 10px;border-radius:7px;color:#9a5d28;background:#fff5e7;font-size:12px}.preview-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.preview-grid img{width:100%;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 1px 2px rgba(15,23,42,.06)}@media(max-width:760px){.preview-grid{grid-template-columns:1fr}.outline-toolbar{align-items:flex-start;gap:8px;flex-direction:column}}
 
 /* 文献工作台迁移：任务流 + 证据范围 + 输出门禁 */
-.workbench-commandbar{display:grid;grid-template-columns:minmax(360px,1fr) auto minmax(220px,auto);align-items:center;gap:28px;padding:16px 22px;border:1px solid rgba(245,240,232,.16);border-radius:var(--study-radius-lg);background:linear-gradient(120deg,#173638,#536354);color:#f7f1e8;box-shadow:0 8px 24px rgba(19,43,43,.16)}.workbench-commandbar h1{margin:3px 0;font:700 25px var(--study-font-reading);letter-spacing:1.5px}.workbench-commandbar p{color:rgba(247,241,232,.76);font-size:var(--study-font-size-sm)}
-.workbench-summary{display:flex;gap:22px}.workbench-summary span{display:flex;flex-direction:column;color:rgba(247,241,232,.72);font-size:var(--study-font-size-xs);text-align:center}.workbench-summary b{margin-bottom:2px;color:#fff;font:700 21px Georgia,serif}.workbench-boundary{display:flex;flex-direction:column;padding-left:18px;border-left:1px solid rgba(245,240,232,.22);font-size:var(--study-font-size-xs);text-align:right}.workbench-boundary span{margin-top:4px;color:rgba(247,241,232,.7)}
-.workbench-tabs>.el-tabs__content{overflow:visible}.deck-flowbar{display:grid;grid-template-columns:minmax(0,1fr) 270px;align-items:center;gap:18px;margin-bottom:12px;padding:12px 16px;border:1px solid var(--study-card-border);border-radius:var(--study-radius-md);background:#f7f2e9;box-shadow:var(--study-shadow-sm)}.deck-flowbar :deep(.el-steps--simple){padding:8px 4px;background:transparent}.deck-flowbar .scope-summary{padding-left:16px}
-.deck-workspace{display:grid;grid-template-columns:minmax(280px,.82fr) minmax(400px,1.25fr) minmax(280px,.78fr);align-items:start;gap:12px}.scope-panel,.brief-panel,.delivery-panel{min-width:0}.scope-panel{position:sticky;top:76px}.panel-heading{display:flex;align-items:center;gap:10px}.panel-heading>span{display:grid;width:28px;height:28px;place-items:center;border-radius:50%;background:#eee2d1;color:#8b5a2b;font:700 12px Georgia,serif}.panel-heading>div{display:flex;flex-direction:column}.panel-heading small{margin-top:3px;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);font-weight:400}.chapter-tree{max-height:360px}.communication-job{margin-bottom:16px;padding:12px 14px;border-left:3px solid var(--el-color-primary);border-radius:0 8px 8px 0;background:#f7f0e5}.communication-job span{color:#8b5a2b;font-size:var(--study-font-size-xs);font-weight:700}.communication-job p{margin-top:5px;color:#49463f;line-height:1.65}.field-unit{margin-left:6px;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs)}.advanced-settings{margin-top:4px;border-top:1px solid var(--el-border-color-lighter);border-bottom:0}.advanced-settings :deep(.el-collapse-item__header){background:transparent;color:#716352}.advanced-settings :deep(.el-collapse-item__wrap){background:transparent}.advanced-settings :deep(.el-checkbox){height:auto;margin:5px 0;white-space:normal}
+.workbench-commandbar{margin-bottom:0}.workbench-summary{display:flex;gap:18px}.workbench-summary span{display:flex;flex-direction:column;color:var(--study-text-secondary);font-size:var(--study-font-size-xs);text-align:center}.workbench-summary b{margin-bottom:1px;color:var(--el-color-primary);font:700 18px Georgia,serif}.workbench-boundary{display:flex;flex-direction:column;font-size:var(--study-font-size-xs);text-align:right}.workbench-boundary span{margin-top:2px;color:var(--study-text-secondary)}
+.primary-workflow{min-width:0}.deck-flowbar{display:grid;grid-template-columns:minmax(0,1fr) 270px;align-items:center;gap:18px;margin-bottom:8px;padding:9px 12px;border:1px solid var(--study-card-border);border-radius:var(--study-radius-md);background:var(--study-surface-paper)}.deck-flowbar :deep(.el-steps--simple){padding:6px 4px;background:transparent}.deck-flowbar :deep(.el-step__title){font-size:var(--study-font-size-sm)}.deck-flowbar .scope-summary{padding-left:16px}
+.deck-workspace{display:grid;grid-template-columns:minmax(300px,.78fr) minmax(520px,1.42fr);align-items:start;gap:12px}.scope-panel,.brief-panel{min-width:0}.scope-panel{position:sticky;top:60px}.scope-secondary-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.scope-secondary-actions .el-button{margin:0}.panel-heading{display:flex;align-items:center;gap:10px}.panel-heading>div{display:flex;flex-direction:column}.panel-heading small{margin-top:3px;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);font-weight:400}.chapter-tree{max-height:360px}.communication-job{margin-bottom:16px;padding:12px 14px;border-left:3px solid var(--el-color-primary);border-radius:0 8px 8px 0;background:#f7f0e5}.communication-job span{color:#8b5a2b;font-size:var(--study-font-size-xs);font-weight:700}.communication-job p{margin-top:5px;color:#49463f;line-height:1.65}.field-unit{margin-left:6px;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs)}.advanced-settings{margin-top:4px;border-top:1px solid var(--el-border-color-lighter);border-bottom:0}.advanced-settings :deep(.el-collapse-item__header){background:transparent;color:#716352}.advanced-settings :deep(.el-collapse-item__wrap){background:transparent}.advanced-settings :deep(.el-checkbox){height:auto;margin:5px 0;white-space:normal}.delivery-inline{margin-top:18px;padding-top:16px;border-top:1px solid var(--el-border-color-lighter)}.delivery-inline>header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:10px}.delivery-inline>header small{color:var(--study-text-secondary);font-size:var(--study-font-size-xs)}
 .gate-list{display:grid;gap:6px}.gate-list>div{display:flex;align-items:flex-start;gap:9px;padding:9px;border:1px solid #e7ddd0;border-radius:8px;background:#fbf7f0}.gate-list i{display:grid;width:22px;height:22px;flex:none;place-items:center;border-radius:50%;background:#ead9c5;color:#8b5a2b;font-style:normal;font-size:12px;font-weight:700}.gate-list .ready i{background:#dce9df;color:#47715c}.gate-list span{display:flex;min-width:0;flex-direction:column}.gate-list small{margin-top:2px;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);line-height:1.45}.output-spec{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;padding-top:13px;border-top:1px solid var(--el-border-color-lighter)}.output-spec b{width:100%;font-size:var(--study-font-size-sm)}.output-spec span{padding:3px 7px;border-radius:6px;background:#f0e8dc;color:#6d6254;font-size:var(--study-font-size-xs)}.generate{margin-top:16px}.generate-tip{margin-top:8px;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);line-height:1.6;text-align:center}.records-card{margin-top:0}.records-card :deep(.el-table__row){transition:background .16s ease}.records-card :deep(.el-table__row:hover){background:#fbf6ed}
 .candidate{border-radius:8px;transition:background .16s ease,padding .16s ease}.candidate:hover{padding-inline:10px;background:#f7f0e5}.access-actions{display:flex;gap:8px;flex-wrap:wrap}
 .access-route{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;margin-bottom:12px;overflow:hidden;border:1px solid var(--study-card-border);border-radius:var(--study-radius-md);background:var(--study-card-border);box-shadow:var(--study-shadow-sm)}.access-route>div{display:flex;align-items:center;gap:10px;padding:12px 16px;background:#f7f2e9}.access-route i{display:grid;width:26px;height:26px;flex:none;place-items:center;border-radius:50%;background:#e5d4bd;color:#7c532f;font:700 12px Georgia,serif}.access-route span{display:flex;min-width:0;flex-direction:column}.access-route small{margin-top:2px;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs)}.result-heading{display:flex;justify-content:space-between;gap:12px;padding:12px 0 6px;border-bottom:1px solid var(--el-border-color-lighter)}.result-heading span{color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs)}.access-empty{display:flex;align-items:flex-start;flex-direction:column;gap:7px;margin-top:16px;padding:16px;border:1px dashed #d8c7b0;border-radius:10px;background:#fbf7ef}.access-empty span{color:var(--el-text-color-secondary);font-size:var(--study-font-size-sm);line-height:1.6}.access-empty .el-button{margin-top:3px}.rights-summary{display:flex;gap:1px;width:min(520px,100%);margin-top:12px;overflow:hidden;border:1px solid var(--study-card-border);border-radius:9px;background:var(--study-card-border)}.rights-summary span{display:flex;flex:1;flex-direction:column;padding:9px 12px;background:#f8f3ea;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs)}.rights-summary b{margin-bottom:2px;color:#514a40;font:700 17px Georgia,serif}
@@ -243,7 +250,7 @@ onMounted(async()=>{ try{const [b,c]=await Promise.all([listBooks({page_size:100
 .outline-source{padding:12px;border-left:1px solid var(--el-border-color-lighter)}.audit-issues{display:flex;flex-direction:column;gap:5px;margin-top:12px}.audit-issues b{color:#8d5f28}.audit-issues span:before{content:'·';margin-right:6px}.audit-pass{display:flex;flex-direction:column;margin-top:12px;padding:10px;border-radius:8px;background:#edf4ed;color:#47715c}.audit-pass span{margin-top:4px;color:#61766a;font-size:var(--study-font-size-xs);line-height:1.5}.source-note{display:flex;flex-direction:column;margin-top:14px;padding-top:13px;border-top:1px solid var(--el-border-color-lighter)}.source-note span{margin-top:5px;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);line-height:1.6}
 .preview-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;padding:10px 12px;border:1px solid var(--study-card-border);border-radius:8px;background:#f7f2e9}.preview-toolbar>div{display:flex;flex-direction:column}.preview-toolbar span{margin-top:3px;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs)}.preview-grid figure{margin:0}.preview-grid figcaption{padding:5px;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);text-align:center}
 
-@media(max-width:1350px){.deck-workspace{grid-template-columns:minmax(280px,.8fr) minmax(420px,1.2fr)}.delivery-panel{grid-column:1/-1}.scope-panel{position:static}.workbench-commandbar{grid-template-columns:minmax(320px,1fr) auto}.workbench-boundary{grid-column:1/-1;padding:8px 0 0;border-left:0;border-top:1px solid rgba(245,240,232,.2);text-align:left}.outline-workspace{grid-template-columns:210px minmax(360px,1fr) 270px}}
-@media(max-width:900px){.workbench-commandbar,.deck-flowbar,.deck-workspace{grid-template-columns:1fr}.workbench-summary{justify-content:flex-start}.workbench-summary span{text-align:left}.deck-flowbar .scope-summary{padding:10px 0 0;border-left:0;border-top:1px solid #ded3c3}.delivery-panel{grid-column:auto}.outline-workspace{grid-template-columns:190px minmax(360px,1fr)}.outline-source{grid-column:1/-1;max-height:230px;border-top:1px solid var(--el-border-color-lighter);border-left:0}.access-grid{grid-template-columns:1fr}}
-@media(max-width:680px){.workbench-commandbar{padding:15px}.workbench-commandbar h1{font-size:22px}.workbench-summary{width:100%;justify-content:space-between}.two-col{grid-template-columns:1fr}.access-route{grid-template-columns:1fr}.rights-summary{flex-direction:column}.outline-workspace{display:flex;height:68vh;flex-direction:column;overflow:auto}.outline-nav{max-height:180px;border-right:0;border-bottom:1px solid var(--el-border-color-lighter)}.outline-editor{overflow:visible}.outline-source{overflow:visible;max-height:none}.preview-grid{grid-template-columns:1fr}.preview-toolbar{align-items:flex-start;flex-direction:column}}
+@media(max-width:1120px){.deck-workspace{grid-template-columns:minmax(280px,.72fr) minmax(440px,1.28fr)}.scope-panel{position:static}.outline-workspace{grid-template-columns:210px minmax(360px,1fr) 270px}}
+@media(max-width:900px){.deck-flowbar,.deck-workspace{grid-template-columns:1fr}.workbench-summary{justify-content:flex-start}.workbench-summary span{text-align:left}.deck-flowbar .scope-summary{padding:10px 0 0;border-left:0;border-top:1px solid #ded3c3}.outline-workspace{grid-template-columns:190px minmax(360px,1fr)}.outline-source{grid-column:1/-1;max-height:230px;border-top:1px solid var(--el-border-color-lighter);border-left:0}.access-grid{grid-template-columns:1fr}}
+@media(max-width:680px){.workbench-summary{width:100%;justify-content:space-between}.two-col{grid-template-columns:1fr}.access-route{grid-template-columns:1fr}.rights-summary{flex-direction:column}.outline-workspace{display:flex;height:68vh;flex-direction:column;overflow:auto}.outline-nav{max-height:180px;border-right:0;border-bottom:1px solid var(--el-border-color-lighter)}.outline-editor{overflow:visible}.outline-source{overflow:visible;max-height:none}.preview-grid{grid-template-columns:1fr}.preview-toolbar{align-items:flex-start;flex-direction:column}}
 </style>
