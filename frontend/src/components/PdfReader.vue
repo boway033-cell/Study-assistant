@@ -295,7 +295,12 @@ const loadPdf = async () => {
   try {
     const doc = await pdfjsLib.getDocument({
       url: props.src, disableAutoFetch: true,
-      cMapUrl: 'cmaps/', cMapPacked: true, standardFontDataUrl: 'standard_fonts/',
+      // 必须使用站点根路径。阅读器位于 /reader/:id，相对路径会误请求
+      // /reader/cmaps 并得到 SPA 的 index.html，进而造成 CID 字体解码失败。
+      cMapUrl: '/cmaps/', cMapPacked: true,
+      standardFontDataUrl: '/standard_fonts/',
+      // CNKI 等 PDF 常用 JBIG2 图像；pdf.js 6 未配置 WASM 时会直接忽略 XObject，表现为整页白屏。
+      wasmUrl: '/wasm/',
     }).promise
     pdfDoc = doc
     numPages.value = doc.numPages

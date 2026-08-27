@@ -1,7 +1,7 @@
 # 项目交接文档 · Study assistant（学习助手）
 
 > **用途**：供新对话/新协作者快速接管项目。阅读本文件 + 启动项目即可继续开发。
-> **最后更新**：设计系统收敛、核心工作区重排、资料可信字段、可取消 OCR 任务与 Windows 按需唤醒入口
+> **最后更新**：PDF.js 中文/JBIG2 渲染修复、AI 报告笔记阅读、设计系统与 Windows 按需唤醒入口
 
 ---
 
@@ -125,7 +125,7 @@
 - 按钮反馈统一为 120–180ms 的颜色、边框和轻阴影变化，不使用普遍的位移或缩放；问答、设置、AI 绘图同步使用统一表面、空状态和响应式断点。
 - `paper_profiles` 新增 `publication_status`、`visibility`、`demo_allowed`、`metadata_confidence`。默认私有且禁止演示；未来年份不再直接显示为可信元数据，保存上限为当前年份 + 1。
 - 任务管理新增 `cancelling/cancelled` 状态和 `/api/tasks/{task_id}/cancel`；进度回调会安全终止且不自动重试。OCR/解析两分钟无更新时间时，任务中心提示取消后重试并说明缓存保留。
-- 回归：后端 104 项、前端 7 项、Vite 构建通过；1440px 资料库、1024px 阅读器/知识沉淀、768px 文献工作台无页面错误。
+- 回归：后端 105 项、前端 9 项、Vite 构建通过；1440px 资料库、1024px 阅读器/知识沉淀、768px 文献工作台无页面错误。
 
 **体验目标**：本地部署（无网可用核心功能）、流畅（解析/检索毫秒级、大任务后台化）、功能完备（学-练-测-复盘全流程）。
 
@@ -323,12 +323,19 @@
 - 报告历史在原有 `selection_json` 内保存研究模式、深度、计划与待核查问题，无数据库迁移和附件副本。
 - 多书向量检索改为按 `book_ids` 逐书调用，避免启用向量能力后混入未选资料。相关边界测试已加入 `test_knowledge_deposition.py`。
 
+### 7.5 PDF.js 资源路径与长篇笔记阅读（2026-08-27）
+
+- CNKI ReaderEx PDF 有两类特殊依赖：CID/GBK 字体需要 `.bcmap`，扫描或图像型页面可能使用 JBIG2。原阅读器在 `/reader/:id` 下使用相对 `cmaps/`，实际取得 SPA `index.html`；同时未设置 `wasmUrl`，导致字体报 `unexpected EOF in bcmap`、图像报 `JBig2 failed to initialize`。
+- `PdfReader.vue` 现固定使用 `/cmaps/`、`/standard_fonts/`、`/wasm/`。Vite 生产构建复制 pdf.js 三类资源，开发服务器从 `node_modules` 只读按需提供；仓库不保存重复副本，WASM 只在对应 PDF 需要时加载。
+- 使用 book 17 第 1 页和 book 40 第 12 页真实回归：白屏与零散字形均恢复完整页面，控制台不再出现上述两类致命警告。
+- `GET /api/knowledge/notes/{id}` 按需返回完整笔记、章节/页码和来源回链。“笔记与证据”通过标题或“打开阅读”进入 Markdown 阅读抽屉，适合数千字 AI 综合报告；编辑前再次读取完整正文，避免从卡片摘要覆盖长文。
+
 ## 8. 测试情况
 
 | 测试 | 位置 | 结果 |
 |---|---|---|
-| 单元/架构测试 | `backend/tests/`（含 reliability_phase1 + literature_workbench + knowledge_deposition） | 103 项全过（含研究计划/来源审计、多书向量范围、网页 PDF 发现、知识范围与笔记数据安全和 DeepSeek 默认路由） |
-| 前端单测 | `frontend/tests/` | 7 项全过（SVG 安全、XML 转义、跨页批注锚点、卡片视觉令牌与按钮交互反馈） |
+| 单元/架构测试 | `backend/tests/`（含 reliability_phase1 + literature_workbench + knowledge_deposition） | 105 项全过（含研究计划/来源审计、多书向量范围、网页 PDF 发现、长篇 AI 笔记详情、知识范围与 DeepSeek 默认路由） |
+| 前端单测 | `frontend/tests/` | 9 项全过（SVG 安全、XML 转义、跨页批注锚点、PDF.js 根路径资源、Markdown 笔记阅读与设计令牌） |
 | UI 测试 | `backend/tests/ui_test.py`（Playwright） | 18 项全过（需先起后端） |
 | CI | `.github/workflows/ci.yml` | push/PR 自动跑单测 + 前端构建 |
 | Release | `.github/workflows/release.yml` | 打 `v*` 标签自动 build 前端 + 打包 zip 上传 Release |

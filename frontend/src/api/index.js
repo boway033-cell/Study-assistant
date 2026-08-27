@@ -146,6 +146,7 @@ export const listKnowledgeNotes = (bookIds, q = '') => http.get('/knowledge/note
 export const listKnowledgeRecords = (params = {}) => http.get('/knowledge/records', { params, paramsSerializer: repeatedParams })
 export const promoteAnnotation = (annotationId) => http.post(`/knowledge/annotations/${annotationId}/promote`)
 export const createKnowledgeNote = (data) => http.post('/knowledge/notes', data)
+export const getKnowledgeNote = (id) => http.get(`/knowledge/notes/${id}`)
 export const updateKnowledgeNote = (id, data) => http.patch(`/knowledge/notes/${id}`, data)
 export const deleteKnowledgeNote = (id) => http.delete(`/knowledge/notes/${id}`)
 export const addKnowledgeNoteToTree = (id, parentId = null) => http.post(`/knowledge/notes/${id}/add-to-tree`, null, { params: { parent_id: parentId } })

@@ -271,10 +271,14 @@ def promote_annotation(annotation_id: int, db: Session = Depends(get_db)):
 
 def _note_payload(note: KnowledgeNote, db: Session) -> dict:
     book = db.get(Book, note.book_id)
+    chapter = db.get(Chapter, note.chapter_id) if note.chapter_id else None
+    page = note.page or (chapter.start_page if chapter else None)
     return {"id": note.id, "book_id": note.book_id, "book_title": book.title if book else None,
-            "chapter_id": note.chapter_id, "page": note.page, "title": note.title,
+            "chapter_id": note.chapter_id, "chapter_title": chapter.title if chapter else None,
+            "page": page, "title": note.title,
             "content": note.content, "tags": json.loads(note.tags_json or "[]"),
             "origin": note.origin, "source_annotation_id": note.source_annotation_id,
+            "source_link": f"/reader/{note.book_id}?page={page or 1}" if note.book_id else None,
             "created_at": note.created_at.isoformat()}
 
 
@@ -286,6 +290,15 @@ def create_knowledge_note(req: KnowledgeNoteCreateReq, db: Session = Depends(get
                          title=req.title.strip(), content=req.content,
                          tags_json=json.dumps(req.tags[:20], ensure_ascii=False), origin=req.origin)
     db.add(note); db.commit(); db.refresh(note)
+    return _note_payload(note, db)
+
+
+@router.get("/notes/{note_id}")
+def get_knowledge_note(note_id: int, db: Session = Depends(get_db)):
+    """按需返回完整笔记正文；长篇 AI 研究报告由阅读视图使用，不依赖卡片摘要。"""
+    note = db.get(KnowledgeNote, note_id)
+    if not note:
+        raise HTTPException(404, "知识笔记不存在")
     return _note_payload(note, db)
 
 

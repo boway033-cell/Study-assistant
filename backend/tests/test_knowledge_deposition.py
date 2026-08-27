@@ -127,3 +127,28 @@ def test_annotation_note_and_evidence_are_independent_entities():
         db.query(Annotation).filter(Annotation.book_id == book.id).delete(synchronize_session=False)
         db.query(KnowledgeNode).filter(KnowledgeNode.book_id == book.id).delete(synchronize_session=False)
         db.delete(book); db.commit(); db.close()
+
+
+def test_ai_report_note_detail_preserves_markdown_and_source_link():
+    from backend.app.api.knowledge import create_knowledge_note, get_knowledge_note
+    from backend.app.core.database import SessionLocal
+    from backend.app.models import Book, KnowledgeNote
+    from backend.app.schemas import KnowledgeNoteCreateReq
+
+    db = SessionLocal()
+    book = Book(title=f"report-note-{uuid4().hex}", file_path="report-note.pdf", file_type="pdf", status="ready")
+    db.add(book); db.commit(); db.refresh(book)
+    markdown = "# 综合研究报告\n\n## 核心判断\n\n这是可完整阅读的 AI 报告。\n\n- 证据一\n- 证据二"
+    try:
+        created = create_knowledge_note(KnowledgeNoteCreateReq(
+            book_id=book.id, title="综合研究报告", content=markdown,
+            tags=["研究报告"], origin="ai",
+        ), db)
+        detail = get_knowledge_note(created["id"], db)
+        assert detail["content"] == markdown
+        assert detail["origin"] == "ai"
+        assert detail["tags"] == ["研究报告"]
+        assert detail["source_link"] == f"/reader/{book.id}?page=1"
+    finally:
+        db.query(KnowledgeNote).filter(KnowledgeNote.book_id == book.id).delete(synchronize_session=False)
+        db.delete(book); db.commit(); db.close()

@@ -1,14 +1,39 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { cpSync } from 'node:fs'
+import { cpSync, createReadStream, existsSync, statSync } from 'node:fs'
+import { extname, resolve, sep } from 'node:path'
 
-// 把 pdf.js 的中文字体映射(cmaps)与标准字体复制到构建产物（中文 PDF 文本层必需）
+const pdfAssetRoots = {
+  cmaps: resolve('node_modules/pdfjs-dist/cmaps'),
+  standard_fonts: resolve('node_modules/pdfjs-dist/standard_fonts'),
+  wasm: resolve('node_modules/pdfjs-dist/wasm'),
+}
+
+const pdfAssetType = file => ({
+  '.bcmap': 'application/octet-stream', '.pfb': 'application/octet-stream',
+  '.wasm': 'application/wasm', '.js': 'text/javascript; charset=utf-8',
+}[extname(file).toLowerCase()] || 'application/octet-stream')
+
+// 生产构建复制按需资源；开发服务器直接从 node_modules 只读提供，避免仓库重复保存约 3.3 MB 文件。
 function copyPdfAssets() {
   return {
     name: 'copy-pdf-assets',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const match = String(req.url || '').match(/^\/(cmaps|standard_fonts|wasm)\/([^?#]+)$/)
+        if (!match) return next()
+        const root = pdfAssetRoots[match[1]]
+        const file = resolve(root, decodeURIComponent(match[2]))
+        if (!file.startsWith(root + sep) || !existsSync(file) || !statSync(file).isFile()) return next()
+        res.statusCode = 200
+        res.setHeader('Content-Type', pdfAssetType(file))
+        createReadStream(file).pipe(res)
+      })
+    },
     closeBundle() {
-      cpSync('node_modules/pdfjs-dist/cmaps', 'dist/cmaps', { recursive: true })
-      cpSync('node_modules/pdfjs-dist/standard_fonts', 'dist/standard_fonts', { recursive: true })
+      for (const [name, source] of Object.entries(pdfAssetRoots)) {
+        cpSync(source, resolve('dist', name), { recursive: true })
+      }
     },
   }
 }
