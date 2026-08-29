@@ -93,12 +93,20 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                     update_progress(record, min(frac, 0.30), "ocr",
                                     f"OCR 识别页 {completed}/{weak_total}（PDF 第 {page_no} 页）{tag}")
 
+                def _ocr_checkpoint(page_no: int, phase: str) -> None:
+                    # update_progress is also the cooperative cancellation checkpoint.
+                    label = "检查页缓存" if phase == "cache" else "识别中"
+                    update_progress(record, record.progress, "ocr",
+                                    f"OCR 第 {page_no} 页：{label}（单页 {settings.ocr_page_timeout_seconds} 秒无结果将停止）")
+
                 try:
                     result.pages = ocr_pdf(
                         file_path,
                         on_progress=_ocr_progress,
                         page_numbers=weak_pages,
                         base_pages=result.pages,
+                        on_checkpoint=_ocr_checkpoint,
+                        page_timeout_seconds=settings.ocr_page_timeout_seconds,
                     )
                 finally:
                     release_ocr_engine()
@@ -189,27 +197,17 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         from backend.app.services.analyzer.keyinfo import analyze_book_text
         keyinfo = analyze_book_text(cleaned_pages)
 
-        # 5. 章节树：书签 + 全文编号标题 + 版面标题块融合。
-        # 书签提供稳定骨架，文本/版面来源补足“一、（一）、1.1”等子标题。
+        # 5. 章节树：PDF 融合书签/全文编号/版面标题；Office 只保留原生结构。
+        # DOCX/PPTX 的“页”是标题/幻灯片合成单元，套用 PDF 全文规则会把正文再次识别为目录。
         update_progress(record, 0.5, "chapters", "正在构建章节树...")
         try:
             from backend.app.services.parser import TocItem
-            from backend.app.services.rag.toc_heuristic import (
-                extract_toc_from_layout,
-                extract_toc_heuristic,
-                merge_toc_sources,
-            )
-            bookmark_toc = [
-                {"title": t.title, "level": t.level, "page": t.page}
-                for t in result.toc
-            ]
-            text_toc = extract_toc_heuristic(cleaned_pages)
-            layout_toc = extract_toc_from_layout(layout) if layout else []
-            merged_toc = merge_toc_sources(bookmark_toc, text_toc, layout_toc)
-            if merged_toc:
+            from backend.app.services.rag.toc_import import select_import_toc
+            selected_toc = select_import_toc(book.file_type, result.toc, cleaned_pages, layout)
+            if selected_toc:
                 result.toc = [
                     TocItem(title=t["title"], level=t["level"], page=t["page"])
-                    for t in merged_toc
+                    for t in selected_toc
                 ]
         except Exception:  # noqa: BLE001
             # 任一增强来源失败时仍保留原始书签，导入不被阻塞。

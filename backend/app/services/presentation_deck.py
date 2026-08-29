@@ -193,6 +193,47 @@ def collect_selection(db, book_id: int, chapter_ids: list[int], chunk_ids: list[
     }
 
 
+def collect_multi_selection(db, primary_book_id: int, source_book_ids: list[int], chapter_ids: list[int],
+                            chunk_ids: list[int], selected_text: str, resource_ids: list[int] | None = None,
+                            max_source_chars: int = 52000, source_report_id: int | None = None) -> dict:
+    """在多本书之间公平分配采样预算，并保留每条来源的书目归属。"""
+    book_ids = list(dict.fromkeys([primary_book_id, *(source_book_ids or [])]))[:50]
+    books = list(db.scalars(select(Book).where(Book.id.in_(book_ids))).all())
+    by_id = {book.id: book for book in books}
+    if len(by_id) != len(book_ids) or any(by_id[book_id].status != "ready" for book_id in book_ids):
+        raise ValueError("部分来源文献不存在或尚未完成解析")
+    chapter_books = dict(db.execute(select(Chapter.id, Chapter.book_id).where(Chapter.id.in_(chapter_ids or []))).all())
+    chunk_books = dict(db.execute(select(Chunk.id, Chunk.book_id).where(Chunk.id.in_(chunk_ids or []))).all())
+    if set(chapter_ids or []) - set(chapter_books) or set(chunk_ids or []) - set(chunk_books):
+        raise ValueError("选择范围包含不存在的章节或片段")
+
+    per_book_budget = max(8000, max_source_chars // max(1, len(book_ids)))
+    selections = [collect_selection(
+        db, book_id,
+        [item for item in (chapter_ids or []) if chapter_books.get(item) == book_id],
+        [item for item in (chunk_ids or []) if chunk_books.get(item) == book_id],
+        selected_text if book_id == primary_book_id else "",
+        resource_ids if book_id == primary_book_id else [], per_book_budget,
+    ) for book_id in book_ids]
+    sources = [source for selection in selections for source in selection.get("sources", [])]
+    groups = [group for selection in selections for group in selection.get("coverage", {}).get("groups", [])]
+    available = sum(selection.get("coverage", {}).get("available_chars", 0) for selection in selections)
+    sampled = sum(selection.get("coverage", {}).get("sampled_chars", 0) for selection in selections)
+    return {
+        "book": {"id": primary_book_id, "title": by_id[primary_book_id].title},
+        "books": [{"id": book_id, "title": by_id[book_id].title} for book_id in book_ids],
+        "source_report_id": source_report_id,
+        "chapter_ids": chapter_ids or [], "chunk_ids": chunk_ids or [], "resource_ids": resource_ids or [],
+        "sources": sources,
+        "coverage": {"max_source_chars": max_source_chars, "available_chars": available,
+                     "sampled_chars": sampled,
+                     "content_coverage": round(sampled / available, 4) if available else 0,
+                     "structure_coverage": round(sum(1 for group in groups if group.get("sampled_chunks")) / len(groups), 4) if groups else 0,
+                     "covered_groups": sum(1 for group in groups if group.get("sampled_chunks")),
+                     "total_groups": len(groups), "groups": groups},
+    }
+
+
 def _local_outline(title: str, paper_type: str, sources: list[dict], slide_count: int) -> list[dict]:
     arcs = {
         "methods": ["研究背景与当前瓶颈", "核心问题", "方法总览", "关键设计", "评测设置", "主要结果", "稳健性与失败案例", "适用边界", "总结"],
@@ -323,8 +364,12 @@ def _add_textbox(slide, left, top, width, height, text, size, color, bold=False,
     return box
 
 
-def _extract_page_figure(pdf_path: Path, page_no: int, output: Path) -> Path | None:
-    """Extract the largest embedded raster on a source page without cropping labels."""
+def _extract_page_visual(pdf_path: Path, page_no: int, output: Path, source_text: str = "") -> dict | None:
+    """Prefer an embedded figure, but rasterize the full source page when fidelity is uncertain.
+
+    Full-page fallback deliberately keeps vector plots, formulas, labels and multi-panel
+    relationships together.  It is lossless semantically even though the PPTX copy is rasterized.
+    """
     if not pdf_path.exists() or page_no < 1:
         return None
     try:
@@ -332,25 +377,37 @@ def _extract_page_figure(pdf_path: Path, page_no: int, output: Path) -> Path | N
         doc = fitz.open(pdf_path)
         try:
             if page_no > len(doc): return None
-            images = doc[page_no - 1].get_images(full=True)
+            page = doc[page_no - 1]
+            images = page.get_images(full=True)
             candidates = []
             for info in images:
                 width, height = int(info[2]), int(info[3])
                 if width >= 420 and height >= 260:
                     candidates.append((width * height, info[0]))
-            if not candidates: return None
-            pix = fitz.Pixmap(doc, max(candidates)[1])
+            drawings = page.get_drawings()
+            formula_hint = bool(re.search(r"(?:公式|方程|式\s*\(?\d+\)?|[=∑∫√±≤≥])", source_text or ""))
+            complex_page = len(candidates) > 1 or len(drawings) >= 12 or formula_hint
+            if complex_page or not candidates:
+                pix = page.get_pixmap(dpi=240, alpha=False)
+                mode = "page_fidelity"
+                reason = "复杂多面板/矢量/公式页采用 240 DPI 原页保真，避免误裁标签或公式"
+            else:
+                pix = fitz.Pixmap(doc, max(candidates)[1])
+                mode = "embedded_raster"
+                reason = "提取页面最大内嵌图像"
             if pix.n - pix.alpha > 3:
                 pix = fitz.Pixmap(fitz.csRGB, pix)
             pix.save(output)
-            return output
+            return {"path": output, "mode": mode, "reason": reason, "page": page_no,
+                    "embedded_images": len(candidates), "vector_objects": len(drawings),
+                    "formula_hint": formula_hint}
         finally:
             doc.close()
     except Exception:
         return None
 
 
-def render_pptx(path: Path, book: Book, profile: PaperProfile | None, outline: list[dict], sources: list[dict], paper_type: str, options: dict) -> None:
+def render_pptx(path: Path, book: Book, profile: PaperProfile | None, outline: list[dict], sources: list[dict], paper_type: str, options: dict) -> dict:
     from pptx import Presentation
     from pptx.dml.color import RGBColor
     from pptx.enum.shapes import MSO_SHAPE
@@ -360,6 +417,7 @@ def render_pptx(path: Path, book: Book, profile: PaperProfile | None, outline: l
     blank = prs.slide_layouts[6]
     source_map = {s["source_id"]: s for s in sources}
     pdf_path = settings.uploads_dir / book.file_path
+    visual_assets = []
     with tempfile.TemporaryDirectory(prefix="deck_fig_") as tmp:
       tmp_dir = Path(tmp)
       for idx, item in enumerate(outline):
@@ -383,7 +441,8 @@ def render_pptx(path: Path, book: Book, profile: PaperProfile | None, outline: l
                 for sid in item.get("source_ids", []):
                     src = source_map.get(sid, {}); page_no = src.get("page_start")
                     if page_no:
-                        hero = _extract_page_figure(pdf_path, int(page_no), tmp_dir / f"{idx}-{page_no}.png")
+                        hero = _extract_page_visual(pdf_path, int(page_no), tmp_dir / f"{idx}-{page_no}.png",
+                                                    str(src.get("text") or ""))
                         if hero: break
             text_width = Inches(5.65) if hero else Inches(11.45)
             _add_textbox(slide, Inches(.86), Inches(1.62), text_width, Inches(1.3), item.get("claim", ""), Pt(24), (39,42,39), True)
@@ -391,11 +450,12 @@ def render_pptx(path: Path, book: Book, profile: PaperProfile | None, outline: l
             _add_textbox(slide, Inches(1.02), Inches(3.15), Inches(5.35) if hero else Inches(10.9), Inches(2.55), bullet_text, Pt(18), (69,70,64))
             if hero:
                 from PIL import Image
-                with Image.open(hero) as im: ratio = im.width / max(im.height, 1)
+                with Image.open(hero["path"]) as im: ratio = im.width / max(im.height, 1)
                 max_w, max_h = Inches(5.5), Inches(4.7)
                 pic_w = min(max_w, int(max_h * ratio)); pic_h = int(pic_w / ratio)
-                slide.shapes.add_picture(str(hero), Inches(7.15) + (max_w - pic_w) // 2,
+                slide.shapes.add_picture(str(hero["path"]), Inches(7.15) + (max_w - pic_w) // 2,
                                          Inches(1.48) + (max_h - pic_h) // 2, width=pic_w, height=pic_h)
+                visual_assets.append({**{k: v for k, v in hero.items() if k != "path"}, "slide": idx + 1})
             refs = []
             for sid in item.get("source_ids", []):
                 src = source_map.get(sid, {})
@@ -416,6 +476,9 @@ def render_pptx(path: Path, book: Book, profile: PaperProfile | None, outline: l
         except Exception:
             pass
     path.parent.mkdir(parents=True, exist_ok=True); prs.save(path)
+    return {"assets": visual_assets,
+            "fidelity_fallback_slides": [item["slide"] for item in visual_assets if item["mode"] == "page_fidelity"],
+            "boundary": "复杂页以高分辨率原页图保留视觉关系；当前不把 PDF 矢量对象重建为可编辑 PowerPoint 形状。"}
 
 
 def audit_pptx(path: Path, outline: list[dict]) -> dict:
@@ -536,19 +599,22 @@ async def render_deck_task(record, deck_id: int) -> dict:
         deck.status = "rendering"; db.commit()
         update_progress(record, .28, "deck_render", "正在生成可编辑 PPTX")
         filename = f"paper-report-{book.id}-{deck.id}.pptx"; path = settings.presentations_dir / filename
-        render_pptx(path, book, profile, outline, selection["sources"], deck.paper_type or "discovery", render_options)
+        figure_fidelity = render_pptx(path, book, profile, outline, selection["sources"], deck.paper_type or "discovery", render_options)
         structural = audit_pptx(path, outline)
-        update_progress(record, .66, "deck_render", "Microsoft PowerPoint 正在真实渲染预览")
+        update_progress(record, .66, "deck_render", "正在探测 PowerPoint 并执行可用的视觉验收")
         visual = render_powerpoint_preview(path, deck.id)
         issues = [*structural.get("issues", []), *rights["issues"], *visual.get("issues", [])]
-        qa = {"ok": structural["ok"] and claim_audit["ok"] and visual.get("ok", False),
+        visual_required = not visual.get("skipped", False)
+        qa = {"ok": structural["ok"] and claim_audit["ok"] and (visual.get("ok", False) or not visual_required),
+              "validation_status": "verified" if visual.get("ok") else "structural_only" if visual.get("skipped") else "failed",
               "issues": issues, "structural": structural, "claim_source": claim_audit,
-              "coverage": selection.get("coverage", {}), "rights": rights, "visual": visual}
+              "coverage": selection.get("coverage", {}), "rights": rights, "visual": visual,
+              "figure_fidelity": figure_fidelity}
         manifest = {"version": 2, "created_at": datetime.now().isoformat(), "book_id": book.id,
                     "paper_type": deck.paper_type, "selection": {key: selection.get(key) for key in
                         ("chapter_ids", "chunk_ids", "resource_ids", "chapter_titles")},
                     "source_ids": [source["source_id"] for source in selection["sources"]],
-                    "coverage": selection.get("coverage", {}), "rights": rights,
+                    "coverage": selection.get("coverage", {}), "rights": rights, "figure_fidelity": figure_fidelity,
                     "generator": "nature-paper2ppt-adapted", "language": "zh-CN", "editable": True}
         deck.file_path = filename; deck.qa_json = json.dumps(qa, ensure_ascii=False)
         deck.manifest_json = json.dumps(manifest, ensure_ascii=False); deck.status = "done"; db.commit()

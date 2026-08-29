@@ -13,6 +13,36 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterator
 
+
+class OCRPageTimeout(RuntimeError):
+    """A page produced no result within the configured watchdog interval."""
+
+
+def _raise_control_exception(exc: Exception) -> None:
+    # Avoid importing worker.tasks here (it imports the parser through import_task).
+    if isinstance(exc, OCRPageTimeout) or exc.__class__.__name__ == "TaskCancelled":
+        raise exc
+
+
+def _checkpoint(on_checkpoint, page_no: int, phase: str) -> None:
+    if on_checkpoint:
+        on_checkpoint(page_no, phase)
+
+
+def _run_with_timeout(callable_, timeout_seconds: int, page_no: int):
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"ocr-page-{page_no}")
+    future = executor.submit(callable_)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except TimeoutError as exc:
+        future.cancel()
+        raise OCRPageTimeout(
+            f"PDF 第 {page_no} 页连续 {timeout_seconds} 秒没有 OCR 结果，任务已安全停止；已完成页面缓存会保留"
+        ) from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
 # 页均字符低于此值判定为扫描版（无文本层）
 SCAN_THRESHOLD = 30
 
@@ -75,7 +105,8 @@ def _ocr_cache_dir(file_hash: str) -> Path:
 
 
 def ocr_pdf(path: str | Path, on_progress=None, *, page_numbers: set[int] | None = None,
-            base_pages: list[str] | None = None, on_page_result=None) -> list[str]:
+            base_pages: list[str] | None = None, on_page_result=None,
+            on_checkpoint=None, page_timeout_seconds: int = 180) -> list[str]:
     """对扫描版 PDF 做 OCR，返回每页文本。
 
     on_progress(page_no, total, cached)：每页完成后回调（cached=True 表示命中缓存）。
@@ -102,31 +133,40 @@ def ocr_pdf(path: str | Path, on_progress=None, *, page_numbers: set[int] | None
             from rapidocr_onnxruntime import RapidOCR  # noqa: F401
         return _ocr_rapid(p, cache_dir=cache_dir, on_progress=on_progress,
                           page_numbers=page_numbers, base_pages=base_pages,
-                          on_page_result=on_page_result)
+                          on_page_result=on_page_result, on_checkpoint=on_checkpoint,
+                          page_timeout_seconds=page_timeout_seconds)
     except ImportError:
         pass
+    except OCRPageTimeout:
+        raise
     except Exception as e:  # noqa: BLE001
-        pass
+        _raise_control_exception(e)
 
     # 2. pytesseract
     try:
         import pytesseract  # noqa: F401
         return _ocr_tesseract(p, cache_dir=cache_dir, on_progress=on_progress,
                               page_numbers=page_numbers, base_pages=base_pages,
-                              on_page_result=on_page_result)
+                              on_page_result=on_page_result, on_checkpoint=on_checkpoint,
+                              page_timeout_seconds=page_timeout_seconds)
     except ImportError:
         pass
+    except OCRPageTimeout:
+        raise
     except Exception as e:  # noqa: BLE001
-        pass
+        _raise_control_exception(e)
 
     # 3. paddleocr
     try:
         import paddleocr  # noqa: F401
         return _ocr_paddle(p, cache_dir=cache_dir, on_progress=on_progress,
                            page_numbers=page_numbers, base_pages=base_pages,
-                           on_page_result=on_page_result)
+                           on_page_result=on_page_result, on_checkpoint=on_checkpoint,
+                           page_timeout_seconds=page_timeout_seconds)
     except ImportError:
         pass
+    except OCRPageTimeout:
+        raise
 
     raise RuntimeError(
         "该 PDF 为扫描版（无文本层），且未检测到可用的 OCR 引擎。"
@@ -244,6 +284,7 @@ def _prepare_cached_targets(
     page_numbers: set[int] | None,
     on_progress=None,
     on_page_result=None,
+    on_checkpoint=None,
 ) -> set[int]:
     """在渲染 PDF 前读取页缓存，避免命中缓存时仍生成整页位图。"""
     targets = set(range(1, total + 1)) if page_numbers is None else {
@@ -251,6 +292,7 @@ def _prepare_cached_targets(
     }
     missing: set[int] = set()
     for page_no in sorted(targets):
+        _checkpoint(on_checkpoint, page_no, "cache")
         _cache_file, cached_text = _cached_text(cache_dir, page_no)
         if cached_text is None:
             missing.add(page_no)
@@ -265,7 +307,8 @@ def _prepare_cached_targets(
 
 def _ocr_rapid(p: Path, cache_dir: Path | None = None,
                 on_progress=None, page_numbers: set[int] | None = None,
-                base_pages: list[str] | None = None, on_page_result=None) -> list[str]:
+                base_pages: list[str] | None = None, on_page_result=None,
+                on_checkpoint=None, page_timeout_seconds: int = 180) -> list[str]:
     """用 RapidOCR 识别每页（中文效果好，CPU 可跑）。
 
     每页结果缓存到 cache_dir/page_NNNN.txt：中断后重跑命中缓存直接读取（断点续 OCR）。
@@ -279,14 +322,15 @@ def _ocr_rapid(p: Path, cache_dir: Path | None = None,
         total = doc.page_count
     texts = _initial_pages(total, base_pages)
     missing_pages = _prepare_cached_targets(
-        total, texts, cache_dir, page_numbers, on_progress, on_page_result
+        total, texts, cache_dir, page_numbers, on_progress, on_page_result, on_checkpoint
     )
     for i, total, img in _iter_pdf_page_images(p, missing_pages):
+        _checkpoint(on_checkpoint, i, "recognizing")
         cache_file, cached_text = _cached_text(cache_dir, i)
         # 2. 真正 OCR
         arr = np.array(img)
         bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-        response = engine(bgr)
+        response = _run_with_timeout(lambda: engine(bgr), page_timeout_seconds, i)
         result = response[0] if isinstance(response, tuple) else getattr(response, "boxes", None)
         if result is None and hasattr(response, "txts"):
             result = [[None, text, score] for text, score in zip(response.txts, response.scores)]
@@ -312,7 +356,8 @@ def _ocr_rapid(p: Path, cache_dir: Path | None = None,
 
 def _ocr_tesseract(p: Path, cache_dir: Path | None = None,
                    on_progress=None, page_numbers: set[int] | None = None,
-                   base_pages: list[str] | None = None, on_page_result=None) -> list[str]:
+                   base_pages: list[str] | None = None, on_page_result=None,
+                   on_checkpoint=None, page_timeout_seconds: int = 180) -> list[str]:
     import pytesseract
     from PIL import Image
 
@@ -321,11 +366,13 @@ def _ocr_tesseract(p: Path, cache_dir: Path | None = None,
         total = doc.page_count
     texts = _initial_pages(total, base_pages)
     missing_pages = _prepare_cached_targets(
-        total, texts, cache_dir, page_numbers, on_progress, on_page_result
+        total, texts, cache_dir, page_numbers, on_progress, on_page_result, on_checkpoint
     )
     for i, total, img in _iter_pdf_page_images(p, missing_pages):
+        _checkpoint(on_checkpoint, i, "recognizing")
         cache_file, cached_text = _cached_text(cache_dir, i)
-        txt = pytesseract.image_to_string(img, lang="chi_sim+eng")
+        txt = _run_with_timeout(lambda: pytesseract.image_to_string(img, lang="chi_sim+eng"),
+                                page_timeout_seconds, i)
         texts[i - 1] = txt
         if cache_file is not None:
             try:
@@ -341,7 +388,8 @@ def _ocr_tesseract(p: Path, cache_dir: Path | None = None,
 
 def _ocr_paddle(p: Path, cache_dir: Path | None = None,
                   on_progress=None, page_numbers: set[int] | None = None,
-                  base_pages: list[str] | None = None, on_page_result=None) -> list[str]:
+                  base_pages: list[str] | None = None, on_page_result=None,
+                  on_checkpoint=None, page_timeout_seconds: int = 180) -> list[str]:
     from paddleocr import PaddleOCR
 
     ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
@@ -350,12 +398,13 @@ def _ocr_paddle(p: Path, cache_dir: Path | None = None,
         total = doc.page_count
     texts = _initial_pages(total, base_pages)
     missing_pages = _prepare_cached_targets(
-        total, texts, cache_dir, page_numbers, on_progress, on_page_result
+        total, texts, cache_dir, page_numbers, on_progress, on_page_result, on_checkpoint
     )
     for i, total, img in _iter_pdf_page_images(p, missing_pages):
+        _checkpoint(on_checkpoint, i, "recognizing")
         cache_file, cached_text = _cached_text(cache_dir, i)
         import numpy as np
-        result = ocr.ocr(np.array(img), cls=True)
+        result = _run_with_timeout(lambda: ocr.ocr(np.array(img), cls=True), page_timeout_seconds, i)
         lines = []
         if result and result[0]:
             for line in result[0]:

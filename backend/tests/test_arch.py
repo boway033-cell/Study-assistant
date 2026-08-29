@@ -109,7 +109,18 @@ def test_ocr_pdf_progress_signature():
     from backend.app.services.parser.ocr import ocr_pdf
     sig = inspect.signature(ocr_pdf)
     assert "on_progress" in sig.parameters
+    assert "on_checkpoint" in sig.parameters
+    assert "page_timeout_seconds" in sig.parameters
     assert sig.parameters["on_progress"].default is None
+
+
+def test_ocr_page_watchdog_times_out():
+    import time
+    import pytest
+    from backend.app.services.parser.ocr import OCRPageTimeout, _run_with_timeout
+
+    with pytest.raises(OCRPageTimeout, match="第 7 页"):
+        _run_with_timeout(lambda: time.sleep(.08), .01, 7)
 
 
 def test_archive_source_map_contract():

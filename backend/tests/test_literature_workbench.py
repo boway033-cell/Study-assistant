@@ -217,3 +217,35 @@ def test_real_powerpoint_render_when_available(tmp_path, monkeypatch):
         path, "pptx", hashlib.sha256(path.read_bytes()).hexdigest(), timeout=60,
     )
     assert rendered_pdf.read_bytes()[:5] == b"%PDF-"
+
+
+def test_powerpoint_unavailable_is_explicitly_skipped(tmp_path, monkeypatch):
+    from backend.app.services import powerpoint_render
+
+    path = tmp_path / "deck.pptx"
+    path.write_bytes(b"placeholder")
+    monkeypatch.setattr(powerpoint_render, "powerpoint_capability", lambda: {
+        "available": False, "engine": "unavailable", "reason": "COM 不可用",
+    })
+    result = powerpoint_render.render_powerpoint_preview(path, 42)
+    assert result["ok"] is False
+    assert result["skipped"] is True
+    assert result["validation_status"] == "not_rendered"
+
+
+def test_complex_pdf_page_uses_fidelity_fallback(tmp_path):
+    import fitz
+    from backend.app.services.presentation_deck import _extract_page_visual
+
+    source = tmp_path / "source.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    for index in range(14):
+        page.draw_rect(fitz.Rect(20 + index, 30 + index, 180 + index, 110 + index))
+    doc.save(source)
+    doc.close()
+    result = _extract_page_visual(source, 1, tmp_path / "visual.png", "公式 E = mc²")
+    assert result is not None
+    assert result["mode"] == "page_fidelity"
+    assert result["formula_hint"] is True
+    assert result["path"].exists()
