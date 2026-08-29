@@ -8,7 +8,7 @@
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-b28b54.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v1.2.0-8B5A2B.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v1.3.0-8B5A2B.svg)](CHANGELOG.md)
 
 本地优先 · 原文证据链 · 结构化阅读 · 知识沉淀 · 写作实验室 · 中文 PPTX
 
@@ -18,7 +18,7 @@
 
 ![Study Assistant 文献知识库真实运行界面](docs/assets/screenshots/library.jpg)
 
-<div align="center"><sub>v1.2.0 本机真实运行页面 · 文献知识库</sub></div>
+<div align="center"><sub>v1.3.0 本机真实运行页面 · 文献知识库</sub></div>
 
 Study Assistant 面向需要长期阅读教材、论文与讲义的学生、考研学习者和研究者。它不把全部资料塞进一个聊天框，而是围绕**个人知识库**组织一条连续动线：资料归档 → 原文阅读 → 高亮与证据 → 知识树/图谱 → 综合研读 → PPTX 汇报。
 
@@ -42,6 +42,10 @@ Study Assistant 面向需要长期阅读教材、论文与讲义的学生、考�
   <tr>
     <td width="50%"><img src="docs/assets/screenshots/knowledge-notes.jpg" alt="笔记与证据"><br><b>笔记与证据</b><br><sub>聚合高亮、划线、批注、知识笔记和证据卡片，同时保持底层实体独立。</sub></td>
     <td width="50%"><img src="docs/assets/screenshots/research-workspace.jpg" alt="研究报告工作区"><br><b>研究报告工作区</b><br><sub>书目/章节范围、AI 自主研读、来源与主张审计、报告流转。</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/screenshots/writing-lab.jpg" alt="Writing DNA 写作实验室"><br><b>Writing DNA</b><br><sub>20 篇完整文章门槛、语料权利确认、分层写作规律和可追溯版本。</sub></td>
+    <td width="50%"><img src="docs/assets/screenshots/writing-clean.jpg" alt="白名单去 AI 味"><br><b>白名单式去 AI 味</b><br><sub>文本或 DOCX 最小改写，保护事实与格式，候选修改由用户逐条决定。</sub></td>
   </tr>
 </table>
 
@@ -74,6 +78,8 @@ flowchart LR
     G --> I
     H --> I
     I --> J[选章节 / 选段生成中文 PPTX]
+    D --> K[20+ 篇语料蒸馏 Writing DNA]
+    K --> L[独立新作 / DOCX 去 AI 味]
 ```
 
 ## 核心体验
@@ -117,10 +123,12 @@ flowchart LR
 
 ### 5. 从个人语料沉淀写作方法
 
-- 在文献工作台进入“写作实验室”，选择至少 20 篇完整文章，分别分析语言、结构、选题与素材策略、认知框架和视觉风格；补充语料或反馈会生成可追溯的新版本。
-- 仿写只借鉴抽象写作规律，使用 5 篇主题相近原文校准语感，不复制原文事实和独特表达，也不冒充原作者；新作可导出 Word。
-- 文本与 DOCX 可执行白名单式“去 AI 味”。系统只修改明确命中的 11 类问题，并展示接受、拒绝和规则审计；数字、引语、链接、限定词及 Word 原有结构受到保护。
-- 写作实验室调用当前配置的 DeepSeek 接口；全文统计在本机逐篇完成，仅有限代表片段或待处理文本会在用户发起任务时发送给模型。
+- **Writing DNA**：在文献工作台选择至少 20 篇已完整解析的文章并确认语料处理权利。系统逐篇累计量化基线，再分别沉淀语言 DNA、文章结构、选题与素材策略、认知框架、视觉风格和整合 Writing-DNA，不把全部全文同时送入模型。
+- **持续版本化**：补充或排除文章、写下人工反馈都会生成新版本，旧版不覆盖；可核对完整语料清单、查看质量限制并并排比较历史 DNA。
+- **独立新作**：生成时读取当前版本的全部 DNA 产物，并选取 5 篇议题相近原文校准语感。它只借鉴抽象写法，不复制独特表达、不搬用原文观点，也不冒充作者；结果可编辑并原位重建 Word。
+- **白名单式“去 AI 味”**：文本与 DOCX 只处理 11 类明确、可定位的模板痕迹。每处修改保留原文、替换文本和规则编号，数字、引语、链接、限定词、表格及未修改 Word run 格式受到本地守恒校验。
+- **人工最终决定**：系统先给出候选修改，用户逐条接受或撤销，再从原始文本/DOCX 重放所选操作；不会用纯文本重建 Word，也不会把普通润色包装成“去 AI 味”。
+- 写作任务使用当前配置的 DeepSeek 接口；原稿、版本和输出保存在本机 `backend/data/writing/`，列表只返回摘要，正文按需加载。
 
 ## 快速开始
 
@@ -163,7 +171,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\protocol\install.p
 
 ### 启用 AI（可选）
 
-在应用设置页填写 DeepSeek API Key，即可使用问答、深度研读、出题与 PPTX 生成；视觉分析另需配置 Qwen-VL。也可在根目录 `.env` 中设置 `DEEPSEEK_API_KEY`。Key 只在本机保存并以脱敏形式显示。
+在应用设置页填写 DeepSeek API Key，即可使用问答、深度研读、出题、写作实验室与 PPTX 生成；视觉分析另需配置 Qwen-VL。也可在根目录 `.env` 中设置 `DEEPSEEK_API_KEY`。Key 只在本机保存并以脱敏形式显示。
 
 ## 数据边界
 
@@ -173,6 +181,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\protocol\install.p
 | 解析、切块、目录编辑、FTS5 检索 | 本机完成 |
 | AI 问答 | 提问与检索到的相关片段发送至已配置的 DeepSeek |
 | 深度分析、出题、研读、PPTX | 用户触发后，将所选范围的必要内容发送至 DeepSeek |
+| Writing DNA、独立新作、去 AI 味 | 本机逐篇统计；用户触发后，将受限代表片段或待处理文本发送至 DeepSeek；原稿和输出留在本机 |
 | 页面视觉分析 | 用户触发后，将当前页面图像发送至 Qwen-VL |
 
 未配置对应 Key 时不会触发云端能力。完整说明见 [PRIVACY.md](PRIVACY.md)。备份可直接复制 `backend/data/`，或运行 `scripts\maintenance\backup.bat`。
@@ -197,9 +206,9 @@ flowchart TB
 
 ## 项目状态
 
-- 后端测试：105 项，覆盖解析、目录、文献工作台、知识沉淀、批注、研究报告和数据可靠性。
-- 前端单元测试：9 项；另有真实 PDF 的 Playwright 浏览器回归。
-- 当前版本：v1.2.0。项目处于持续迭代期，解析质量仍以“证据 + 置信度 + 人工复核”作为安全边界。
+- 后端测试：124 项通过、1 项按本机 PowerPoint 环境跳过，覆盖解析、目录、写作实验室、知识沉淀、PPTX、检索评测和数据可靠性。
+- 前端单元测试：13 项；桌面与 390px 移动端共 24 个关键路由完成 Playwright 只读回归。
+- 当前版本：v1.3.0。项目处于持续迭代期，解析、写作与 AI 输出仍以“证据 + 审计 + 人工复核”作为安全边界。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
@@ -215,6 +224,7 @@ npm run build
 - [轻量文档管线](docs/LIGHTWEIGHT_DOCUMENT_PIPELINE.md)：解析、OCR、目录证据与内存约束
 - [文献研究工作流](docs/nature-literature-workflow.md)：归档、文献卡片、PPTX 与合法全文路径
 - [研究报告方法](docs/RESEARCH_REPORT_METHOD.md)：AI 自主研读、证据审计、外部方法借鉴与资源边界
+- [容量与检索评测](docs/SCALING_AND_RETRIEVAL_EVAL.md)：SQLite 容量护栏、迁移路线和固定质量基线
 - [脚本目录](scripts/README.md)：启动、协议、维护、兼容入口与内部工具说明
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [变更记录](CHANGELOG.md)
 

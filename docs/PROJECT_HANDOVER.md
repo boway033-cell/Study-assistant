@@ -383,9 +383,9 @@
 
 | 测试 | 位置 | 结果 |
 |---|---|---|
-| 单元/架构测试 | `backend/tests/`（含 reliability_phase1 + literature_workbench + knowledge_deposition） | 110 项全过（含目录阻断/恢复、Office 原生结构、多书来源链、长篇 AI 笔记详情与 DeepSeek 默认路由） |
-| 前端单测 | `frontend/tests/` | 9 项全过（SVG 安全、XML 转义、跨页批注锚点、PDF.js 根路径资源、Markdown 笔记阅读与设计令牌） |
-| UI 测试 | Playwright 无写入路由巡检 | 桌面/390px 移动端共 22 个核心路由全过，无控制台错误 |
+| 单元/架构测试 | `backend/tests/` | 124 项通过、1 项按本机 PowerPoint 环境跳过（含写作实验室、容量与检索评测、目录恢复、Office 来源链） |
+| 前端单测 | `frontend/tests/` | 13 项全过（含 Writing DNA、DOCX 去 AI 味边界、SVG 安全、批注锚点与设计令牌） |
+| UI 测试 | `scripts/ui_route_smoke.py` | 桌面/390px 移动端共 24 个关键路由全过，无控制台错误或横向溢出 |
 | CI | `.github/workflows/ci.yml` | push/PR 自动跑单测 + 前端构建 |
 | Release | `.github/workflows/release.yml` | 打 `v*` 标签自动 build 前端 + 打包 zip 上传 Release |
 
@@ -440,7 +440,7 @@
 
 ## 12. 开源发布状态
 
-- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布 tag v1.2.0）
+- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布 tag v1.3.0）
 - 许可证 MIT、PRIVACY.md、SECURITY.md、CHANGELOG.md、CONTRIBUTING.md、.gitattributes
 - CI（ci.yml）+ Release 自动打包（release.yml）
 - 分享给朋友：下载 Release 的 zip（含前端产物，不装 Node 也能用），或 git clone 后 `cd frontend && npm i && npm run build`
@@ -457,7 +457,7 @@ cd frontend && npm run build               # 改完前端构建（需 npm.cmd）
 
 # git 推送
 git push origin main
-git tag v1.2.0 && git push --tags        # 触发 Release 自动打包
+git tag v1.3.0 && git push --tags        # 触发 Release 自动打包
 
 # 关键文档
 docs/README.md  docs/产品文档.md  docs/PROJECT_HANDOVER.md

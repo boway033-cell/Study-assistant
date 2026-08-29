@@ -8,12 +8,17 @@
 - `maintenance/`：备份等日常维护工具。
 - `legacy/`：旧入口兼容脚本，不作为新用户首选入口。
 - 目录根部的 Python/PowerShell 文件：版面分析、Office/PowerPoint 渲染和工作区维护工具。
+- `benchmark_large_library.py`：在临时 SQLite 中运行合成容量基准，不接触用户数据库。
+- `evaluate_retrieval.py`：运行版本化固定检索集并输出 Recall、MRR、引用与拒答指标。
+- `ui_route_smoke.py`：对独立测试实例执行桌面与移动端关键路由只读巡检。
 
 常用命令：
 
 ```powershell
 scripts\maintenance\backup.bat
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\protocol\install.ps1
+.venv\Scripts\python scripts\evaluate_retrieval.py
+.venv\Scripts\python scripts\benchmark_large_library.py --books 1000 --chunks-per-book 100
 ```
 
 日常推荐直接双击桌面的“打开学习助手”，或在 Windows 运行框、网页链接中使用 `study-assistant://open`。启动器会串行完成“检查已有实例 → 选择 8000–8010 空闲端口 → 启动本地服务 → 健康检查 → 打开实际页面”，所以不要把固定的 `http://127.0.0.1:8000` 当作冷启动入口。整个唤醒过程只访问本机回环地址，不需要 VPN；服务未运行时不占用应用内存。
