@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import uuid
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -31,6 +33,10 @@ class CompatibleProviderWrite(BaseModel):
     base_url: str = Field(min_length=8, max_length=1000)
     model: str = Field(min_length=1, max_length=120)
     api_key: str | None = Field(default=None, max_length=1000)
+
+
+class StorageCleanupReq(BaseModel):
+    categories: list[str] = Field(min_length=1, max_length=3)
 
 _DEFAULTS = {
     "deepseek_api_key": app_settings.deepseek_api_key,
@@ -204,3 +210,63 @@ async def probe_compatible_provider(provider_id: str, db: Session = Depends(get_
         return {"ok": False, "reason": f"HTTP {response.status_code}: {response.text[:160]}"}
     except httpx.HTTPError as exc:
         return {"ok": False, "reason": f"连接失败：{type(exc).__name__}: {exc}"}
+
+
+def _path_size(path: Path) -> int:
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    if not path.exists():
+        return 0
+    total = 0
+    for item in path.rglob("*"):
+        if item.is_file():
+            try:
+                total += item.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def _storage_items() -> list[dict]:
+    roots = [
+        ("originals", "原始文献", app_settings.uploads_dir, False, "不可自动恢复，永不清理"),
+        ("database", "知识库数据库", app_settings.db_path, False, "由备份恢复，永不清理"),
+        ("backups", "数据库备份", app_settings.data_dir / "backups", False, "按容量策略保留"),
+        ("presentations", "PPTX 成品", app_settings.presentations_dir, False, "用户输出，永不清理"),
+        ("ocr_cache", "OCR 文字层缓存", app_settings.data_dir / "ocr_cache", True, "再次识别时可重建"),
+        ("office_rendered", "Office 页面缓存", app_settings.structured_dir / "office-rendered", True, "再次打开时可重建"),
+        ("presentation_previews", "PPTX 预览图", app_settings.presentations_dir / "previews", True, "再次渲染时可重建"),
+    ]
+    return [{"key": key, "label": label, "bytes": _path_size(path), "clearable": clearable,
+             "recoverability": recoverability} for key, label, path, clearable, recoverability in roots]
+
+
+@router.get("/settings/storage")
+def get_storage_usage():
+    items = _storage_items()
+    # 预览图包含在 presentations 中，汇总时避免重复计算。
+    return {"total_bytes": sum(item["bytes"] for item in items if item["key"] != "presentation_previews"),
+            "items": items, "protected": ["originals", "database", "backups", "presentations"]}
+
+
+@router.post("/settings/storage/cleanup")
+def cleanup_storage(req: StorageCleanupReq):
+    allowed = {
+        "ocr_cache": app_settings.data_dir / "ocr_cache",
+        "office_rendered": app_settings.structured_dir / "office-rendered",
+        "presentation_previews": app_settings.presentations_dir / "previews",
+    }
+    unknown = set(req.categories) - allowed.keys()
+    if unknown:
+        raise HTTPException(400, f"不可清理的存储分类：{', '.join(sorted(unknown))}")
+    released = 0
+    for category in set(req.categories):
+        path = allowed[category]
+        released += _path_size(path)
+        if path.exists():
+            shutil.rmtree(path)
+        path.mkdir(parents=True, exist_ok=True)
+    return {"ok": True, "released_bytes": released, "storage": get_storage_usage()}

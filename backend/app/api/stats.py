@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
@@ -22,8 +22,8 @@ from backend.app.schemas import (
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
 
-def _chapter_wrong_rate(db: Session, chapter_id: int) -> float:
-    """章节错题率：该章题目最近一次作答错误的占比（无作答记录返回 0）。"""
+def _chapter_quiz_stats(db: Session, book_id: int | None = None) -> dict[int, dict]:
+    """一次查询汇总各章题量与最近作答，避免按章节循环查询。"""
     latest = (
         select(
             Attempt.quiz_id,
@@ -33,18 +33,24 @@ def _chapter_wrong_rate(db: Session, chapter_id: int) -> float:
             ).label("rn"),
         ).subquery()
     )
-    latest_join = (
-        select(latest.c.quiz_id, latest.c.is_correct)
-        .where(latest.c.rn == 1)
-        .join(Quiz, Quiz.id == latest.c.quiz_id)
-        .where(Quiz.chapter_id == chapter_id)
-        .subquery()
+    latest_only = select(latest.c.quiz_id, latest.c.is_correct).where(latest.c.rn == 1).subquery()
+    stmt = (
+        select(
+            Quiz.chapter_id,
+            func.count(Quiz.id).label("quizzes"),
+            func.count(latest_only.c.quiz_id).label("attempted"),
+            func.sum(case((latest_only.c.is_correct == 0, 1), else_=0)).label("wrong"),
+        )
+        .outerjoin(latest_only, latest_only.c.quiz_id == Quiz.id)
+        .where(Quiz.chapter_id.is_not(None))
+        .group_by(Quiz.chapter_id)
     )
-    total = db.scalar(select(func.count()).select_from(latest_join)) or 0
-    wrong = db.scalar(
-        select(func.count()).select_from(latest_join).where(latest_join.c.is_correct == 0)
-    ) or 0
-    return round(wrong / total, 3) if total else 0.0
+    if book_id is not None:
+        stmt = stmt.join(Chapter, Chapter.id == Quiz.chapter_id).where(Chapter.book_id == book_id)
+    return {int(row.chapter_id): {"quizzes": int(row.quizzes or 0), "attempted": int(row.attempted or 0),
+                                  "wrong": int(row.wrong or 0),
+                                  "wrong_rate": round((row.wrong or 0) / row.attempted, 3) if row.attempted else 0.0}
+            for row in db.execute(stmt).all()}
 
 
 def _chapter_mastery(wrong_rate: float, has_data: bool) -> float:
@@ -61,19 +67,15 @@ def overview(db: Session = Depends(get_db)):
     attempts_total = db.scalar(select(func.count()).select_from(Attempt)) or 0
 
     # 平均掌握度：各章掌握度按题量加权
-    chapters = db.scalars(select(Chapter)).all()
+    chapter_stats = _chapter_quiz_stats(db)
     weighted = 0.0
-    total_quizzes = 0
-    for ch in chapters:
-        quizzes = db.scalar(
-            select(func.count()).select_from(Quiz).where(Quiz.chapter_id == ch.id)
-        ) or 0
-        if not quizzes:
+    attempted_total = 0
+    for stats in chapter_stats.values():
+        if not stats["attempted"]:
             continue
-        wrong_rate = _chapter_wrong_rate(db, ch.id)
-        weighted += _chapter_mastery(wrong_rate, True) * quizzes
-        total_quizzes += quizzes
-    avg_mastery = round(weighted / total_quizzes, 3) if total_quizzes else 0.0
+        weighted += _chapter_mastery(stats["wrong_rate"], True) * stats["attempted"]
+        attempted_total += stats["attempted"]
+    avg_mastery = round(weighted / attempted_total, 3) if attempted_total else 0.0
 
     # 连续学习天数（按有作答记录的连续天数）
     dates = set(
@@ -96,16 +98,14 @@ def mastery(book_id: int, db: Session = Depends(get_db)):
     chapters = db.scalars(
         select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.order_index)
     ).all()
+    stats_by_chapter = _chapter_quiz_stats(db, book_id)
     items = []
     for ch in chapters:
-        quizzes = db.scalar(
-            select(func.count()).select_from(Quiz).where(Quiz.chapter_id == ch.id)
-        ) or 0
-        wrong_rate = _chapter_wrong_rate(db, ch.id)
+        stats = stats_by_chapter.get(ch.id, {"quizzes": 0, "attempted": 0, "wrong_rate": 0.0})
         items.append(ChapterMastery(
             chapter_id=ch.id, title=ch.title,
-            mastery=_chapter_mastery(wrong_rate, quizzes > 0),
-            quizzes=quizzes, wrong_rate=wrong_rate,
+            mastery=_chapter_mastery(stats["wrong_rate"], stats["attempted"] > 0),
+            quizzes=stats["quizzes"], wrong_rate=stats["wrong_rate"],
         ))
     return MasteryResp(book_id=book_id, chapters=items)
 
@@ -131,17 +131,14 @@ def activity(days: int = 30, db: Session = Depends(get_db)):
 
 @router.get("/weakness", response_model=WeaknessResp)
 def weakness(limit: int = 10, db: Session = Depends(get_db)):
-    chapters = db.scalars(select(Chapter)).all()
+    rows = db.execute(select(Chapter, Book).join(Book, Book.id == Chapter.book_id)).all()
+    stats_by_chapter = _chapter_quiz_stats(db)
     items = []
-    for ch in chapters:
-        quizzes = db.scalar(
-            select(func.count()).select_from(Quiz).where(Quiz.chapter_id == ch.id)
-        ) or 0
-        wrong_rate = _chapter_wrong_rate(db, ch.id)
-        if quizzes == 0 and wrong_rate == 0:
-            continue  # 无数据的章节不进薄弱榜
-        book = db.get(Book, ch.book_id)
-        m = _chapter_mastery(wrong_rate, quizzes > 0)
+    for ch, book in rows:
+        stats = stats_by_chapter.get(ch.id)
+        if not stats or not stats["attempted"]:
+            continue
+        m = _chapter_mastery(stats["wrong_rate"], True)
         items.append(WeaknessItem(
             book_id=ch.book_id, book_title=book.title if book else "",
             chapter_id=ch.id, chapter_title=ch.title, mastery=m,

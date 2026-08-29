@@ -35,7 +35,7 @@
           <template #header>
             <div class="card-header">
               <span>章节掌握度（基于作答数据）</span>
-              <el-select v-model="masteryBook" placeholder="选择书籍" clearable style="width: 200px" @change="loadMastery">
+              <el-select v-model="masteryBook" placeholder="搜索书籍" clearable filterable remote :remote-method="searchBookOptions" :loading="booksLoading" style="width: 200px" @change="loadMastery">
                 <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
               </el-select>
             </div>
@@ -57,6 +57,7 @@ const overview = ref({})
 const weakness = ref([])
 const activity = ref([])
 const books = ref([])
+const booksLoading = ref(false)
 const masteryBook = ref(null)
 const masteryData = ref([])
 const trendChart = ref(null)
@@ -130,12 +131,12 @@ const resize = () => {
   trendInstance?.resize()
   masteryInstance?.resize()
 }
+const searchBookOptions = async (query='') => { booksLoading.value=true; try{books.value=(await listBooks({status:'ready',q:query.trim()||undefined,page_size:30})).items}finally{booksLoading.value=false} }
 
 onMounted(async () => {
   loadAll()
   try {
-    const resp = await listBooks({ page_size: 100 })
-    books.value = resp.items
+    await searchBookOptions('')
   } catch { /* ignore */ }
   window.addEventListener('resize', resize)
 })

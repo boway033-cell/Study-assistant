@@ -130,6 +130,7 @@ def analyze_toc_rows(rows: list[dict]) -> dict:
         token = parse_number_token(title)
         body_like = len(title) > 24 and len(re.findall(r"[，,]", title)) >= 3
         inferred = declared if body_like else _infer_level(token, stack, declared)
+        available_parent_level = stack[-1][0] if stack else 0
         while stack and stack[-1][0] >= inferred:
             stack.pop()
         parent_index = stack[-1][1] if stack else None
@@ -139,6 +140,11 @@ def analyze_toc_rows(rows: list[dict]) -> dict:
         if body_like:
             item_issues.append({"type": "body_like_numbered_line",
                                 "message": "包含多个句内逗号，疑似正文换行被误识为目录"})
+        if inferred > available_parent_level + 1:
+            item_issues.append({
+                "type": "level_jump",
+                "message": f"目录层级从 {available_parent_level or 1} 跳到 {inferred}，缺少可确认的父级",
+            })
         # PDF 同页阅读顺序常把前一标题的末个子项放到下一同级标题之后：
         # 二、... / （一）... / （二）... / 三、... / （三）...
         # 若“（三）”可唯一续接前一父项的 1,2 链，就回挂并建议移到“三、”之前。
@@ -278,3 +284,37 @@ def auto_repair_toc_rows(rows: list[dict]) -> tuple[list[dict], dict]:
         if index not in moved:
             repaired.append(repaired_by_index[index])
     return repaired, audit
+
+
+def build_toc_repair_preview(rows: list[dict]) -> dict:
+    """生成只读修复预览；只要有未决问题就禁止自动写库。"""
+    repaired, audit = auto_repair_toc_rows(rows)
+    changes = []
+    for index, item in enumerate(audit["items"]):
+        repairs = item.get("repairs") or {}
+        if not repairs:
+            continue
+        changes.append({
+            "index": index,
+            "id": item.get("id"),
+            "title": item.get("title"),
+            "page": item.get("page"),
+            "from_level": item.get("declared_level"),
+            "to_level": repairs.get("level", item.get("inferred_level")),
+            "from_parent_index": item.get("parent_index"),
+            "to_parent_index": repairs.get("parent_index", item.get("inferred_parent_index")),
+            "move_before_index": repairs.get("move_before_index"),
+        })
+    unresolved = int(audit["summary"].get("unresolved") or 0)
+    safe_repairs = int(audit["summary"].get("safe_repairs") or 0)
+    can_apply = safe_repairs > 0 and unresolved == 0
+    return {
+        "can_apply": can_apply,
+        "blocked_reason": None if can_apply else (
+            f"仍有 {unresolved} 项编号、页码或层级冲突，需人工核对后再保存"
+            if unresolved else "没有可应用的安全修正"
+        ),
+        "changes": changes,
+        "repaired": repaired,
+        "audit": audit,
+    }

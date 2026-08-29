@@ -16,7 +16,7 @@ from backend.app.core.config import settings
 from backend.app.core.database import engine
 
 # 当前数据层版本（每次 schema 变更递增）
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 
 # FTS 索引版本（FTS schema 变更时递增，init_fts 据此判断是否重建）
 FTS_INDEX_VERSION = 2
@@ -82,6 +82,7 @@ def auto_backup() -> str | None:
         return None
     backup_dir = settings.data_dir / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
+    prune_backups(backup_dir)
 
     # 检查是否已有今天的备份
     today = datetime.now().strftime("%Y%m%d")
@@ -109,14 +110,64 @@ def auto_backup() -> str | None:
         temporary.unlink(missing_ok=True)
         _sqlite_backup(db_path, temporary)
         temporary.replace(today_backup)
-        # 清理旧备份（只保留最近 10 个）
-        backups = sorted(backup_dir.glob("study_*.db"), key=lambda p: p.name)
-        for old in backups[:-10]:
-            old.unlink(missing_ok=True)
+        prune_backups(backup_dir)
         return str(today_backup)
     except Exception:
         today_backup.with_suffix(".db.tmp").unlink(missing_ok=True)
         return None
+
+
+def prune_backups(backup_dir: Path, keep_each: int = 3, max_bytes: int = 224 * 1024 * 1024) -> dict:
+    """每日快照和操作前快照各保留最近三份，并设置总容量上限。"""
+    groups = [list(backup_dir.glob("study_*.db")), list(backup_dir.glob("before_*.db"))]
+    removed: list[str] = []
+    for files in groups:
+        ordered = sorted(files, key=lambda path: path.stat().st_mtime, reverse=True)
+        for old in ordered[keep_each:]:
+            old.unlink(missing_ok=True); removed.append(old.name)
+    remaining = sorted(backup_dir.glob("*.db"), key=lambda path: path.stat().st_mtime, reverse=True)
+    total = sum(path.stat().st_size for path in remaining)
+    # 至少保留最新两份，容量超限时从最旧项开始释放。
+    for old in reversed(remaining[2:]):
+        if total <= max_bytes:
+            break
+        size = old.stat().st_size
+        old.unlink(missing_ok=True); removed.append(old.name); total -= size
+    return {"removed": removed, "remaining": len(list(backup_dir.glob('*.db'))), "bytes": total}
+
+
+def _trim_log(path: Path, max_bytes: int = 2 * 1024 * 1024, keep_bytes: int = 512 * 1024) -> bool:
+    if not path.exists() or path.stat().st_size <= max_bytes:
+        return False
+    with path.open("rb") as source:
+        source.seek(-min(keep_bytes, path.stat().st_size), 2)
+        tail = source.read()
+    marker = b"\n--- earlier log entries removed by capacity policy ---\n"
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_bytes(marker + tail)
+    temporary.replace(path)
+    return True
+
+
+def prune_regenerable_cache(root: Path, max_bytes: int) -> dict:
+    """只治理可重新生成的缓存；用户原文、笔记和 PPTX 永不参与。"""
+    if not root.exists():
+        return {"removed": 0, "bytes": 0}
+    files = sorted((path for path in root.rglob("*") if path.is_file()), key=lambda path: path.stat().st_mtime)
+    total = sum(path.stat().st_size for path in files)
+    removed = 0
+    target = int(max_bytes * 0.8)
+    for path in files:
+        if total <= max_bytes:
+            break
+        size = path.stat().st_size
+        path.unlink(missing_ok=True); total -= size; removed += 1
+        if total <= target:
+            break
+    for folder in sorted((path for path in root.rglob("*") if path.is_dir()), reverse=True):
+        try: folder.rmdir()
+        except OSError: pass
+    return {"removed": removed, "bytes": total}
 
 
 def _get_metadata_int(key: str) -> int | None:
@@ -209,6 +260,18 @@ def run_data_checks() -> dict:
     backup_path = auto_backup()
     if backup_path:
         results["backup"] = backup_path
+
+    # 只治理日志和可再生缓存；上传原文、知识库和生成文件不自动删除。
+    results["logs_trimmed"] = sum(_trim_log(path) for path in (
+        settings.data_dir.parent.parent / "server.log",
+        settings.data_dir.parent.parent / "server.err.log",
+        settings.data_dir / "runtime" / "launcher.log",
+    ))
+    results["cache"] = {
+        "ocr": prune_regenerable_cache(settings.data_dir / "ocr_cache", 128 * 1024 * 1024),
+        "structured": prune_regenerable_cache(settings.structured_dir, 192 * 1024 * 1024),
+        "previews": prune_regenerable_cache(settings.presentations_dir / "previews", 256 * 1024 * 1024),
+    }
 
     # 3. 版本检查
     current = get_schema_version()

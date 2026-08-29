@@ -8,6 +8,24 @@ import pytest  # noqa: E402
 
 
 class TestTocHeuristic:
+    def test_office_import_uses_native_structure_without_rescanning_body(self):
+        from backend.app.services.parser import TocItem
+        from backend.app.services.rag.toc_import import select_import_toc
+
+        native = [TocItem("研究报告", 1, 1), TocItem("研究方法", 2, 2)]
+        body = ["一、正文中的枚举\n（一）并不是文档标题", "第一章 也只是引用文本"]
+        selected = select_import_toc("docx", native, body)
+        assert [item["title"] for item in selected] == ["研究报告", "研究方法"]
+
+    def test_office_native_levels_are_continuous_and_deduplicated(self):
+        from backend.app.services.parser import TocItem
+        from backend.app.services.rag.toc_import import select_import_toc
+
+        selected = select_import_toc("pptx", [
+            TocItem("封面", 3, 1), TocItem("方法", 4, 2), TocItem("方法", 4, 2),
+        ], [])
+        assert [(item["title"], item["level"]) for item in selected] == [("封面", 1), ("方法", 2)]
+
     def test_extract_chapters(self):
         from backend.app.services.rag.toc_heuristic import extract_toc_heuristic
 
@@ -221,6 +239,43 @@ class TestTocHeuristic:
         assert [row["title"] for row in repaired][3:6] == [
             "（二）地方", "（三）其他方面", "三、编制管理",
         ]
+
+    def test_level_jump_blocks_auto_repair_preview_instead_of_crashing(self):
+        from backend.app.services.rag.toc_logic import build_toc_repair_preview
+
+        rows = [
+            {"id": 1, "title": "第一章 绪论", "level": 1, "page": 1},
+            {"id": 2, "title": "1.1.1 被错误提升的标题", "level": 3, "page": 2},
+            {"id": 3, "title": "（一）研究问题", "level": 1, "page": 3},
+        ]
+        preview = build_toc_repair_preview(rows)
+        assert preview["can_apply"] is False
+        assert "层级" in preview["blocked_reason"] or preview["audit"]["summary"]["unresolved"]
+        assert any(issue["type"] == "level_jump" for issue in preview["audit"]["issues"])
+
+    def test_clean_level_repair_has_preview_and_is_applicable(self):
+        from backend.app.services.rag.toc_logic import build_toc_repair_preview
+
+        preview = build_toc_repair_preview([
+            {"id": 1, "title": "第一章 绪论", "level": 1, "page": 1},
+            {"id": 2, "title": "一、问题提出", "level": 3, "page": 2},
+        ])
+        assert preview["can_apply"] is True
+        assert preview["changes"][0]["from_level"] == 3
+        assert preview["changes"][0]["to_level"] == 2
+
+    def test_revision_snapshot_recreates_deleted_nodes_and_keeps_parent_chain(self):
+        from backend.app.services.rag.toc_editor import revision_snapshot_to_items
+
+        items = revision_snapshot_to_items([
+            {"id": 10, "title": "第一章", "level": 1, "parent_id": None,
+             "order_index": 0, "start_page": 1},
+            {"id": 11, "title": "第一节", "level": 2, "parent_id": 10,
+             "order_index": 1, "start_page": 2},
+        ], {10}, "restore:7")
+        assert items[0]["id"] == 10
+        assert items[1]["id"] is None
+        assert items[1]["parent_key"] == items[0]["client_key"]
 
     def test_user_toc_replace_preserves_ids_and_rebuilds_mapping(self):
         from sqlalchemy import select

@@ -163,6 +163,8 @@ def list_knowledge_records(
     date_to: datetime | None = Query(default=None),
     q: str | None = Query(default=None, max_length=200),
     db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=10, le=100),
 ):
     """知识沉淀聚合读模型：返回统一 DTO，但绝不合并底层实体。"""
     scope = sorted({int(value) for value in (book_ids or []) if int(value) > 0})
@@ -220,6 +222,9 @@ def list_knowledge_records(
                 "book_title": book.title if book else None, "chapter_id": node.chapter_id,
                 "chapter_title": chapter.title if chapter else None, "page": node.page or page, "color": None, "tags": tags,
                 "origin": node.origin, "source_annotation_id": node.source_annotation_id,
+                "source_report_id": node.source_report_id,
+                "source_scope": json.loads(node.source_scope_json or "{}"),
+                "source_refs": json.loads(node.source_refs_json or "[]"),
                 "source_link": f"/reader/{node.book_id}?page={node.page or page or 1}" if node.book_id else None,
                 "created_at": node.created_at.isoformat(),
             })
@@ -246,11 +251,23 @@ def list_knowledge_records(
                 "book_id": card.book_id, "book_title": book.title, "chapter_id": card.chapter_id,
                 "chapter_title": chapter.title if chapter else None, "page": card.page, "color": None,
                 "tags": tags, "origin": card.origin, "verification_status": card.verification_status,
+                "source_report_id": card.source_report_id,
+                "source_scope": json.loads(card.source_scope_json or "{}"),
+                "source_refs": json.loads(card.source_ref_json or "{}").get("refs", []),
                 "source_link": f"/reader/{card.book_id}?page={card.page or (chapter.start_page if chapter else 1)}",
                 "created_at": card.created_at.isoformat(),
             })
     records.sort(key=lambda item: item["created_at"], reverse=True)
-    return {"total": len(records), "book_ids": scope, "items": records}
+    page = page if isinstance(page, int) and page > 0 else 1
+    page_size = page_size if isinstance(page_size, int) else 50
+    total = len(records)
+    selected = records[(page - 1) * page_size:page * page_size]
+    for item in selected:
+        item["content_length"] = len(item.get("content") or "")
+        item["quote_length"] = len(item.get("quote") or "")
+        item["content"] = (item.get("content") or "")[:600]
+        item["quote"] = (item.get("quote") or "")[:1200]
+    return {"total": total, "page": page, "page_size": page_size, "book_ids": scope, "items": selected}
 
 
 @router.post("/annotations/{annotation_id}/promote", status_code=201)
@@ -278,6 +295,9 @@ def _note_payload(note: KnowledgeNote, db: Session) -> dict:
             "page": page, "title": note.title,
             "content": note.content, "tags": json.loads(note.tags_json or "[]"),
             "origin": note.origin, "source_annotation_id": note.source_annotation_id,
+            "source_report_id": note.source_report_id,
+            "source_scope": json.loads(note.source_scope_json or "{}"),
+            "source_refs": json.loads(note.source_refs_json or "[]"),
             "source_link": f"/reader/{note.book_id}?page={page or 1}" if note.book_id else None,
             "created_at": note.created_at.isoformat()}
 
@@ -286,9 +306,17 @@ def _note_payload(note: KnowledgeNote, db: Session) -> dict:
 def create_knowledge_note(req: KnowledgeNoteCreateReq, db: Session = Depends(get_db)):
     if not db.get(Book, req.book_id):
         raise HTTPException(404, "书籍不存在")
+    source_book_ids = list(dict.fromkeys([req.book_id, *req.source_book_ids]))[:50]
+    missing = set(source_book_ids) - set(db.scalars(select(Book.id).where(Book.id.in_(source_book_ids))).all())
+    if missing:
+        raise HTTPException(422, "来源范围包含不存在的书目")
+    scope = {**req.source_scope, "book_ids": source_book_ids}
     note = KnowledgeNote(book_id=req.book_id, chapter_id=req.chapter_id, page=req.page,
                          title=req.title.strip(), content=req.content,
-                         tags_json=json.dumps(req.tags[:20], ensure_ascii=False), origin=req.origin)
+                         tags_json=json.dumps(req.tags[:20], ensure_ascii=False), origin=req.origin,
+                         source_report_id=req.source_report_id,
+                         source_scope_json=json.dumps(scope, ensure_ascii=False),
+                         source_refs_json=json.dumps(req.source_refs[:100], ensure_ascii=False))
     db.add(note); db.commit(); db.refresh(note)
     return _note_payload(note, db)
 
@@ -344,6 +372,9 @@ def _card_payload(card: EvidenceCard, db: Session) -> dict:
             "chapter_id": card.chapter_id, "page": card.page, "title": card.title,
             "evidence_text": card.evidence_text, "claim_text": card.claim_text,
             "tags": json.loads(card.tags_json or "[]"), "origin": card.origin,
+            "source_report_id": card.source_report_id,
+            "source_scope": json.loads(card.source_scope_json or "{}"),
+            "source_refs": json.loads(card.source_ref_json or "{}").get("refs", []),
             "verification_status": card.verification_status, "created_at": card.created_at.isoformat()}
 
 
@@ -355,12 +386,20 @@ def create_evidence_card(req: EvidenceCardCreateReq, db: Session = Depends(get_d
         chapter = db.get(Chapter, req.chapter_id)
         if not chapter or chapter.book_id != req.book_id:
             raise HTTPException(422, "章节与书目不匹配")
+    source_book_ids = list(dict.fromkeys([req.book_id, *req.source_book_ids]))[:50]
+    missing = set(source_book_ids) - set(db.scalars(select(Book.id).where(Book.id.in_(source_book_ids))).all())
+    if missing:
+        raise HTTPException(422, "来源范围包含不存在的书目")
+    scope = {**req.source_scope, "book_ids": source_book_ids}
     card = EvidenceCard(book_id=req.book_id, chapter_id=req.chapter_id, page=req.page,
                         title=req.title.strip(), evidence_text=req.evidence_text.strip(),
                         claim_text=(req.claim_text or "").strip() or None,
                         tags_json=json.dumps(req.tags[:20], ensure_ascii=False), origin=req.origin,
                         verification_status=req.verification_status,
-                        source_ref_json=json.dumps({"book_id": req.book_id, "chapter_id": req.chapter_id, "page": req.page}))
+                        source_report_id=req.source_report_id,
+                        source_scope_json=json.dumps(scope, ensure_ascii=False),
+                        source_ref_json=json.dumps({"refs": req.source_refs[:100], "book_id": req.book_id,
+                                                    "chapter_id": req.chapter_id, "page": req.page}, ensure_ascii=False))
     db.add(card); db.commit(); db.refresh(card)
     return _card_payload(card, db)
 
@@ -377,6 +416,14 @@ def update_evidence_card(card_id: int, req: EvidenceCardUpdateReq, db: Session =
     if req.tags is not None:
         card.tags_json = json.dumps(req.tags[:20], ensure_ascii=False)
     db.commit(); db.refresh(card)
+    return _card_payload(card, db)
+
+
+@router.get("/evidence-cards/{card_id}")
+def get_evidence_card(card_id: int, db: Session = Depends(get_db)):
+    card = db.get(EvidenceCard, card_id)
+    if not card:
+        raise HTTPException(404, "证据卡片不存在")
     return _card_payload(card, db)
 
 

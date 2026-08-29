@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
 from backend.app.models import Book, ChatLog
-from backend.app.schemas import ChatHistoryItem, ChatHistoryResp, ChatReq, ChatSource
+from backend.app.schemas import ChatHistoryDetail, ChatHistoryItem, ChatHistoryResp, ChatReq, ChatSource
 from backend.app.services.llm import LLMRouter, load_llm_config
 from backend.app.services.rag import fts, retriever
 
@@ -103,11 +103,28 @@ def chat_history(
         except json.JSONDecodeError:
             sources = []
         items.append(ChatHistoryItem(
-            id=log.id, question=log.question, answer=log.answer,
+            id=log.id, question=log.question,
+            answer_preview=(log.answer or "")[:180], answer_length=len(log.answer or ""),
             model=log.model_name or log.mode,
-            sources=[ChatSource(**s) for s in sources], created_at=log.created_at,
+            source_count=len(sources), created_at=log.created_at,
         ))
     return ChatHistoryResp(total=total, items=items)
+
+
+@router.get("/chat/{chat_id}", response_model=ChatHistoryDetail)
+def get_chat(chat_id: int, db: Session = Depends(get_db)):
+    log = db.get(ChatLog, chat_id)
+    if not log:
+        raise HTTPException(404, "记录不存在")
+    try:
+        sources = json.loads(log.sources_json) if log.sources_json else []
+    except json.JSONDecodeError:
+        sources = []
+    return ChatHistoryDetail(
+        id=log.id, question=log.question, answer=log.answer or "",
+        model=log.model_name or log.mode,
+        sources=[ChatSource(**source) for source in sources], created_at=log.created_at,
+    )
 
 
 @router.delete("/chat/{chat_id}", status_code=204)

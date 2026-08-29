@@ -2,7 +2,7 @@
   <div class="library-page study-page">
     <StudyCommandBar compact class="library-commandbar" :title="currentShelfName" description="筛选、归档并进入阅读；解析状态集中显示在任务中心。">
       <div class="library-summary" aria-label="知识库概况">
-        <div><strong>{{ books.length }}</strong><span>全部资料</span></div>
+        <div><strong>{{ libraryTotal }}</strong><span>全部资料</span></div>
         <div><strong>{{ readingCount }}</strong><span>阅读中</span></div>
         <div><strong>{{ attentionCount }}</strong><span>待处理</span></div>
       </div>
@@ -21,7 +21,7 @@
     <div class="library-workspace">
       <aside class="bookshelf-panel" :class="{ 'mobile-open': shelfPanelOpen }">
         <div class="bookshelf-section-label">智能视图</div>
-        <button class="shelf-static" :class="{active:selectedShelf==='all'}" @click="chooseShelf('all')"><span>全部资料</span><b>{{ books.length }}</b></button>
+        <button class="shelf-static" :class="{active:selectedShelf==='all'}" @click="chooseShelf('all')"><span>全部资料</span><b>{{ libraryTotal }}</b></button>
         <button class="shelf-static" :class="{active:selectedShelf==='reading'}" @click="chooseShelf('reading')"><span>阅读中</span><b>{{ readingCount }}</b></button>
         <button class="shelf-static" :class="{active:selectedShelf==='favorite'}" @click="chooseShelf('favorite')"><span>我的收藏</span><b>{{ favoriteCount }}</b></button>
         <button class="shelf-static" :class="{active:selectedShelf==='attention'}" @click="chooseShelf('attention')"><span>待处理</span><b>{{ attentionCount }}</b></button>
@@ -96,6 +96,7 @@
               </div>
             </StudyListRow>
             <StudyEmptyState v-if="!filteredBooks.length && !loading" compact :title="activeFilterCount ? '没有符合当前筛选的资料' : '当前范围还没有资料'" :description="activeFilterCount ? '清除部分筛选条件，或切换到其他书架。' : '导入 PDF、Word 或 PowerPoint 后会在这里建立可检索档案。'"><template #actions><el-button v-if="activeFilterCount" type="primary" plain @click="clearLibraryFilters">清除筛选</el-button></template></StudyEmptyState>
+            <el-button v-if="books.length < libraryTotal" class="library-load-more" :loading="loading" @click="loadBooks(false)">加载更多（{{ books.length }}/{{ libraryTotal }}）</el-button>
           </div>
         </el-card>
 
@@ -241,7 +242,7 @@
 </template>
 
 <script setup>
-import { ref, shallowRef, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, shallowRef, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listBooks, uploadBook, uploadBookBatch, deleteBook, getBook, searchBooks, classifyAllBooks, setBookCategory, deepAnalyze, updateArchiveProfile,
@@ -255,6 +256,8 @@ import StudyInspector from '../components/StudyInspector.vue'
 
 const router = useRouter()
 const books = ref([])
+const libraryTotal = ref(0)
+const libraryPage = ref(1)
 const loading = ref(false)
 const uploading = ref(false)
 const classifying = ref(false)
@@ -326,7 +329,7 @@ const publicationLabel = (status) => ({ unknown: '发表状态待确认', publis
 const visibilityLabel = (status) => ({ private: '仅自己可见', shareable: '可分享', public: '公开' }[status] || '仅自己可见')
 const confidenceLabel = (value) => value >= .8 ? '已核对' : value >= .5 ? '部分核对' : '待核对'
 const displayYear = (value) => value && value <= currentYear + 1 ? value : value ? '年份待核对' : null
-const chooseShelf = (shelf) => { selectedShelf.value = shelf; shelfPanelOpen.value = false }
+const chooseShelf = (shelf) => { selectedShelf.value = shelf; shelfPanelOpen.value = false; loadBooks(true) }
 const detailStatusText = computed(() => {
   if (!currentBook.value) return ''
   if (currentBook.value.status === 'ready') return '解析完成，原文、目录与检索结构已就绪。'
@@ -345,11 +348,23 @@ const toggleAllFiltered = (checked) => {
     : selectedBookIds.value.filter(id => !visibleIds.includes(id))
 }
 
-const loadBooks = async () => {
+const loadBooks = async (reset = true) => {
   loading.value = true
   try {
-    const resp = await listBooks({ page_size: 100 })
-    books.value = resp.items
+    const page = reset ? 1 : libraryPage.value + 1
+    const smart = selectedShelf.value
+    const resp = await listBooks({
+      page, page_size: 40, q: libraryQ.value.trim() || undefined,
+      shelf_id: typeof smart === 'number' ? smart : undefined,
+      reading_status: smart === 'reading' ? 'reading' : (readingFilter.value || undefined),
+      favorite: smart === 'favorite' || favoriteOnly.value ? true : undefined,
+      unfiled: smart === 'unfiled' || undefined,
+      statuses: smart === 'attention' ? ['failed','needs_ocr','parsing'] : undefined,
+      category: libraryCategory.value || undefined,
+    })
+    books.value = reset ? resp.items : [...books.value, ...resp.items]
+    libraryPage.value = page
+    libraryTotal.value = resp.total
     // 提取唯一分类列表
     const cats = [...new Set(resp.items.map((b) => b.category).filter(Boolean))]
     categories.value = cats
@@ -359,6 +374,11 @@ const loadBooks = async () => {
     loading.value = false
   }
 }
+let librarySearchTimer
+watch([libraryQ, libraryCategory, readingFilter, favoriteOnly], () => {
+  clearTimeout(librarySearchTimer)
+  librarySearchTimer = setTimeout(() => loadBooks(true), 260)
+})
 const loadShelves = async () => { shelves.value = await listShelves() }
 const createBookshelf = async (parentId) => {
   try {
@@ -646,7 +666,7 @@ onBeforeUnmount(() => libraryMedia.removeEventListener('change', syncLibraryView
 .library-primary-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}.library-primary-actions :deep(.el-button+.el-button){margin-left:0}.library-import-queue{margin:-2px 0 12px}
 .mobile-shelf-toggle{display:none;width:100%;align-items:center;justify-content:space-between;margin-bottom:8px;padding:9px 11px;border:1px solid var(--study-card-border);background:var(--study-surface-paper);color:var(--study-text-primary);font-size:var(--study-font-size-sm)}.mobile-shelf-toggle b{color:var(--el-color-primary);font-size:var(--study-font-size-xs)}
 .library-workspace{display:grid;grid-template-columns:220px minmax(0,1fr) 300px;align-items:start;gap:12px}.library-main{min-width:0}.bookshelf-panel{top:56px}.bookshelf-section-label{padding:2px 10px 7px;color:#8f806e;font-size:var(--study-font-size-xs);font-weight:700;letter-spacing:1px}.bookshelf-head{margin-top:16px;padding-top:14px;border-top:1px solid #dfd4c4}
-.paper-row{cursor:pointer;outline:none}.paper-row.selected{z-index:1;background:#f5eddf;box-shadow:inset 3px 0 0 var(--el-color-primary)}.paper-row:focus-visible{box-shadow:inset 0 0 0 2px var(--el-color-primary)}.paper-title{font-family:var(--study-font-reading)}.paper-facts{font-size:var(--study-font-size-xs)}.paper-reading,.paper-knowledge,.category-link,.analysis-link{font-size:var(--study-font-size-xs)}
+.paper-row{cursor:pointer;outline:none}.paper-row.selected{z-index:1;background:#f5eddf;box-shadow:inset 3px 0 0 var(--el-color-primary)}.paper-row:focus-visible{box-shadow:inset 0 0 0 2px var(--el-color-primary)}.paper-title{font-family:var(--study-font-reading);font-size:15px;font-weight:600}.paper-facts{font-size:var(--study-font-size-xs)}.paper-reading,.paper-knowledge,.category-link,.analysis-link{font-size:var(--study-font-size-xs)}
 .fulltext-card{margin-top:12px}
 .library-inspector{position:sticky;top:56px;height:calc(100vh - 136px);min-height:480px;overflow:hidden;border:1px solid var(--study-card-border);border-radius:var(--study-radius-md);background:var(--study-surface-paper);box-shadow:var(--study-shadow-sm)}
 .inspector-scroll{height:100%;overflow-y:auto;padding:15px}.inspector-type{color:#9a7958;font-size:var(--study-font-size-xs);letter-spacing:.6px}.inspector-scroll h2{margin:7px 0 5px;font-family:var(--study-font-reading);font-size:17px;line-height:1.5;color:var(--el-text-color-primary)}.inspector-meta{color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);line-height:1.6}.trust-row{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-top:9px}.trust-row>span{color:var(--study-text-secondary);font-size:var(--study-font-size-xs)}.inspector-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.inspector-actions .el-button{margin:0}.inspector-section{padding:13px 0;border-top:1px solid var(--el-border-color-lighter)}.inspector-section-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}.inspector-section-title span{color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);text-align:right}.inspector-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.inspector-facts span{display:flex;flex-direction:column;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);text-align:center}.inspector-facts b{margin-bottom:2px;color:#6f4721;font:700 17px Georgia,serif}.inspector-status{margin-top:10px;padding:8px 9px;border-radius:7px;background:#f0e9dc;color:#686155;font-size:var(--study-font-size-xs);line-height:1.55}.inspector-status.failed{background:#f9efed;color:#93483d}.inspector-status.needs_ocr,.inspector-status.parsing{background:#fff5e7;color:#8d6228}.inspector-chapters :deep(.el-tree){max-height:210px;overflow:auto;padding:5px;background:transparent}.inspector-chapters :deep(.el-tree-node__content){height:32px}.inspector-detail-button{width:100%;margin-top:2px}.inspector-empty{display:flex;height:100%;align-items:center;justify-content:center;flex-direction:column;padding:28px;color:var(--el-text-color-secondary);text-align:center}.inspector-empty span{color:#9a7958;font-size:var(--study-font-size-xs);letter-spacing:.6px}.inspector-empty b{margin:12px 0 6px;color:var(--el-text-color-primary)}.inspector-empty p{font-size:var(--study-font-size-sm);line-height:1.7}

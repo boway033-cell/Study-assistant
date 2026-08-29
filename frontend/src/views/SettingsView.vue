@@ -58,6 +58,19 @@
     </el-card>
 
     <el-card shadow="never" style="margin-top: 16px">
+      <template #header><div class="card-header"><span>存储与维护</span><el-button size="small" :loading="storageLoading" @click="loadStorage">重新统计</el-button></div></template>
+      <div class="storage-summary">当前受管数据约 <b>{{ formatBytes(storage.total_bytes) }}</b>。原始文献、数据库、备份和 PPTX 成品始终受保护。</div>
+      <div class="storage-list">
+        <label v-for="item in storage.items || []" :key="item.key" class="storage-row">
+          <el-checkbox v-if="item.clearable" v-model="cleanupSelection" :value="item.key" />
+          <span v-else class="storage-lock">保护</span>
+          <b>{{ item.label }}</b><span>{{ formatBytes(item.bytes) }}</span><small>{{ item.recoverability }}</small>
+        </label>
+      </div>
+      <el-button :disabled="!cleanupSelection.length" :loading="storageLoading" @click="clearSelectedCaches">清理所选可重建缓存</el-button>
+    </el-card>
+
+    <el-card shadow="never" style="margin-top: 16px">
       <template #header>
         <div class="card-header">
           <span>连接状态</span>
@@ -106,7 +119,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getSettings, updateSettings, probeSettings, listCompatibleProviders, saveCompatibleProvider, deleteCompatibleProvider, probeCompatibleProvider } from '../api'
+import { getSettings, updateSettings, probeSettings, listCompatibleProviders, saveCompatibleProvider, deleteCompatibleProvider, probeCompatibleProvider, getStorageUsage, cleanupStorage } from '../api'
 
 const form = ref({
   deepseek_api_key: '',
@@ -123,6 +136,9 @@ const hasVisionKey = ref(false)
 const providers = ref([])
 const providerDialog = ref(false)
 const providerForm = ref({ id:null, name:'', capability:'text', protocol:'openai_chat', base_url:'', model:'', api_key:'' })
+const storage = ref({ total_bytes: 0, items: [] })
+const storageLoading = ref(false)
+const cleanupSelection = ref([])
 
 const load = async () => {
   try {
@@ -183,11 +199,23 @@ const submitProvider = async () => {
 }
 const probeProvider = async (profile) => { try { const r=await probeCompatibleProvider(profile.id); (r.ok?ElMessage.success:ElMessage.warning)(r.reason) } catch(e) { ElMessage.error(e.message) } }
 const removeProvider = async (profile) => { try { await ElMessageBox.confirm(`删除接口“${profile.name}”？`,'删除兼容接口'); await deleteCompatibleProvider(profile.id); await loadProviders() } catch(e) { if(e!=='cancel') ElMessage.error(e.message) } }
+const formatBytes = (bytes=0) => bytes < 1024*1024 ? `${(bytes/1024).toFixed(1)} KB` : `${(bytes/1024/1024).toFixed(1)} MB`
+const loadStorage = async () => { storageLoading.value=true; try{storage.value=await getStorageUsage()}catch(e){ElMessage.error(e.message)}finally{storageLoading.value=false} }
+const clearSelectedCaches = async () => {
+  try {
+    await ElMessageBox.confirm('只清理所选可重建缓存。原始文献、知识库、备份和 PPTX 成品不会删除；下次使用时可能需要重新生成。','清理缓存',{type:'warning'})
+    storageLoading.value=true
+    const result=await cleanupStorage(cleanupSelection.value)
+    storage.value=result.storage; cleanupSelection.value=[]
+    ElMessage.success(`已释放 ${formatBytes(result.released_bytes)}`)
+  } catch(e) { if(e!=='cancel'&&e!=='close') ElMessage.error(e.message) } finally { storageLoading.value=false }
+}
 
 onMounted(() => {
   load()
   probe()
   loadProviders()
+  loadStorage()
 })
 </script>
 
@@ -197,5 +225,6 @@ onMounted(() => {
 .help-list { line-height: 2; padding-left: 20px; }
 .help-list code { background: var(--el-fill-color-lighter); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
 .provider-cards { display:grid; gap:8px; margin-top:12px; }.provider-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto auto auto; align-items:center; gap:8px; padding:10px 12px; border:1px solid #e5e7eb; border-radius:9px; box-shadow:0 1px 2px rgba(15,23,42,.05); }.provider-row div { display:flex; min-width:0; flex-direction:column; }.provider-row span,.provider-row small { color:var(--el-text-color-secondary); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.storage-summary{margin-bottom:10px;color:var(--el-text-color-secondary);font-size:13px}.storage-list{margin-bottom:12px;border-top:1px solid var(--study-card-border)}.storage-row{display:grid;grid-template-columns:58px minmax(150px,1fr) 90px minmax(180px,1.5fr);align-items:center;gap:10px;min-height:42px;border-bottom:1px solid var(--study-card-border);font-size:13px}.storage-row>span,.storage-row>small{color:var(--el-text-color-secondary)}.storage-lock{font-size:11px}
 .settings-page{max-width:1120px}.settings-page>.el-card{margin-top:8px!important;border-radius:var(--study-radius-md)}.settings-page>.el-card:first-child{margin-top:0!important}.settings-page :deep(.el-card__header){padding:11px 14px}.settings-page :deep(.el-card__body){padding:14px}.provider-row{border-color:var(--study-card-border);border-radius:var(--study-radius-sm);box-shadow:none}@media(max-width:760px){.provider-row{grid-template-columns:1fr auto}.provider-row>.el-button{margin-left:0}.settings-page :deep(.el-form){max-width:none!important}.settings-page :deep(.el-form-item__label){width:100%!important;text-align:left}.settings-page :deep(.el-form-item__content){margin-left:0!important}}
 </style>

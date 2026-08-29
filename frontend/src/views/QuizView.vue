@@ -7,7 +7,7 @@
           <div>
             <el-button type="warning" plain @click="openGen">🤖 AI 生成题目</el-button>
             <el-button type="danger" plain :disabled="!filterBook" @click="clearBook">🗑 清除本书题目</el-button>
-            <el-select v-model="filterBook" placeholder="全部书籍" clearable style="width: 160px; margin: 0 8px" @change="loadQuizzes">
+            <el-select v-model="filterBook" placeholder="全部书籍" clearable filterable remote :remote-method="searchBookOptions" :loading="booksLoading" style="width: 160px; margin: 0 8px" @change="loadQuizzes">
               <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
             </el-select>
             <el-radio-group v-model="filterType" size="small" @change="loadQuizzes">
@@ -92,7 +92,7 @@
     <el-dialog v-model="showGen" title="🤖 AI 生成题目（DeepSeek 分析教材内容）" width="500px">
       <el-form label-width="90px">
         <el-form-item label="选择书籍">
-          <el-select v-model="genBook" placeholder="选择已解析完成的书籍" style="width: 100%" @change="onGenBook">
+          <el-select v-model="genBook" placeholder="选择已解析完成的书籍" filterable remote :remote-method="searchBookOptions" :loading="booksLoading" style="width: 100%" @change="onGenBook">
             <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
           </el-select>
         </el-form-item>
@@ -123,6 +123,7 @@ import { listQuizzes, attemptQuiz, selfGrade, listBooks, getBook, generateQuizze
 const quizzes = ref([])
 const loading = ref(false)
 const books = ref([])
+const booksLoading = ref(false)
 const filterBook = ref(null)
 const filterType = ref('')
 const currentQuiz = ref(null)
@@ -279,11 +280,11 @@ const nextQuiz = () => {
   }
 }
 
+const searchBookOptions = async (query='') => { booksLoading.value=true; try{const r=await listBooks({status:'ready',q:query.trim()||undefined,page_size:30}); const keep=books.value.filter(b=>[filterBook.value,genBook.value].includes(b.id)); books.value=[...new Map([...keep,...r.items].map(b=>[b.id,b])).values()]}finally{booksLoading.value=false} }
 onMounted(async () => {
   loadQuizzes()
   try {
-    const resp = await listBooks({ page_size: 100 })
-    books.value = resp.items.filter((b) => b.status === 'ready')
+    await searchBookOptions('')
   } catch { /* ignore */ }
 })
 </script>

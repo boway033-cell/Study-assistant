@@ -7,7 +7,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
@@ -339,25 +339,41 @@ def study_overview(req: StudyOverviewReq, db: Session = Depends(get_db)):
     return {"task_id": record.id}
 
 
-@router.get("/reports")
-def list_reports(limit: int = 5, db: Session = Depends(get_db)):
-    from backend.app.models import StudyReport
+def _report_payload(r, include_content: bool = True) -> dict:
+    selection = json.loads(r.selection_json or "{}")
+    payload = {
+        "id": r.id, "book_ids": json.loads(r.book_ids_json or "[]"),
+        "focus": r.focus or "", "framework": r.framework or "", "selection": selection,
+        "research_plan": selection.get("research_plan", {}),
+        "open_questions": selection.get("open_questions", []),
+        "research_mode": selection.get("research_mode", "adaptive"),
+        "reasoning_depth": selection.get("reasoning_depth", "standard"),
+        "content_preview": (r.content or "")[:300], "content_length": len(r.content or ""),
+        "claim_count": len(json.loads(r.claims_json or "[]")), "created_at": r.created_at.isoformat(),
+    }
+    if include_content:
+        payload.update({"content": r.content, "claims": json.loads(r.claims_json or "[]")})
+    return payload
 
-    rows = db.scalars(select(StudyReport).order_by(StudyReport.created_at.desc()).limit(limit)).all()
-    result = []
-    for r in rows:
-        selection = json.loads(r.selection_json or "{}")
-        result.append({
-            "id": r.id, "book_ids": json.loads(r.book_ids_json or "[]"),
-            "content": r.content, "focus": r.focus or "", "framework": r.framework or "",
-            "selection": selection, "claims": json.loads(r.claims_json or "[]"),
-            "research_plan": selection.get("research_plan", {}),
-            "open_questions": selection.get("open_questions", []),
-            "research_mode": selection.get("research_mode", "adaptive"),
-            "reasoning_depth": selection.get("reasoning_depth", "standard"),
-            "created_at": r.created_at.isoformat(),
-        })
-    return result
+
+@router.get("/reports")
+def list_reports(page: int = 1, page_size: int = 20, db: Session = Depends(get_db)):
+    from backend.app.models import StudyReport
+    page = max(1, page); page_size = max(5, min(page_size, 50))
+    total = db.scalar(select(func.count()).select_from(StudyReport)) or 0
+    rows = db.scalars(select(StudyReport).order_by(StudyReport.created_at.desc())
+                      .offset((page - 1) * page_size).limit(page_size)).all()
+    return {"total": total, "page": page, "page_size": page_size,
+            "items": [_report_payload(row, False) for row in rows]}
+
+
+@router.get("/reports/{report_id}")
+def get_report(report_id: int, db: Session = Depends(get_db)):
+    from backend.app.models import StudyReport
+    report = db.get(StudyReport, report_id)
+    if not report:
+        raise HTTPException(404, "报告不存在")
+    return _report_payload(report, True)
 
 
 @router.delete("/reports/{report_id}", status_code=204)

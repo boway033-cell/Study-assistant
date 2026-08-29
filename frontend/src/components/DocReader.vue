@@ -32,7 +32,7 @@
         <div v-else>
           <div class="dr-title">{{ doc?.title }}</div>
           <template v-for="(sec, idx) in sections" :key="sec.chapter_id">
-            <div class="dr-chapter" :class="{ 'dr-slide': isPpt }" :data-cid="sec.chapter_id" :ref="(el) => setSecRef(sec.chapter_id, el)">
+            <div class="dr-chapter" :class="{ 'dr-slide': isPpt }" :data-cid="sec.chapter_id" :data-section-index="idx" :ref="(el) => setSecRef(sec.chapter_id, el)">
               <div class="dr-chapter-title">
                 <span v-if="isPpt" class="slide-badge">幻灯片 {{ idx + 1 }}</span>
                 {{ sec.title }}
@@ -49,7 +49,9 @@
     <div v-if="selToolbar" class="dr-sel-bar" :style="{ top: selY + 'px', left: selX + 'px' }">
       <el-button size="small" type="primary" @click="aiAsk('explain')">💡 询问 AI</el-button>
       <el-button size="small" type="success" @click="aiAsk('translate')">🌐 翻译</el-button>
-      <el-button size="small" type="warning" @click="addAnnotation">🖍 标注</el-button>
+      <el-button size="small" type="warning" @click="saveMark('highlight')">高亮</el-button>
+      <el-button size="small" @click="saveMark('underline')">划线</el-button>
+      <el-button size="small" @click="addAnnotation">批注</el-button>
     </div>
 
     <!-- AI 结果抽屉 -->
@@ -61,10 +63,10 @@
     <!-- 批注管理抽屉 -->
     <el-drawer v-model="showAnnPanel" title="我的批注" size="38%">
       <div v-if="!annotations.length" class="form-tip">选中正文文字 → 点「🖍 标注」即可添加</div>
-      <div v-for="a in annotations" :key="a.id" class="ann-item">
+      <div v-for="a in annotations" :key="a.id" class="ann-item" @click="jumpAnnotation(a)">
         <div class="ann-head">
           <el-tag size="small" type="info">{{ isPpt ? '幻灯片 ' + (a.page || '?') : (a.page ? '第 ' + a.page + ' 页' : '全文') }}</el-tag>
-          <el-button link size="small" type="danger" @click="removeAnn(a)">删除</el-button>
+          <el-button link size="small" type="danger" @click.stop="removeAnn(a)">删除</el-button>
         </div>
         <div class="ann-text">{{ a.text }}</div>
         <div v-if="a.note" class="ann-note">📝 {{ a.note }}</div>
@@ -74,7 +76,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PdfReader from './PdfReader.vue'
 import { getBookDocument, listAnnotations, createAnnotation, deleteAnnotation, aiExplain, renderedBookFileUrl } from '../api'
@@ -140,6 +142,7 @@ const selX = ref(0)
 const selY = ref(0)
 let selText = ''
 let selChapterId = null
+let selAnchor = null
 const aiPanel = ref(false)
 const aiTitle = ref('AI 解读')
 const aiLoading = ref(false)
@@ -203,10 +206,27 @@ const onMouseUp = () => {
       if (el.classList?.contains('dr-chapter')) { selChapterId = Number(el.dataset.cid); break }
       el = el.parentElement
     }
+    const textRoot = node.parentElement?.closest?.('.dr-chapter-text,.dr-slide-text')
+    selAnchor = textRoot ? buildOfficeAnchor(sel.getRangeAt(0), textRoot, el) : null
     selX.value = rect.left
     selY.value = rect.bottom + 8
     selToolbar.value = true
   }, 0)
+}
+
+const buildOfficeAnchor = (range, root, sectionEl) => {
+  const before = range.cloneRange()
+  before.selectNodeContents(root)
+  before.setEnd(range.startContainer, range.startOffset)
+  const start = before.toString().length
+  const exact = range.toString().slice(0, 2000)
+  const all = root.textContent || ''
+  return {
+    schema_version: 3, kind: 'office',
+    quote: { exact, prefix: all.slice(Math.max(0, start - 32), start), suffix: all.slice(start + exact.length, start + exact.length + 32) },
+    segments: [],
+    office: { chapter_id: Number(sectionEl?.dataset.cid || 0), section_index: Number(sectionEl?.dataset.sectionIndex || 0), start_offset: start, end_offset: start + exact.length },
+  }
 }
 
 const aiAsk = async (action) => {
@@ -234,14 +254,53 @@ const addAnnotation = async () => {
     const { value } = await ElMessageBox.prompt('可选：写批注', '添加批注', {
       confirmButtonText: '保存', cancelButtonText: '取消', inputPlaceholder: '你的理解…',
     })
-    await createAnnotation(props.bookId, {
-      page: 0, rect_json: '[]', text: selText, color: '#9be5a0', note: value || '',
-      knowledge_node_id: null,
-    })
+    await saveMark('highlight', value || '')
     ElMessage.success('已添加批注')
-    window.getSelection()?.removeAllRanges()
-    loadAnnotations()
   } catch { /* 取消 */ }
+}
+
+const saveMark = async (markType, note = '') => {
+  if (!selText || !selAnchor) return ElMessage.warning('请在结构文本中重新选择文字')
+  selToolbar.value = false
+  try {
+    await createAnnotation(props.bookId, {
+      page: 0, rect_json: '[]', anchor: selAnchor, text: selText,
+      color: markType === 'underline' ? '#b7793f' : '#f3dc73', mark_type: markType,
+      note, knowledge_node_id: null,
+    })
+    ElMessage.success(note ? '批注已保存' : (markType === 'underline' ? '已添加划线' : '已添加高亮'))
+    window.getSelection()?.removeAllRanges()
+    await loadAnnotations()
+  } catch (error) { ElMessage.error(error.message) }
+}
+
+const locateTextOffset = (root, offset) => {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let remaining = offset; let node
+  while ((node = walker.nextNode())) {
+    if (remaining <= node.data.length) return { node, offset: remaining }
+    remaining -= node.data.length
+  }
+  return null
+}
+
+const jumpAnnotation = async (annotation) => {
+  let anchor
+  try { anchor = JSON.parse(annotation.anchor_json || '{}') } catch { anchor = {} }
+  const locator = anchor.office
+  if (!locator) return ElMessage.warning('这是旧版标注，尚无精确段落锚点')
+  viewMode.value = 'structure'; showAnnPanel.value = false
+  await nextTick()
+  const section = secRefs[locator.chapter_id] || sections.value[locator.section_index] && secRefs[sections.value[locator.section_index].chapter_id]
+  const root = section?.querySelector('.dr-chapter-text,.dr-slide-text')
+  if (!root) return ElMessage.warning('原章节已变化，请重新选择文字')
+  jumpTo(Number(section.dataset.cid))
+  const start = locateTextOffset(root, locator.start_offset)
+  const end = locateTextOffset(root, locator.end_offset)
+  if (!start || !end) return ElMessage.warning('原文已变化，当前标注需要重新定位')
+  const range = document.createRange(); range.setStart(start.node, start.offset); range.setEnd(end.node, end.offset)
+  const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range)
+  range.getBoundingClientRect && root.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
 const removeAnn = async (a) => {
@@ -283,10 +342,10 @@ onMounted(async () => {
 .dr-toc-item:hover { background: var(--el-color-primary-light-9); }
 .dr-toc-item.active { background: var(--el-color-primary-light-8); color: var(--el-color-primary); font-weight: 600; }
 .dr-content { flex: 1; overflow-y: auto; padding: 20px 28px; background: #fff; }
-.dr-title { font-size: 24px; font-weight: 700; text-align: center; margin-bottom: 24px; color: var(--el-text-color-primary); }
+.dr-title { font-family:var(--study-font-display); font-size: 24px; font-weight: 600; text-align: center; margin-bottom: 24px; color: var(--el-text-color-primary); }
 .dr-chapter { margin-bottom: 28px; }
-.dr-chapter-title { font-size: 18px; font-weight: 700; color: var(--bailu-accent); border-left: 4px solid var(--bailu-accent); padding-left: 10px; margin-bottom: 12px; }
-.dr-chapter-text { font-size: inherit; line-height: 1.9; color: var(--el-text-color-regular); user-select: text; cursor: text; }
+.dr-chapter-title { font-family:var(--study-font-display); font-size: 19px; font-weight: 600; color: var(--bailu-accent); border-left: 4px solid var(--bailu-accent); padding-left: 10px; margin-bottom: 12px; }
+.dr-chapter-text { font-family:var(--study-font-reading); font-size:17px; line-height: 1.9; color: var(--el-text-color-regular); user-select: text; cursor: text; }
 .dr-chapter-text p { margin: 0.6em 0; line-height: 1.9; }
 .dr-chapter-text .doc-sub-heading { font-weight: 700; color: var(--el-text-color-primary); font-size: 1.05em; margin-top: 1.1em; }
 .dr-dark .dr-chapter-text .doc-sub-heading { color: #c8d6dc; }
@@ -302,7 +361,7 @@ onMounted(async () => {
 .dr-dark .dr-chapter-text { color: #ccc; }
 .dr-sel-bar { position: fixed; z-index: 50; display: flex; gap: 4px; padding: 4px; background: #fff; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25); border: 1px solid var(--el-border-color-light); }
 .ai-result { font-size: 14px; line-height: 1.9; color: #333333; }
-.ann-item { padding: 10px; border: 1px solid var(--el-border-color-extra-light); border-radius: 8px; margin-bottom: 8px; }
+.ann-item { padding: 10px; border: 1px solid var(--el-border-color-extra-light); border-radius: 8px; margin-bottom: 8px; cursor:pointer; }
 .ann-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .ann-text { font-size: 13px; color: var(--el-text-color-regular); margin-bottom: 4px; }
 .ann-note { font-size: 12px; color: var(--el-text-color-secondary); }

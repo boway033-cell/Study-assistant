@@ -1,12 +1,14 @@
 """书籍/资料 API（docs/03-api.md §1）"""
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
@@ -72,46 +74,75 @@ def _build_chapter_tree(chapters: list[Chapter]) -> list[ChapterNode]:
 @router.get("/books", response_model=BookListResp)
 def list_books(
     status: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=120),
+    ids: list[int] | None = Query(default=None),
+    category: str | None = Query(default=None, max_length=50),
+    reading_status: str | None = Query(default=None, pattern="^(unread|reading|read)$"),
+    favorite: bool | None = Query(default=None),
+    unfiled: bool = Query(default=False),
+    statuses: list[str] | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     shelf_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    q = select(Book)
+    stmt = select(Book)
     if status:
-        q = q.where(Book.status == status)
+        stmt = stmt.where(Book.status == status)
+    if statuses:
+        stmt = stmt.where(Book.status.in_(set(statuses)))
+    if category:
+        stmt = stmt.where(Book.category == category)
+    if ids:
+        stmt = stmt.where(Book.id.in_(set(ids)))
+    if q and q.strip():
+        keyword = f"%{q.strip()}%"
+        profile_books = select(PaperProfile.book_id).where(or_(
+            PaperProfile.authors.ilike(keyword),
+            PaperProfile.journal.ilike(keyword),
+            PaperProfile.doi.ilike(keyword),
+        ))
+        stmt = stmt.where(or_(Book.title.ilike(keyword), Book.id.in_(profile_books)))
+    if reading_status:
+        stmt = stmt.where(Book.id.in_(select(PaperProfile.book_id).where(PaperProfile.reading_status == reading_status)))
+    if favorite is not None:
+        stmt = stmt.where(Book.id.in_(select(PaperProfile.book_id).where(PaperProfile.favorite == int(favorite))))
+    if unfiled:
+        stmt = stmt.where(Book.id.not_in(select(shelf_books.c.book_id)))
     if shelf_id is not None:
-        q = q.join(shelf_books, shelf_books.c.book_id == Book.id).where(shelf_books.c.shelf_id == shelf_id)
-    total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
-    books = db.scalars(q.order_by(Book.created_at.desc()).offset((page - 1) * page_size).limit(page_size)).all()
+        stmt = stmt.join(shelf_books, shelf_books.c.book_id == Book.id).where(shelf_books.c.shelf_id == shelf_id)
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    books = db.scalars(stmt.order_by(Book.created_at.desc()).offset((page - 1) * page_size).limit(page_size)).all()
+    book_ids = [book.id for book in books]
 
-    # 统计各书题目数
+    # 只统计当前页，避免资料增长后每次列表请求扫描全库。
     quiz_counts = dict(db.execute(
-        select(Quiz.book_id, func.count()).group_by(Quiz.book_id)
-    ).all())
+        select(Quiz.book_id, func.count()).where(Quiz.book_id.in_(book_ids)).group_by(Quiz.book_id)
+    ).all()) if book_ids else {}
     chapter_counts = dict(db.execute(
-        select(Chapter.book_id, func.count()).group_by(Chapter.book_id)
-    ).all())
+        select(Chapter.book_id, func.count()).where(Chapter.book_id.in_(book_ids)).group_by(Chapter.book_id)
+    ).all()) if book_ids else {}
 
     from backend.app.models import BookDeep, ImportTask
     deep_statuses = dict(db.execute(
-        select(BookDeep.book_id, BookDeep.status).where(BookDeep.status != "none")
-    ).all())
+        select(BookDeep.book_id, BookDeep.status)
+        .where(BookDeep.book_id.in_(book_ids), BookDeep.status != "none")
+    ).all()) if book_ids else {}
     # 进行中任务消息（导入/OCR 进度等）
     task_msgs = dict(db.execute(
         select(ImportTask.book_id, ImportTask.message)
-        .where(ImportTask.status.in_(["pending", "running", "cancelling"]))
-    ).all())
+        .where(ImportTask.book_id.in_(book_ids), ImportTask.status.in_(["pending", "running", "cancelling"]))
+    ).all()) if book_ids else {}
     profiles = {
         p.book_id: p for p in db.scalars(
-            select(PaperProfile).where(PaperProfile.book_id.in_([b.id for b in books]))
+            select(PaperProfile).where(PaperProfile.book_id.in_(book_ids))
         ).all()
     } if books else {}
     shelf_map: dict[int, list[int]] = {b.id: [] for b in books}
     if books:
         for book_id, assigned_shelf_id in db.execute(
             select(shelf_books.c.book_id, shelf_books.c.shelf_id)
-            .where(shelf_books.c.book_id.in_([b.id for b in books]))
+            .where(shelf_books.c.book_id.in_(book_ids))
         ).all():
             shelf_map.setdefault(book_id, []).append(assigned_shelf_id)
     items = [
@@ -637,6 +668,35 @@ def get_task_status(task_id: str):
     )
 
 
+@router.get("/tasks/{task_id}/events")
+async def task_status_events(task_id: str):
+    """单任务 SSE：仅状态变化时推送，替代页面每两秒重复请求。"""
+    if not get_task(task_id):
+        raise HTTPException(404, "任务不存在")
+
+    async def stream():
+        previous = None
+        for _ in range(1440):  # 最长保持约 12 分钟，避免遗留连接常驻。
+            record = get_task(task_id)
+            if not record:
+                yield 'event: error\ndata: {"detail":"任务不存在"}\n\n'
+                return
+            payload = {"task_id": record.id, "status": record.status, "progress": record.progress,
+                       "stage": record.stage, "message": record.message, "error": record.error,
+                       "result": record.result}
+            encoded = json.dumps(payload, ensure_ascii=False)
+            if encoded != previous:
+                yield f"data: {encoded}\n\n"
+                previous = encoded
+            if record.status in {"done", "failed", "cancelled"}:
+                return
+            await asyncio.sleep(0.5)
+        yield 'event: timeout\ndata: {"detail":"任务仍在运行，请转到任务中心查看"}\n\n'
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @router.post("/tasks/{task_id}/cancel")
 def cancel_task_status(task_id: str):
     record = cancel_task(task_id)
@@ -787,24 +847,26 @@ def auto_repair_book_toc(book_id: int, req: TocRepairReq, db: Session = Depends(
         raise HTTPException(404, "书籍不存在")
     chapters = list(db.scalars(select(Chapter).where(Chapter.book_id == book_id)
                                .order_by(Chapter.order_index)).all())
-    from backend.app.services.rag.toc_editor import replace_book_toc, review_chapters
-    audit = review_chapters(chapters)
-    if not req.apply or not audit["summary"]["safe_repairs"]:
-        return {"applied": False, "audit": audit}
-    from backend.app.services.rag.toc_logic import auto_repair_toc_rows
+    from backend.app.services.rag.toc_editor import replace_book_toc
+    from backend.app.services.rag.toc_logic import build_toc_repair_preview
     index_by_id = {chapter.id: index for index, chapter in enumerate(chapters)}
-    repaired, _ = auto_repair_toc_rows([
+    preview = build_toc_repair_preview([
         {"id": chapter.id, "title": chapter.title, "level": chapter.level,
          "page": chapter.start_page or 1, "parent_index": index_by_id.get(chapter.parent_id)}
         for chapter in chapters
     ])
+    if not req.apply or not preview["can_apply"]:
+        return {"applied": False, "audit": preview["audit"],
+                "preview": {key: value for key, value in preview.items() if key not in {"audit", "repaired"}}}
     items = []
     stack = []
-    for item in repaired:
+    for item in preview["repaired"]:
         level = item["level"]
         while len(stack) >= level:
             stack.pop()
-        parent = stack[level - 2] if level > 1 else None
+        if level > len(stack) + 1:
+            raise HTTPException(409, "自动修正仍存在层级跳跃，已阻止写入；请在目录工作台人工确认")
+        parent = stack[-1] if level > 1 else None
         items.append({"client_key": f"id:{item['id']}", "id": item["id"],
                       "parent_key": f"id:{parent['id']}" if parent else None,
                       "title": item["title"], "level": level, "start_page": item["page"]})
@@ -836,6 +898,26 @@ def list_toc_revisions(book_id: int, db: Session = Depends(get_db)):
                       .order_by(TocRevision.created_at.desc()).limit(30)).all()
     return [{"id": row.id, "source": row.source, "note": row.note, "created_at": row.created_at}
             for row in rows]
+
+
+@router.post("/books/{book_id}/toc-revisions/{revision_id}/restore")
+def restore_toc_revision(book_id: int, revision_id: int, db: Session = Depends(get_db)):
+    book = db.get(Book, book_id)
+    revision = db.get(TocRevision, revision_id)
+    if not book or not revision or revision.book_id != book_id:
+        raise HTTPException(404, "目录修订不存在")
+    try:
+        snapshot = json.loads(revision.before_json or "[]")
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(409, "历史修订快照损坏，无法恢复") from exc
+    current = list(db.scalars(select(Chapter).where(Chapter.book_id == book_id)).all())
+    from backend.app.services.rag.toc_editor import replace_book_toc, revision_snapshot_to_items
+    items = revision_snapshot_to_items(snapshot, {row.id for row in current}, f"restore:{revision_id}")
+    try:
+        return replace_book_toc(db, book, items, "user", f"恢复到修订 {revision_id} 之前")
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(409, f"恢复预检失败：{exc}") from exc
 
 
 @router.get("/books/{book_id}/notes", response_model=list[NoteResp])

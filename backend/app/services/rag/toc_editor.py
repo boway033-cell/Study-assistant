@@ -33,6 +33,25 @@ def review_chapters(chapters: list[Chapter]) -> dict:
     return audit
 
 
+def revision_snapshot_to_items(snapshot: list[dict], current_ids: set[int], prefix: str) -> list[dict]:
+    """把历史快照转成可事务保存的目录项；已删除节点会安全重建。"""
+    ordered = sorted(snapshot, key=lambda row: int(row.get("order_index") or 0))
+    key_by_old_id = {int(row["id"]): f"{prefix}:{int(row['id'])}" for row in ordered if row.get("id") is not None}
+    items = []
+    for row in ordered:
+        old_id = int(row["id"]) if row.get("id") is not None else None
+        parent_id = int(row["parent_id"]) if row.get("parent_id") is not None else None
+        items.append({
+            "client_key": key_by_old_id.get(old_id, f"{prefix}:new:{len(items)}"),
+            "id": old_id if old_id in current_ids else None,
+            "parent_key": key_by_old_id.get(parent_id),
+            "title": str(row.get("title") or "").strip(),
+            "level": int(row.get("level") or 1),
+            "start_page": int(row.get("start_page") or 1),
+        })
+    return items
+
+
 def _validate_items(items: list[dict], total_pages: int) -> None:
     if not items:
         raise ValueError("目录至少保留一项")

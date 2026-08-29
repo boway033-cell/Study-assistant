@@ -149,12 +149,12 @@ html, body, #app { height: 100%; }
 }
 .logo-text { display: flex; flex-direction: column; line-height: 1.2; }
 .logo-title {
-  font-size: 16px; font-weight: 700;
+  font-family: var(--study-font-display); font-size: 17px; font-weight: 600;
   color: var(--bailu-text-deep);
   letter-spacing: 1px;
 }
 .logo-sub {
-  font-size: 11px; color: var(--bailu-accent);
+  font-family: var(--study-font-ui); font-size: 11px; color: var(--bailu-accent);
   letter-spacing: 3px; margin-top: 3px;
 }
 
@@ -225,7 +225,7 @@ html, body, #app { height: 100%; }
   padding: 0 20px;
 }
 .header-leading,.header-actions{display:flex;align-items:center;gap:10px}.header-leading>div{display:flex;flex-direction:column}.page-context{margin-top:2px;font-size:10px;letter-spacing:1px;color:#8f806e}.collapse-button{color:var(--bailu-text-deep)}.mobile-menu{display:none}.task-button{border-color:rgba(139,90,43,.22);background:rgba(245,240,232,.66);color:#6f4721}.task-button span{margin-left:5px}.mobile-logo{display:flex;align-items:center;gap:10px;padding:14px 10px 22px;color:#f5f0e8}.mobile-logo>span{font-size:24px}.mobile-logo div{display:flex;flex-direction:column}.mobile-logo small{margin-top:3px;color:rgba(245,240,232,.6)}
-.page-title { font-size: 17px; font-weight: 600; color: var(--bailu-text-deep); letter-spacing: 1px; }
+.page-title { font-family:var(--study-font-display); font-size: 17px; font-weight: 600; color: var(--bailu-text-deep); letter-spacing: .8px; }
 .reader-app-header { height: 44px; padding-top: 0; padding-bottom: 0; }
 .reader-app-header .page-context,
 .reader-app-header .header-slogan { display: none; }
@@ -248,20 +248,20 @@ html, body, #app { height: 100%; }
 }
 
 /* —— Markdown 排版层级（H1 醒目 / 层级分明 / 行高舒适） —— */
-.markdown-body { color: #333333; line-height: 1.9; }
+.markdown-body { color: #333333; font-family:var(--study-font-reading); font-size:16px; line-height: 1.9; }
 .markdown-body h1 {
-  font-size: 1.75em; font-weight: 800; color: #8B5A2B;
+  font-family:var(--study-font-display); font-size: 1.65em; font-weight: 600; color: #8B5A2B;
   margin: 0.9em 0 0.5em; padding-bottom: 0.35em;
   border-bottom: 3px solid #C2A285;
   letter-spacing: 0.01em;
 }
 .markdown-body h2 {
-  font-size: 1.4em; font-weight: 700; color: #5b4a35;
+  font-family:var(--study-font-display); font-size: 1.35em; font-weight: 600; color: #5b4a35;
   margin: 0.9em 0 0.45em; padding-bottom: 0.25em;
   border-bottom: 2px solid var(--el-border-color);
 }
-.markdown-body h3 { font-size: 1.2em; font-weight: 700; color: #44473F; margin: 0.7em 0 0.35em; }
-.markdown-body h4 { font-size: 1.05em; font-weight: 700; color: #55564b; margin: 0.6em 0 0.3em; }
+.markdown-body h3 { font-family:var(--study-font-display); font-size: 1.18em; font-weight: 600; color: #44473F; margin: 0.7em 0 0.35em; }
+.markdown-body h4 { font-family:var(--study-font-display); font-size: 1.05em; font-weight: 600; color: #55564b; margin: 0.6em 0 0.3em; }
 .markdown-body h5 { font-size: 1em; font-weight: 600; color: #66685c; margin: 0.5em 0 0.25em; }
 .markdown-body p { margin: 0.45em 0; line-height: 1.9; color: #333333; }
 .markdown-body ul, .markdown-body ol { padding-left: 1.7em; margin: 0.45em 0; }

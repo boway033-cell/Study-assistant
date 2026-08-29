@@ -26,11 +26,23 @@ const loadKnowledgeBooks = async () => {
   if (knowledgeBooks.value.length || knowledgeScopeLoading.value) return
   knowledgeScopeLoading.value = true
   try {
-    const response = await listBooks({ page_size: 100 })
+    const response = await listBooks({ status: 'ready', page_size: 30, ids: knowledgeBookIds.value.length ? knowledgeBookIds.value : undefined })
     knowledgeBooks.value = response.items.filter(book => book.status === 'ready')
-    const valid = new Set(knowledgeBooks.value.map(book => book.id))
-    setKnowledgeScope(knowledgeBookIds.value.filter(id => valid.has(id)))
   } finally { knowledgeScopeLoading.value = false }
 }
 
-export { knowledgeBooks, knowledgeBookIds, knowledgeScopeLabel, knowledgeScopeLoading, setKnowledgeScope, loadKnowledgeBooks }
+const searchKnowledgeBooks = async (query = '') => {
+  knowledgeScopeLoading.value = true
+  try {
+    const [searched, selected] = await Promise.all([
+      listBooks({ status: 'ready', q: query.trim() || undefined, page_size: 30 }),
+      knowledgeBookIds.value.length
+        ? listBooks({ status: 'ready', ids: knowledgeBookIds.value, page_size: Math.min(knowledgeBookIds.value.length, 100) })
+        : Promise.resolve({ items: [] }),
+    ])
+    const merged = new Map([...selected.items, ...searched.items].map(book => [book.id, book]))
+    knowledgeBooks.value = [...merged.values()]
+  } finally { knowledgeScopeLoading.value = false }
+}
+
+export { knowledgeBooks, knowledgeBookIds, knowledgeScopeLabel, knowledgeScopeLoading, setKnowledgeScope, loadKnowledgeBooks, searchKnowledgeBooks }

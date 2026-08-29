@@ -1030,6 +1030,8 @@ onBeforeUnmount(() => {
 }
 @media (max-width:680px) {
   .pr-toolbar { padding:5px; }
+  .pr-toolbar :deep(.el-button), .pr-toolbar :deep(.el-radio-button__inner) { min-width:40px; min-height:40px; padding:8px 10px; }
+  .pr-toc-item { min-height:44px; padding-block:11px; }
   .pr-page-controls { margin-left:0; }
   .pr-pageinfo :deep(.el-input-number) { width:70px; }
   .pr-mode :deep(.el-radio-button__inner) { padding-inline:7px; }

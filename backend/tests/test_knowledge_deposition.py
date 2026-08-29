@@ -115,12 +115,15 @@ def test_annotation_note_and_evidence_are_independent_entities():
         card = create_evidence_card(EvidenceCardCreateReq(
             book_id=book.id, page=2, title="证据卡", evidence_text="可独立保存的原文",
             claim_text="该原文支持一个待核验主张", verification_status="needs_review",
+            source_report_id=17, source_book_ids=[book.id], source_refs=[f"B{book.id}:P2"],
         ), db)
         records = list_knowledge_records([book.id], None, None, None, None, None, None, None, db)
         assert {item["entity_type"] for item in records["items"]} == {
             "annotation", "knowledge_note", "evidence_card",
         }
         assert card["verification_status"] == "needs_review"
+        assert card["source_report_id"] == 17
+        assert card["source_refs"] == [f"B{book.id}:P2"]
     finally:
         db.query(EvidenceCard).filter(EvidenceCard.book_id == book.id).delete(synchronize_session=False)
         db.query(KnowledgeNote).filter(KnowledgeNote.book_id == book.id).delete(synchronize_session=False)
@@ -142,13 +145,18 @@ def test_ai_report_note_detail_preserves_markdown_and_source_link():
     try:
         created = create_knowledge_note(KnowledgeNoteCreateReq(
             book_id=book.id, title="综合研究报告", content=markdown,
-            tags=["研究报告"], origin="ai",
+            tags=["研究报告"], origin="ai", source_report_id=23,
+            source_book_ids=[book.id], source_refs=[f"B{book.id}:P1"],
+            source_scope={"chapter_ids": [101, 102]},
         ), db)
         detail = get_knowledge_note(created["id"], db)
         assert detail["content"] == markdown
         assert detail["origin"] == "ai"
         assert detail["tags"] == ["研究报告"]
         assert detail["source_link"] == f"/reader/{book.id}?page=1"
+        assert detail["source_report_id"] == 23
+        assert detail["source_scope"]["book_ids"] == [book.id]
+        assert detail["source_refs"] == [f"B{book.id}:P1"]
     finally:
         db.query(KnowledgeNote).filter(KnowledgeNote.book_id == book.id).delete(synchronize_session=False)
         db.delete(book); db.commit(); db.close()

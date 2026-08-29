@@ -8,13 +8,13 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.models import Book, PresentationDeck
-from backend.app.services.presentation_deck import (audit_claim_sources, collect_selection,
+from backend.app.services.presentation_deck import (audit_claim_sources, collect_multi_selection,
     generate_deck_task, generate_outline_task, render_deck_task, validate_outline)
 from backend.app.worker.tasks import submit
 
@@ -23,6 +23,8 @@ router = APIRouter(prefix="/api/presentations", tags=["presentations"])
 
 class DeckGenerateReq(BaseModel):
     book_id: int
+    source_book_ids: list[int] = Field(default_factory=list, max_length=50)
+    source_report_id: int | None = Field(default=None, ge=1)
     chapter_ids: list[int] = Field(default_factory=list)
     chunk_ids: list[int] = Field(default_factory=list)
     resource_ids: list[int] = Field(default_factory=list)
@@ -56,20 +58,27 @@ class RenderReq(BaseModel):
     confirm_unsupported_claims: bool = False
 
 
-def _resp(row: PresentationDeck) -> dict:
+def _resp(row: PresentationDeck, *, detail: bool = True) -> dict:
     def load(raw, fallback):
         try: return json.loads(raw) if raw else fallback
         except (ValueError, TypeError): return fallback
     qa = load(row.qa_json, {})
     visual = qa.get("visual", {}) if isinstance(qa, dict) else {}
-    return {"id": row.id, "book_id": row.book_id, "title": row.title, "status": row.status,
-            "paper_type": row.paper_type, "selection": load(row.selection_json, {}),
-            "options": load(row.options_json, {}), "outline": load(row.outline_json, []),
-            "manifest": load(row.manifest_json, {}), "qa": qa,
+    selection = load(row.selection_json, {})
+    outline = load(row.outline_json, [])
+    response = {"id": row.id, "book_id": row.book_id, "title": row.title, "status": row.status,
+            "paper_type": row.paper_type,
+            "coverage": selection.get("coverage", {}),
+            "source_book_count": len(selection.get("books", [])),
+            "slide_count": len(outline),
             "outline_editable": row.status in {"outline_ready", "done"},
             "preview_count": visual.get("slide_count", 0) if visual.get("ok") else 0,
             "download_ready": bool(row.file_path and row.status == "done"), "error_msg": row.error_msg,
             "created_at": row.created_at, "updated_at": row.updated_at}
+    if detail:
+        response.update({"selection": selection, "options": load(row.options_json, {}),
+                         "outline": outline, "manifest": load(row.manifest_json, {}), "qa": qa})
+    return response
 
 
 @router.post("/generate", status_code=202)
@@ -78,12 +87,14 @@ def generate(req: DeckGenerateReq, db: Session = Depends(get_db)):
     if not book or book.status != "ready":
         raise HTTPException(400, "文献尚未完成解析")
     try:
-        selection = collect_selection(db, req.book_id, req.chapter_ids, req.chunk_ids, req.selected_text,
-                                      req.resource_ids, req.max_source_chars)
+        selection = collect_multi_selection(db, req.book_id, req.source_book_ids, req.chapter_ids,
+                                            req.chunk_ids, req.selected_text, req.resource_ids,
+                                            req.max_source_chars, req.source_report_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    options = req.model_dump(exclude={"book_id", "chapter_ids", "chunk_ids", "resource_ids", "selected_text"})
-    deck = PresentationDeck(book_id=book.id, title=f"{book.title}｜中文文献汇报",
+    options = req.model_dump(exclude={"book_id", "source_book_ids", "source_report_id", "chapter_ids", "chunk_ids", "resource_ids", "selected_text"})
+    deck_title = f"{book.title} 等 {len(selection.get('books', []))} 本｜中文文献汇报" if len(selection.get("books", [])) > 1 else f"{book.title}｜中文文献汇报"
+    deck = PresentationDeck(book_id=book.id, title=deck_title,
                             selection_json=json.dumps(selection, ensure_ascii=False),
                             options_json=json.dumps(options, ensure_ascii=False), status="pending")
     db.add(deck); db.commit(); db.refresh(deck)
@@ -97,12 +108,14 @@ def create_outline(req: DeckGenerateReq, db: Session = Depends(get_db)):
     if not book or book.status != "ready":
         raise HTTPException(400, "文献尚未完成解析")
     try:
-        selection = collect_selection(db, req.book_id, req.chapter_ids, req.chunk_ids, req.selected_text,
-                                      req.resource_ids, req.max_source_chars)
+        selection = collect_multi_selection(db, req.book_id, req.source_book_ids, req.chapter_ids,
+                                            req.chunk_ids, req.selected_text, req.resource_ids,
+                                            req.max_source_chars, req.source_report_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    options = req.model_dump(exclude={"book_id", "chapter_ids", "chunk_ids", "resource_ids", "selected_text"})
-    deck = PresentationDeck(book_id=book.id, title=f"{book.title}｜中文文献汇报",
+    options = req.model_dump(exclude={"book_id", "source_book_ids", "source_report_id", "chapter_ids", "chunk_ids", "resource_ids", "selected_text"})
+    deck_title = f"{book.title} 等 {len(selection.get('books', []))} 本｜中文文献汇报" if len(selection.get("books", [])) > 1 else f"{book.title}｜中文文献汇报"
+    deck = PresentationDeck(book_id=book.id, title=deck_title,
                             selection_json=json.dumps(selection, ensure_ascii=False),
                             options_json=json.dumps(options, ensure_ascii=False), status="pending")
     db.add(deck); db.commit(); db.refresh(deck)
@@ -143,10 +156,16 @@ def render(deck_id: int, req: RenderReq, db: Session = Depends(get_db)):
 
 
 @router.get("")
-def list_decks(book_id: int | None = None, db: Session = Depends(get_db)):
+def list_decks(book_id: int | None = None, page: int = 1, page_size: int = 20,
+               db: Session = Depends(get_db)):
     q = select(PresentationDeck)
     if book_id: q = q.where(PresentationDeck.book_id == book_id)
-    return [_resp(x) for x in db.scalars(q.order_by(PresentationDeck.created_at.desc())).all()]
+    total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
+    rows = db.scalars(q.order_by(PresentationDeck.created_at.desc())
+                      .offset((max(page, 1) - 1) * min(max(page_size, 1), 100))
+                      .limit(min(max(page_size, 1), 100))).all()
+    return {"total": total, "page": max(page, 1), "page_size": min(max(page_size, 1), 100),
+            "items": [_resp(row, detail=False) for row in rows]}
 
 
 @router.get("/{deck_id}")

@@ -5,7 +5,7 @@
       <el-col :span="4">
         <el-card shadow="never" class="side-card">
           <template #header>提问范围</template>
-          <el-select v-model="bookId" placeholder="全部书籍" clearable style="width: 100%">
+          <el-select v-model="bookId" placeholder="全部书籍" clearable filterable remote :remote-method="searchBooks" :loading="booksLoading" style="width: 100%">
             <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
           </el-select>
           <el-divider />
@@ -14,6 +14,7 @@
             <div class="history-q">{{ h.question }}</div>
             <div class="history-time">{{ formatTime(h.created_at) }} · {{ h.model }}</div>
           </div>
+          <el-button v-if="history.length < historyTotal" link class="history-more" :loading="historyLoading" @click="loadMoreHistory">加载更早记录</el-button>
         </el-card>
       </el-col>
 
@@ -93,7 +94,7 @@
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { listBooks, chatStream, chatHistory, getChunkOriginal, getBook, bookFileUrl } from '../api'
+import { listBooks, chatStream, chatHistory, getChat, getChunkOriginal, getBook, bookFileUrl } from '../api'
 import PdfReader from '../components/PdfReader.vue'
 import StudyEmptyState from '../components/StudyEmptyState.vue'
 import { sanitizeHtml } from '../utils/markdown'
@@ -101,12 +102,16 @@ import { sanitizeHtml } from '../utils/markdown'
 const router = useRouter()
 const route = useRoute()
 const books = ref([])
+const booksLoading = ref(false)
 const bookId = ref(null)
 const model = ref('flash')
 const question = ref('')
 const messages = ref([])
 const sending = ref(false)
 const history = ref([])
+const historyPage = ref(1)
+const historyTotal = ref(0)
+const historyLoading = ref(false)
 const msgBox = ref(null)
 
 // 右侧原文面板状态
@@ -226,14 +231,21 @@ const send = async () => {
   }
 }
 
-const loadHistory = async () => {
+const loadHistory = async (page = 1, append = false) => {
+  historyLoading.value = true
   try {
-    const resp = await chatHistory({ page_size: 20 })
-    history.value = resp.items
-  } catch { /* ignore */ }
+    const resp = await chatHistory({ page, page_size: 20 })
+    history.value = append ? [...history.value, ...resp.items] : resp.items
+    historyPage.value = page
+    historyTotal.value = resp.total
+  } catch { /* ignore */ } finally { historyLoading.value = false }
 }
 
-const viewHistory = (h) => {
+const loadMoreHistory = () => loadHistory(historyPage.value + 1, true)
+
+const viewHistory = async (summary) => {
+  let h
+  try { h = await getChat(summary.id) } catch (error) { ElMessage.error('历史详情加载失败：' + error.message); return }
   messages.value.push({ role: 'user', content: h.question })
   const msg = { role: 'assistant', content: h.answer, sources: h.sources || [], bookId: bookId.value }
   messages.value.push(msg)
@@ -245,12 +257,20 @@ const viewHistory = (h) => {
   scrollBottom()
 }
 
+const searchBooks = async (query = '') => {
+  booksLoading.value = true
+  try {
+    const resp = await listBooks({ status: 'ready', q: query.trim() || undefined, page_size: 30 })
+    const current = books.value.find(book => book.id === bookId.value)
+    books.value = current && !resp.items.some(book => book.id === current.id) ? [current, ...resp.items] : resp.items
+  } finally { booksLoading.value = false }
+}
+
 const formatTime = (t) => (t || '').replace('T', ' ').slice(5, 16)
 
 onMounted(async () => {
   try {
-      const resp = await listBooks({ page_size: 100 })
-      books.value = resp.items.filter((b) => b.status === 'ready')
+      await searchBooks('')
       const requestedBook = Number(route.query.bookId)
       if (requestedBook && books.value.some((book) => book.id === requestedBook)) bookId.value = requestedBook
   } catch { /* ignore */ }
@@ -288,6 +308,7 @@ onMounted(async () => {
 .history-item:hover { background: var(--el-fill-color-lighter); }
 .history-q { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-time { font-size: 11px; color: var(--el-text-color-placeholder); }
+.history-more{width:100%;min-height:36px}
 .source-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .source-text {
   background: var(--el-fill-color-lighter); border-radius: 8px; padding: 14px;

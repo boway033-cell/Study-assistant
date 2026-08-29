@@ -101,7 +101,7 @@
             <el-tag :type="tocAudit.ok ? 'success' : 'warning'">
               {{ tocAudit.ok ? '编号链通过' : `${tocAudit.summary?.unresolved || 0} 项需人工判断` }}
             </el-tag>
-            <el-button :disabled="!tocAudit.summary?.safe_repairs" @click="applySafeTocRepair">
+            <el-button :disabled="!tocAudit.summary?.safe_repairs || !!tocAudit.summary?.unresolved" @click="applySafeTocRepair">
               安全自修正 {{ tocAudit.summary?.safe_repairs || 0 }} 项
             </el-button>
           </div>
@@ -160,7 +160,12 @@
             <el-empty v-else description="尚未选择节点" :image-size="70" />
           </section>
         </div>
-        <div v-if="tocRevisions.length" class="toc-revisions">最近修订：{{ tocRevisions.slice(0, 4).map(r => `${r.source === 'auto' ? '自修正' : '人工'} ${formatDate(r.created_at)}`).join(' · ') }}</div>
+        <div v-if="tocRevisions.length" class="toc-revisions">
+          <span>最近修订</span>
+          <el-button v-for="revision in tocRevisions.slice(0, 4)" :key="revision.id" size="small" text @click="restoreRevision(revision)">
+            {{ revision.source === 'auto' ? '自修正' : '人工' }} {{ formatDate(revision.created_at) }} · 恢复前一版
+          </el-button>
+        </div>
       </div>
       <template #footer>
         <el-button @click="tocEditorOpen = false">取消</el-button>
@@ -179,7 +184,7 @@ import DocReader from '../components/DocReader.vue'
 import {
   getBook, bookFileUrl, renderedBookFileUrl, getBookDeep, deepAnalyze,
   getSourceMap, updateArchiveProfile,
-  getTocReview, autoRepairToc, replaceBookToc, listTocRevisions,
+  getTocReview, autoRepairToc, replaceBookToc, listTocRevisions, restoreTocRevision,
 } from '../api'
 import { renderMarkdown } from '../utils/markdown'
 import { notifyTaskSubmitted } from '../stores/taskCenter'
@@ -427,9 +432,21 @@ const saveTocEditor = async () => {
 }
 const applySafeTocRepair = async () => {
   try {
-    await ElMessageBox.confirm('只修正可由编号证明的层级和父级；缺号、重复标题仍保留人工复核。', '应用安全自修正')
+    const result = await autoRepairToc(book.value.id, false)
+    if (!result.preview?.can_apply) return ElMessage.warning(result.preview?.blocked_reason || '当前目录不能安全自动修正')
+    const changes = result.preview.changes || []
+    await ElMessageBox.confirm(`将修改 ${changes.length} 项可由编号证明的层级或父级。写入前已完成未决冲突检查，并会保存可恢复快照。`, '预览安全自修正')
     await autoRepairToc(book.value.id, true)
     ElMessage.success('安全修正已应用')
+    await loadBook(book.value.id)
+    await loadTocEditor()
+  } catch (e) { if (e !== 'cancel') ElMessage.error(e.message || String(e)) }
+}
+const restoreRevision = async (revision) => {
+  try {
+    await ElMessageBox.confirm('将恢复到该次修订发生前的目录，并重新建立章节来源映射。当前版本也会保存为可恢复修订。', '恢复目录版本')
+    await restoreTocRevision(book.value.id, revision.id)
+    ElMessage.success('目录已恢复，当前版本已保留在修订记录中')
     await loadBook(book.value.id)
     await loadTocEditor()
   } catch (e) { if (e !== 'cancel') ElMessage.error(e.message || String(e)) }
@@ -522,7 +539,7 @@ onMounted(() => loadBook(Number(route.params.bookId)))
 .reader-identity { flex:1; }
 .reader-heading { min-width:0; max-width:860px; }
 .reader-actions,.reader-status-actions { flex:none; justify-content:flex-end; }
-.reader-title { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; font-family:var(--study-font-reading); font-size:16px; line-height:1.35; font-weight:700; color:var(--el-text-color-primary); }
+.reader-title { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; font-family:var(--study-font-display); font-size:17px; line-height:1.4; font-weight:600; color:var(--el-text-color-primary); }
 .toc-review-btn { flex:none; }
 .reader-meta { margin-top: 2px; font-size: var(--study-font-size-xs); color: var(--el-text-color-secondary); }
 .reader-body { flex: 1; min-height: 0; }
@@ -565,7 +582,7 @@ onMounted(() => loadBook(Number(route.params.bookId)))
 .toc-tree-panel :deep(.el-tree-node__content:hover),.toc-tree-panel :deep(.el-tree-node.is-current > .el-tree-node__content) { background:#f1e8d9; }
 .toc-tree-node { display:flex; align-items:center; min-width:0; flex:1; gap:6px; padding-right:8px; border-left:2px solid transparent; }
 .toc-tree-node.status-review { border-left-color:#d6a04d; }.toc-tree-node.status-low { border-left-color:#c96055; }
-.toc-node-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#423f38; font-size:12px; }
+.toc-node-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#423f38; font-family:var(--study-font-ui); font-size:13px; }
 .toc-node-page { flex:none; color:#988a77; font:11px Georgia,serif; }.toc-node-edited { flex:none; padding:1px 4px; border-radius:4px; background:#8b5a2b; color:#fff; font-size:9px; }
 .toc-page-panel { display:flex; flex-direction:column; }.toc-page-frame { width:100%; flex:1; border:0; background:#d8d5ce; }
 .toc-inspector-panel { overflow-y:auto; }.toc-inspector-panel > :not(.toc-panel-title) { margin-left:14px; margin-right:14px; }
@@ -602,6 +619,7 @@ onMounted(() => loadBook(Number(route.params.bookId)))
   .reader-status-actions { width:100%; overflow-x:auto; justify-content:flex-start; padding-bottom:2px; }
 }
 @media (max-width: 720px) {
+  .reader-actions :deep(.el-button), .reader-status-actions :deep(.el-button), .reader-mode :deep(.el-radio-button__inner) { min-height:40px; padding:8px 11px; }
   .reader-title { font-size:15px; }
   .artifact-view { grid-template-columns: 1fr; }
   .artifact-aside { display: none; }

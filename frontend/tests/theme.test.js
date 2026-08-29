@@ -7,6 +7,14 @@ import { dirname, resolve } from 'node:path'
 const here = dirname(fileURLToPath(import.meta.url))
 const theme = readFileSync(resolve(here, '../src/theme/bailu.css'), 'utf8')
 
+test('typography separates UI, display, and reading contexts', () => {
+  assert.match(theme, /--study-font-ui:\s*"Microsoft YaHei UI"/)
+  assert.match(theme, /--study-font-display:\s*"STZhongsong",\s*"华文中宋"/)
+  assert.match(theme, /--study-font-reading:\s*"Noto Serif SC"/)
+  assert.match(theme, /--el-font-family:\s*var\(--study-font-ui\)/)
+  assert.match(theme, /button, input, textarea, select\s*\{\s*font-family:\s*inherit/)
+})
+
 test('cards share gray-200 border and reserve shadows for floating surfaces', () => {
   assert.match(theme, /--study-card-border:\s*#e5e7eb/i)
   assert.match(theme, /--study-shadow-sm:/)

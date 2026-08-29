@@ -5,9 +5,13 @@
    ============================================ */
 
 :root {
-  /* —— 统一界面尺度：功能界面用黑体，长文阅读单独使用宋体 —— */
-  --study-font-ui: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
-  --study-font-reading: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", serif;
+  /* 操作界面用清晰黑体；华文中宋只承担品牌/标题，正文使用更耐读的现代宋体。 */
+  --study-font-ui: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Source Han Sans SC", sans-serif;
+  --study-font-display: "STZhongsong", "华文中宋", "Songti SC", "STSong", "SimSun", serif;
+  --study-font-reading: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
+  --study-font-latin: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  --el-font-family: var(--study-font-ui);
+  --study-font-size-micro: 11px;
   --study-font-size-xs: 12px;
   --study-font-size-sm: 13px;
   --study-font-size-md: 14px;
@@ -107,6 +111,18 @@ body {
   font-family: var(--study-font-ui);
   line-height: var(--study-line-ui);
 }
+
+button, input, textarea, select { font-family: inherit; }
+
+:where(.el-button, .el-input, .el-select, .el-menu, .el-tabs, .el-table, .el-form, .el-tag, .el-pagination, .el-dialog, .el-drawer) {
+  font-family: var(--study-font-ui);
+}
+.el-button:not(.el-button--small),
+.el-input:not(.el-input--small),
+.el-select:not(.el-select--small) { font-size: var(--study-font-size-md); }
+.el-form-item__label,
+.el-menu-item,
+.el-sub-menu__title { font-size: var(--study-font-size-md); }
 
 /* —— 纸质感卡片（border-gray-200 + shadow-sm） —— */
 :where(
@@ -285,7 +301,7 @@ body { font-size: var(--study-font-size-md); }
 .study-commandbar__identity { min-width: 0; }
 .study-commandbar__eyebrow { color: var(--el-color-primary); font-size: 10px; font-weight: 700; letter-spacing: .8px; }
 .study-commandbar__titleline { display: flex; align-items: center; gap: var(--study-space-2); min-width: 0; }
-.study-commandbar h1 { margin: 0; color: var(--study-text-primary); font: 700 19px var(--study-font-reading); letter-spacing: .4px; }
+.study-commandbar h1 { margin: 0; color: var(--study-text-primary); font: 600 20px var(--study-font-display); letter-spacing: .5px; }
 .study-commandbar p { margin-top: 2px; overflow: hidden; color: var(--study-text-secondary); font-size: var(--study-font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
 .study-commandbar__content,.study-commandbar__actions { display: flex; align-items: center; gap: var(--study-space-2); min-width: 0; }
 .study-commandbar__actions { justify-content: flex-end; }
@@ -335,9 +351,20 @@ body { font-size: var(--study-font-size-md); }
   background: linear-gradient(120deg, #173638, #536354);
   box-shadow: 0 10px 28px rgba(19, 43, 43, .16);
 }
-.study-page-hero h1 { margin: 4px 0; font: 700 28px var(--study-font-reading); letter-spacing: 2px; }
+.study-page-hero h1 { margin: 4px 0; font: 600 28px var(--study-font-display); letter-spacing: 1.5px; }
 .study-page-hero p { color: rgba(247, 241, 232, .76); }
 .study-eyebrow { color: #d6b691; font-size: var(--study-font-size-xs); letter-spacing: 2px; }
+
+/* 内容排版层：宋体只出现在需要连续阅读的位置，不渗入筛选器与按钮。 */
+:where(.markdown-body, .artifact-content, .report-content, .dr-chapter-text, .original-text, .writing-result article, .artifact-list article) {
+  font-family: var(--study-font-reading);
+  font-size: 16px;
+  line-height: var(--study-line-reading);
+  text-rendering: optimizeLegibility;
+}
+:where(.markdown-body, .artifact-content, .report-content, .dr-chapter-text, .original-text, .writing-result article, .artifact-list article) :where(h1, h2, h3, h4) {
+  font-family: var(--study-font-display);
+}
 
 @media (max-width: 760px) {
   .study-commandbar { grid-template-columns: 1fr; gap: var(--study-space-2); }

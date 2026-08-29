@@ -12,7 +12,7 @@
           </template>
 
           <div class="agent-input-section">
-            <el-select v-model="selectedBookIds" multiple collapse-tags filterable clearable
+            <el-select v-model="selectedBookIds" multiple collapse-tags filterable remote :remote-method="searchBookOptions" :loading="booksLoading" clearable
               placeholder="选择一本或多本文献作为图表来源（可选）" style="width: 100%; margin-bottom: 10px">
               <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
             </el-select>
@@ -103,6 +103,7 @@ import StudyEmptyState from '../components/StudyEmptyState.vue'
 
 const description = ref('')
 const books = ref([])
+const booksLoading = ref(false)
 const selectedBookIds = ref([])
 const model = ref('flash')
 const generating = ref(false)
@@ -190,9 +191,8 @@ const clearDiagram = () => {
   description.value = ''
 }
 
-onMounted(async () => {
-  try { books.value = (await listBooks({ page_size: 100 })).items.filter(b => b.status === 'ready') } catch {}
-})
+const searchBookOptions = async (query='') => { booksLoading.value=true; try{const r=await listBooks({status:'ready',q:query.trim()||undefined,page_size:30}); const selected=books.value.filter(b=>selectedBookIds.value.includes(b.id)); books.value=[...new Map([...selected,...r.items].map(b=>[b.id,b])).values()]}finally{booksLoading.value=false} }
+onMounted(() => searchBookOptions(''))
 
 // Parse draw.io mxGraph XML and render as SVG
 function xmlToSvg(xml) {

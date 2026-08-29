@@ -58,7 +58,16 @@ def _anchor_payload(req, book: Book | None = None) -> tuple[int, str, str | None
     anchor = req.anchor.model_dump()
     if book and not anchor.get("document_fingerprint"):
         anchor["document_fingerprint"] = book.file_hash
+    if anchor.get("kind") == "office":
+        locator = anchor.get("office")
+        if not locator or locator["end_offset"] <= locator["start_offset"]:
+            raise HTTPException(422, "Office 标注缺少有效的章节文字锚点")
+        if book and book.file_type not in {"docx", "pptx"}:
+            raise HTTPException(422, "Office 锚点只能用于 DOCX/PPTX")
+        return (0, "[]", json.dumps(anchor, ensure_ascii=False, separators=(",", ":")), 3)
     segments = anchor["segments"]
+    if not segments:
+        raise HTTPException(422, "PDF 标注至少需要一个页面矩形")
     for segment in segments:
         if book and book.total_pages and segment["page"] > book.total_pages:
             raise HTTPException(422, f"批注页码 {segment['page']} 超出文档范围")
