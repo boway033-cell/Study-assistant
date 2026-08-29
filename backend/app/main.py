@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, literature, plan, presentations, quizzes, settings, shelves, stats, study, tags
+from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, literature, plan, presentations, quizzes, settings, shelves, stats, study, tags, writing
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import Base, engine
 from backend.app.services.rag import fts
@@ -68,6 +68,25 @@ def _migrate():
                     conn.execute(text("ALTER TABLE study_reports ADD COLUMN claims_json TEXT NOT NULL DEFAULT '[]'"))
             except Exception:  # noqa: BLE001
                 pass
+            # 来源链 v2：研究报告派生的笔记/证据保留多书范围、精确锚点和报告回链。
+            for table, definitions in {
+                "knowledge_notes": (
+                    ("source_report_id", "INTEGER"),
+                    ("source_scope_json", "TEXT NOT NULL DEFAULT '{}'"),
+                    ("source_refs_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ),
+                "evidence_cards": (
+                    ("source_report_id", "INTEGER"),
+                    ("source_scope_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ),
+            }.items():
+                try:
+                    existing_cols = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()}
+                    for col, ddl in definitions:
+                        if col not in existing_cols:
+                            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+                except Exception:  # noqa: BLE001
+                    pass
             # 旧版把普通笔记存成 knowledge_nodes(node_type='note')；幂等复制到独立笔记表。
             try:
                 conn.execute(text("""
@@ -87,6 +106,10 @@ def _migrate():
                 pass
             try:
                 conn.execute(text("UPDATE presentation_decks SET status='failed', error_msg='服务重启，生成任务已中断，请重新生成' WHERE status IN ('pending','running','outlining','rendering')"))
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                conn.execute(text("UPDATE writing_dna_profiles SET status='failed', error_msg='服务重启，蒸馏任务已中断，请重新提交完善' WHERE status IN ('pending','running')"))
             except Exception:  # noqa: BLE001
                 pass
             # book_deep 新增 chapter_hashes_json 列
@@ -209,6 +232,8 @@ class SPAStaticFiles(StaticFiles):
     """静态资源不存在时回退 index.html，支持刷新和协议深链。"""
 
     async def get_response(self, path: str, scope):
+        if scope.get("path", "").startswith("/api/") or path.lstrip("/").startswith("api/"):
+            raise StarletteHTTPException(status_code=404, detail="API endpoint not found")
         try:
             response = await super().get_response(path, scope)
             if response.status_code != 404:
@@ -261,6 +286,7 @@ app.include_router(shelves.router)
 app.include_router(draw.router)
 app.include_router(presentations.router)
 app.include_router(literature.router)
+app.include_router(writing.router)
 
 
 @app.get("/api/health")
@@ -270,7 +296,8 @@ def health():
         "status": "ok",
         "app": "study-assistant",
         "api_revision": 3,
-        "capabilities": {"shelves_write": True, "knowledge_records": True, "annotation_underline": True},
+        "capabilities": {"shelves_write": True, "knowledge_records": True, "annotation_underline": True,
+                         "writing_dna": True, "ai_tone_docx": True},
     }
 
 

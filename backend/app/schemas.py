@@ -186,6 +186,16 @@ class ChatSource(BaseModel):
 class ChatHistoryItem(BaseModel):
     id: int
     question: str
+    answer_preview: str = ""
+    answer_length: int = 0
+    model: str = ""
+    source_count: int = 0
+    created_at: datetime
+
+
+class ChatHistoryDetail(BaseModel):
+    id: int
+    question: str
     answer: str
     model: str = ""
     sources: list[ChatSource] = []
@@ -385,11 +395,20 @@ class AnnotationQuote(BaseModel):
     suffix: str = ""
 
 
+class OfficeAnnotationLocator(BaseModel):
+    chapter_id: int
+    section_index: int = Field(ge=0)
+    start_offset: int = Field(ge=0)
+    end_offset: int = Field(gt=0)
+
+
 class AnnotationAnchor(BaseModel):
-    schema_version: int = 2
+    schema_version: int = 3
+    kind: str = Field(default="pdf", pattern="^(pdf|office)$")
     document_fingerprint: str | None = None
     quote: AnnotationQuote = Field(default_factory=AnnotationQuote)
-    segments: list[AnnotationSegment] = Field(min_length=1)
+    segments: list[AnnotationSegment] = Field(default_factory=list)
+    office: OfficeAnnotationLocator | None = None
 
 
 class AnnotationCreateReq(BaseModel):
@@ -443,6 +462,10 @@ class EvidenceCardCreateReq(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=20)
     origin: str = Field(default="user", pattern="^(user|ai)$")
     verification_status: str = Field(default="needs_review", pattern="^(supported|partial|needs_review|unsupported)$")
+    source_report_id: int | None = Field(default=None, ge=1)
+    source_book_ids: list[int] = Field(default_factory=list, max_length=50)
+    source_refs: list[str | dict] = Field(default_factory=list, max_length=100)
+    source_scope: dict = Field(default_factory=dict)
 
 
 class EvidenceCardUpdateReq(BaseModel):
@@ -461,6 +484,10 @@ class KnowledgeNoteCreateReq(BaseModel):
     content: str = Field(default="", max_length=30000)
     tags: list[str] = Field(default_factory=list, max_length=20)
     origin: str = Field(default="user", pattern="^(user|ai)$")
+    source_report_id: int | None = Field(default=None, ge=1)
+    source_book_ids: list[int] = Field(default_factory=list, max_length=50)
+    source_refs: list[str | dict] = Field(default_factory=list, max_length=100)
+    source_scope: dict = Field(default_factory=dict)
 
 
 class KnowledgeNoteUpdateReq(BaseModel):

@@ -43,6 +43,7 @@ class Settings:
         self.chroma_dir: Path = self.data_dir / "chroma"
         self.presentations_dir: Path = self.data_dir / "presentations"
         self.structured_dir: Path = self.data_dir / "structured"
+        self.writing_dir: Path = self.data_dir / "writing"
 
         # LLM：仅云端 DeepSeek（本地 AI 已取消）
         self.deepseek_base_url: str = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
@@ -65,13 +66,14 @@ class Settings:
         self.pdf_text_backend: str = _env("PDF_TEXT_BACKEND", "pdftext").lower()
         self.layout_backend: str = _env("LAYOUT_BACKEND", "font").lower()
         self.ocr_page_threshold: int = int(_env("OCR_PAGE_THRESHOLD", "30"))
+        self.ocr_page_timeout_seconds: int = max(15, int(_env("OCR_PAGE_TIMEOUT_SECONDS", "180")))
 
         self._ensure_dirs()
 
     def _ensure_dirs(self) -> None:
         """确保数据目录存在（仅在本项目目录内创建，不触碰系统文件）。"""
         for d in (self.data_dir, self.uploads_dir, self.chroma_dir,
-                  self.presentations_dir, self.structured_dir):
+                  self.presentations_dir, self.structured_dir, self.writing_dir):
             d.mkdir(parents=True, exist_ok=True)
 
 

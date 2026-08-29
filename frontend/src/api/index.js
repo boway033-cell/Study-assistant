@@ -1,6 +1,7 @@
 import axios from 'axios'
 
 const http = axios.create({ baseURL: '/api', timeout: 60000 })
+const repeatedParams = { indexes: null }
 
 // 统一错误提示
 http.interceptors.response.use(
@@ -18,8 +19,21 @@ http.interceptors.response.use(
 
 export default http
 
+export const subscribeTask = (taskId, onUpdate) => new Promise((resolve, reject) => {
+  const source = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/events`)
+  source.onmessage = event => {
+    try {
+      const task = JSON.parse(event.data)
+      onUpdate?.(task)
+      if (['done','failed','cancelled'].includes(task.status)) { source.close(); resolve(task) }
+    } catch (error) { source.close(); reject(error) }
+  }
+  source.addEventListener('timeout', event => { source.close(); reject(new Error(JSON.parse(event.data).detail)) })
+  source.onerror = () => { source.close(); reject(new Error('任务状态连接中断，可在全局任务中心继续查看')) }
+})
+
 // ===== 书籍 =====
-export const listBooks = (params) => http.get('/books', { params })
+export const listBooks = (params) => http.get('/books', { params, paramsSerializer: repeatedParams })
 export const getBook = (id) => http.get(`/books/${id}`)
 export const uploadBook = (file) => {
   const form = new FormData()
@@ -49,6 +63,7 @@ export const getTocReview = (bookId) => http.get(`/books/${bookId}/toc-review`)
 export const autoRepairToc = (bookId, apply = false) => http.post(`/books/${bookId}/toc-auto-repair`, { apply })
 export const replaceBookToc = (bookId, items, note) => http.put(`/books/${bookId}/toc`, { items, note })
 export const listTocRevisions = (bookId) => http.get(`/books/${bookId}/toc-revisions`)
+export const restoreTocRevision = (bookId, revisionId) => http.post(`/books/${bookId}/toc-revisions/${revisionId}/restore`)
 export const getArchiveProfile = (bookId) => http.get(`/books/${bookId}/archive`)
 export const updateArchiveProfile = (bookId, data) => http.patch(`/books/${bookId}/archive`, data)
 export const getSourceMap = (bookId) => http.get(`/books/${bookId}/source-map`)
@@ -86,6 +101,7 @@ export const chatStream = async (body, onEvent) => {
   }
 }
 export const chatHistory = (params) => http.get('/chat/history', { params })
+export const getChat = (id) => http.get(`/chat/${id}`)
 export const deleteChat = (id) => http.delete(`/chat/${id}`)
 
 // ===== 题目 =====
@@ -124,7 +140,6 @@ export const getActivity = (days) => http.get('/stats/activity', { params: { day
 export const getWeakness = () => http.get('/stats/weakness')
 
 // ===== 知识树 =====
-const repeatedParams = { indexes: null }
 export const getKnowledgeTree = (bookIds = []) => http.get('/knowledge/tree', {
   params: bookIds.length ? { book_ids: bookIds } : {}, paramsSerializer: repeatedParams,
 })
@@ -151,6 +166,7 @@ export const updateKnowledgeNote = (id, data) => http.patch(`/knowledge/notes/${
 export const deleteKnowledgeNote = (id) => http.delete(`/knowledge/notes/${id}`)
 export const addKnowledgeNoteToTree = (id, parentId = null) => http.post(`/knowledge/notes/${id}/add-to-tree`, null, { params: { parent_id: parentId } })
 export const createEvidenceCard = (data) => http.post('/knowledge/evidence-cards', data)
+export const getEvidenceCard = (id) => http.get(`/knowledge/evidence-cards/${id}`)
 export const updateEvidenceCard = (id, data) => http.patch(`/knowledge/evidence-cards/${id}`, data)
 export const deleteEvidenceCard = (id) => http.delete(`/knowledge/evidence-cards/${id}`)
 
@@ -168,7 +184,8 @@ export const aiExplain = (data) => http.post('/ai/explain', data)
 export const aiSummarize = (data) => http.post('/ai/summarize', data)
 export const aiVision = (data) => http.post('/ai/vision', data)
 export const studyOverview = (data) => http.post('/study/overview', data)
-export const studyReports = () => http.get('/study/reports')
+export const studyReports = (page = 1, pageSize = 20) => http.get('/study/reports', { params: { page, page_size: pageSize } })
+export const getStudyReport = (id) => http.get(`/study/reports/${id}`)
 export const deleteStudyReport = (id) => http.delete(`/study/reports/${id}`)
 export const studyTrainStart = (data) => http.post('/study/train/start', data)
 export const studyTrainAsk = (data) => http.post('/study/train/ask', data)
@@ -182,16 +199,31 @@ export const listCompatibleProviders = () => http.get('/settings/providers')
 export const saveCompatibleProvider = (data) => http.post('/settings/providers', data)
 export const deleteCompatibleProvider = (id) => http.delete(`/settings/providers/${id}`)
 export const probeCompatibleProvider = (id) => http.post(`/settings/providers/${id}/probe`)
+export const getStorageUsage = () => http.get('/settings/storage')
+export const cleanupStorage = (categories) => http.post('/settings/storage/cleanup', { categories })
 
 // ===== 文献汇报与合法全文获取 =====
 export const generatePresentation = (data) => http.post('/presentations/generate', data)
 export const createPresentationOutline = (data) => http.post('/presentations/outline', data)
 export const updatePresentationOutline = (id, slides) => http.patch(`/presentations/${id}/outline`, { slides })
 export const renderPresentation = (id, data) => http.post(`/presentations/${id}/render`, data)
-export const listPresentations = (bookId) => http.get('/presentations', { params: bookId ? { book_id: bookId } : {} })
+export const listPresentations = (bookId, params = {}) => http.get('/presentations', { params: { ...params, ...(bookId ? { book_id: bookId } : {}) } })
 export const getPresentation = (id) => http.get(`/presentations/${id}`)
 export const presentationDownloadUrl = (id) => `/api/presentations/${id}/download`
 export const presentationPreviewUrl = (id, slideNo) => `/api/presentations/${id}/preview/${slideNo}`
+// ===== 写作实验室 =====
+export const listWritingProfiles = () => http.get('/writing/profiles')
+export const getWritingProfile = (id) => http.get(`/writing/profiles/${id}`)
+export const createWritingProfile = (data) => http.post('/writing/profiles', data)
+export const refineWritingProfile = (id, data) => http.post(`/writing/profiles/${id}/refine`, data)
+export const imitateWriting = (id, data) => http.post(`/writing/profiles/${id}/imitate`, data, { timeout: 360000 })
+export const cleanAiToneText = (data) => http.post('/writing/clean-text', data, { timeout: 360000 })
+export const cleanAiToneDocx = (file, profileId) => { const form=new FormData(); form.append('file',file); if(profileId) form.append('profile_id',profileId); return http.post('/writing/clean-docx',form,{timeout:600000}) }
+export const listWritingOutputs = (params = {}) => http.get('/writing/outputs', { params })
+export const getWritingOutput = (id) => http.get(`/writing/outputs/${id}`)
+export const updateWritingOutput = (id, data) => http.patch(`/writing/outputs/${id}`, data)
+export const reviewWritingOutput = (id, acceptedIndexes) => http.post(`/writing/outputs/${id}/review`, { accepted_indexes: acceptedIndexes })
+export const writingOutputDownloadUrl = (id) => `/api/writing/outputs/${id}/download`
 export const getLiteratureConfig = () => http.get('/literature/config')
 export const updateLiteratureConfig = (data) => http.put('/literature/config', data)
 export const resolveLiterature = (data) => http.post('/literature/resolve', data, { timeout: 90000 })

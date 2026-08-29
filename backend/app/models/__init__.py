@@ -259,6 +259,8 @@ class EvidenceCard(Base):
     evidence_text: Mapped[str] = mapped_column(Text, nullable=False)
     claim_text: Mapped[str | None] = mapped_column(Text)
     source_ref_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    source_report_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    source_scope_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     tags_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     origin: Mapped[str] = mapped_column(String(20), default="user", nullable=False)
     verification_status: Mapped[str] = mapped_column(String(24), default="needs_review", nullable=False)
@@ -278,6 +280,9 @@ class KnowledgeNote(Base):
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
     source_annotation_id: Mapped[int | None] = mapped_column(ForeignKey("annotations.id", ondelete="SET NULL"), unique=True)
     source_legacy_node_id: Mapped[int | None] = mapped_column(Integer, unique=True)
+    source_report_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    source_scope_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    source_refs_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     tags_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     origin: Mapped[str] = mapped_column(String(20), default="user", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
@@ -474,3 +479,58 @@ class LiteratureAccessAttempt(Base):
     error_msg: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class WritingDnaProfile(Base):
+    """可持续完善的作者/账号写作 DNA。原文仍由 Book 管理，此表只保存范围与版本。"""
+
+    __tablename__ = "writing_dna_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    target_author: Mapped[str | None] = mapped_column(String(120))
+    book_ids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    corpus_manifest_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rights_acknowledged: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    feedback: Mapped[str | None] = mapped_column(Text)
+    error_msg: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class WritingDnaRevision(Base):
+    """每次蒸馏保留不可变版本，便于比较、完善和回退。"""
+
+    __tablename__ = "writing_dna_revisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("writing_dna_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    language_dna: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    structure_patterns: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    cognitive_framework: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    visual_style_guide: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    writing_dna: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    quality_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    feedback: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class WritingOutput(Base):
+    """DNA 仿写或白名单去 AI 味输出。"""
+
+    __tablename__ = "writing_outputs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int | None] = mapped_column(ForeignKey("writing_dna_profiles.id", ondelete="SET NULL"), index=True)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)  # imitation / ai_tone
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    input_type: Mapped[str] = mapped_column(String(16), nullable=False, default="text")
+    source_text: Mapped[str | None] = mapped_column(Text)
+    output_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_file_path: Mapped[str | None] = mapped_column(String(500))
+    output_file_path: Mapped[str | None] = mapped_column(String(500))
+    audit_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)

@@ -2,7 +2,7 @@
   <div class="workbench study-page">
     <StudyCommandBar compact class="workbench-commandbar" title="文献汇报" description="限定证据范围，人工审阅提纲，完成来源审计后再生成可编辑文件。">
       <div class="workbench-summary" aria-label="汇报任务概况"><span><b>{{ decks.length }}</b>全部任务</span><span><b>{{ outlineReadyCount }}</b>待审提纲</span><span><b>{{ finishedDeckCount }}</b>可下载</span></div>
-      <template #actions><el-button plain @click="recordsDrawer=true">输出记录</el-button></template>
+      <template #actions><el-button plain @click="writingLabOpen=true">写作实验室</el-button><el-button plain @click="recordsDrawer=true">输出记录</el-button></template>
     </StudyCommandBar>
 
     <section class="primary-workflow">
@@ -15,9 +15,12 @@
         <div class="deck-workspace">
           <el-card shadow="never" class="scope-panel">
             <template #header><div class="panel-heading"><div><b>资料与证据范围</b><small>所有输出都受这里的选择约束</small></div></div></template>
-            <el-select v-model="form.book_id" filterable placeholder="选择已解析文献" style="width:100%" @change="loadBook">
+            <el-select v-model="form.book_id" filterable remote :remote-method="searchBookOptions" :loading="booksLoading" placeholder="搜索已解析文献" style="width:100%" @change="loadBook">
               <el-option v-for="b in readyBooks" :key="b.id" :label="b.title" :value="b.id" />
             </el-select>
+            <div v-if="form.source_book_ids.length > 1" class="transferred-scope">
+              <b>研究报告来源 · {{ form.source_book_ids.length }} 本</b><span>已保留多书范围；下方目录只编辑主文献章节。</span>
+            </div>
             <div class="scope-secondary-actions"><el-button plain @click="accessDrawer=true">获取或导入全文</el-button><el-button plain :disabled="!form.book_id" @click="rightsDrawer=true">来源与权利</el-button></div>
             <div class="section-label">章节范围</div>
             <el-tree ref="chapterTree" :data="chapters" node-key="id" show-checkbox @check="onChapterCheck"
@@ -89,7 +92,7 @@
     <el-drawer v-model="rightsDrawer" title="来源与权利" size="min(980px,96vw)" append-to-body>
         <el-card shadow="never">
           <template #header><div class="card-head"><div><b>正文、SI 与来源权利</b><small>权利状态按资源记录，不自动推断法律许可</small></div><el-button type="primary" :disabled="!form.book_id" @click="newResource">添加资源</el-button></div></template>
-          <el-select v-model="form.book_id" filterable placeholder="选择主文献" style="width:min(520px,100%)" @change="loadBook"><el-option v-for="b in readyBooks" :key="b.id" :label="b.title" :value="b.id" /></el-select>
+          <el-select v-model="form.book_id" filterable remote :remote-method="searchBookOptions" :loading="booksLoading" placeholder="选择主文献" style="width:min(520px,100%)" @change="loadBook"><el-option v-for="b in readyBooks" :key="b.id" :label="b.title" :value="b.id" /></el-select>
           <div v-if="form.book_id" class="rights-summary"><span><b>{{ resources.length }}</b>登记资源</span><span><b>{{ reusableResourceCount }}</b>确认可复用</span><span><b>{{ unresolvedResourceCount }}</b>待核对权利</span></div>
           <el-table :data="resources" style="margin-top:14px" empty-text="尚未登记来源资源">
             <el-table-column prop="title" label="资源" min-width="240" /><el-table-column prop="role" label="类型" width="120" />
@@ -127,8 +130,9 @@
       </div>
       <template #footer><el-button @click="outlineVisible=false">稍后继续</el-button><el-button :loading="savingOutline" @click="saveOutline">保存并重新审计</el-button><el-button type="primary" :loading="rendering" @click="submitRender">确认提纲并生成 PPTX</el-button></template>
     </el-dialog>
+    <WritingLabDrawer v-model="writingLabOpen" />
 
-    <el-dialog v-model="previewVisible" title="真实 PowerPoint 渲染预览" width="min(1200px,96vw)">
+    <el-dialog v-model="previewVisible" title="PowerPoint 视觉验收" width="min(1200px,96vw)">
       <div v-if="previewDeck" class="preview-toolbar"><div><b>{{ previewDeck.preview_count }} 页已渲染</b><span>逐页检查标题换行、内容溢出、图像裁切与视觉一致性</span></div><el-tag :type="previewDeck.qa?.visual?.ok ? 'success' : 'warning'">{{ previewDeck.qa?.visual?.ok ? '视觉检查通过' : '存在待复核项' }}</el-tag></div>
       <div class="preview-grid"><figure v-for="i in previewDeck?.preview_count || 0" :key="i"><img :src="presentationPreviewUrl(previewDeck.id,i)" :alt="`第 ${i} 页渲染预览`" loading="lazy" /><figcaption>第 {{ i }} 页</figcaption></figure></div>
     </el-dialog>
@@ -149,6 +153,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StudyCommandBar from '../components/StudyCommandBar.vue'
+import WritingLabDrawer from '../components/WritingLabDrawer.vue'
 import { listBooks, getBook, listPresentations, presentationDownloadUrl,
   createPresentationOutline, updatePresentationOutline, renderPresentation, getPresentation, presentationPreviewUrl,
   getLiteratureConfig, updateLiteratureConfig, resolveLiterature, importOpenAccess, openLibraryHandoff, openBrowserHandoff,
@@ -159,11 +164,18 @@ const route = useRoute()
 const accessDrawer = ref(route.query.tab === 'access')
 const rightsDrawer = ref(route.query.tab === 'rights')
 const recordsDrawer = ref(route.query.tab === 'records')
+const writingLabOpen = ref(route.query.tab === 'writing')
 const books = ref([]); const chapters = ref([]); const chapterTree = ref(); const decks = ref([]); const checkedChapterCount = ref(0)
+const booksLoading = ref(false)
 const generating = ref(false); const resolving = ref(false); const candidates = ref([]); const accessSearched = ref(false); const importingUrl = ref(''); const savingConfig = ref(false)
 const submittedTaskId = ref('')
-const form = ref({ book_id: Number(route.query.bookId) || null, selected_text: sessionStorage.getItem('deckSelectedText') || '', resource_ids: [], audience: '课题组', purpose: '文献精读汇报', duration_minutes: 15, slide_count: 12, max_source_chars: 52000, use_scope: 'personal', include_figures: true, rights_acknowledged: false })
-sessionStorage.removeItem('deckSelectedText')
+const parseStoredList = (key) => { try { const value=JSON.parse(sessionStorage.getItem(key)||'[]'); return Array.isArray(value)?value.map(Number).filter(Number.isInteger):[] } catch { return [] } }
+const transferredBookIds = parseStoredList('deckSourceBookIds')
+const transferredChapterIds = ref(parseStoredList('deckSourceChapterIds'))
+const transferredReportId = Number(sessionStorage.getItem('deckSourceReportId')) || null
+const primaryBookId = Number(route.query.bookId) || transferredBookIds[0] || null
+const form = ref({ book_id: primaryBookId, source_book_ids: transferredBookIds.length ? transferredBookIds : (primaryBookId ? [primaryBookId] : []), source_report_id: transferredReportId, selected_text: sessionStorage.getItem('deckSelectedText') || '', resource_ids: [], audience: '课题组', purpose: '文献精读汇报', duration_minutes: 15, slide_count: 12, max_source_chars: 52000, use_scope: 'personal', include_figures: true, rights_acknowledged: false })
+for (const key of ['deckSelectedText','deckSourceBookIds','deckSourceReportId','deckSourceChapterIds']) sessionStorage.removeItem(key)
 const access = ref({ query: '', include_si: null }); const config = ref({ library_resource_url: '', unpaywall_email: '', providers: [] })
 const resources = ref([]); const outlineVisible = ref(false); const previewVisible = ref(false); const resourceVisible = ref(false)
 const editingDeck = ref(null); const previewDeck = ref(null); const outlineDraft = ref([])
@@ -171,6 +183,7 @@ const activeSlideIndex = ref(0)
 const savingOutline = ref(false); const rendering = ref(false); const savingResource = ref(false)
 const resourceForm = ref({ id: null, role: 'supplementary', resource_book_id: null, title: '', source_url: '', license_expression: '', rights_statement_uri: '', rights_status: 'not_evaluated', attribution: '', allow_reuse: false })
 const readyBooks = computed(() => books.value.filter(x => x.status === 'ready'))
+const searchBookOptions = async (query='') => { booksLoading.value=true; try{const r=await listBooks({status:'ready',q:query.trim()||undefined,page_size:30}); const keep=books.value.filter(b=>b.id===form.value.book_id||form.value.source_book_ids.includes(b.id)); books.value=[...new Map([...keep,...r.items].map(b=>[b.id,b])).values()]}finally{booksLoading.value=false} }
 const outlineReadyCount = computed(() => decks.value.filter(x => x.status === 'outline_ready').length)
 const finishedDeckCount = computed(() => decks.value.filter(x => x.download_ready).length)
 const reusableResourceCount = computed(() => resources.value.filter(x => x.allow_reuse || ['open_license','permission_granted','public_domain'].includes(x.rights_status)).length)
@@ -181,6 +194,7 @@ const sourceOptions = computed(() => (editingDeck.value?.selection?.sources || [
 const scopeSummary = computed(() => {
   if (!form.value.book_id) return '尚未选择文献'
   const segments = []
+  if (form.value.source_book_ids.length > 1) segments.push(`${form.value.source_book_ids.length} 本来源`)
   if (checkedChapterCount.value) segments.push(`${checkedChapterCount.value} 个章节`)
   if (form.value.selected_text.trim()) segments.push(`${form.value.selected_text.trim().length} 字选段`)
   return segments.length ? segments.join(' + ') : '整篇文献（优先使用前部证据）'
@@ -202,11 +216,11 @@ const statusLabel = (x) => ({pending:'排队中',outlining:'生成提纲',outlin
 const percent = (value) => value == null ? '—' : `${Math.round(value * 100)}%`
 const loadResources = async () => { resources.value = form.value.book_id ? await listLiteratureResources(form.value.book_id) : [] }
 const loadBook = async () => { if (!form.value.book_id) return; try { const [b] = await Promise.all([getBook(form.value.book_id), loadResources()]); chapters.value = b.chapters || []; checkedChapterCount.value = 0; form.value.resource_ids = form.value.resource_ids.filter(id => resources.value.some(r => r.id === id)); await loadDecks() } catch(e) { ElMessage.error(`无法加载文献范围：${e.message}。请返回资料库确认解析已经完成。`) } }
-const loadDecks = async () => { decks.value = await listPresentations(form.value.book_id) }
+const loadDecks = async () => { const response = await listPresentations(form.value.book_id); decks.value = response.items || [] }
 const generate = async () => {
   if (!form.value.book_id) return ElMessage.warning('请先选择主文献，再限定章节或选段')
   generating.value = true
-  try { const r = await createPresentationOutline({...form.value, chapter_ids: chapterTree.value?.getCheckedKeys() || [], chunk_ids: []}); submittedTaskId.value=r.task_id; notifyTaskSubmitted(); ElMessage.success(`提纲已进入任务中心；当前内容覆盖约 ${percent(r.coverage?.content_coverage)}`)
+  try { const chapterIds=[...new Set([...(chapterTree.value?.getCheckedKeys() || []),...transferredChapterIds.value])]; const r = await createPresentationOutline({...form.value, source_book_ids:[...new Set([form.value.book_id,...form.value.source_book_ids])], chapter_ids:chapterIds, chunk_ids: []}); submittedTaskId.value=r.task_id; notifyTaskSubmitted(); ElMessage.success(`提纲已进入任务中心；当前内容覆盖约 ${percent(r.coverage?.content_coverage)}`)
     await loadDecks()
   } catch(e){ElMessage.error(`提纲没有生成：${e.message}。当前选择会保留，可调整范围或模型设置后重试。`)} finally { generating.value=false }
 }
@@ -217,7 +231,7 @@ const addSlide = () => { const source = sourceOptions.value[0]?.value; outlineDr
 const removeActiveSlide = () => { if(activeSlideIndex.value===0 || outlineDraft.value.length<=2) return; outlineDraft.value.splice(activeSlideIndex.value,1); activeSlideIndex.value=Math.min(activeSlideIndex.value,outlineDraft.value.length-1) }
 const serializeOutline = () => outlineDraft.value.map((slide,index) => ({ title:slide.title, kind:index===0?'cover':slide.kind || 'content', claim:slide.claim || '', bullets:(slide.bulletsText || '').split('\n').map(x=>x.trim()).filter(Boolean).slice(0,4), source_ids:index===0?[]:slide.source_ids || [] }))
 const saveOutline = async () => { savingOutline.value=true; try { editingDeck.value=await updatePresentationOutline(editingDeck.value.id,serializeOutline()); outlineDraft.value=normalizeOutline(editingDeck.value.outline); ElMessage.success('提纲与来源审计已更新') } catch(e){ElMessage.error(e.message); throw e} finally{savingOutline.value=false} }
-const submitRender = async () => { try { await saveOutline(); let confirmUnsupported=false; const blocked=editingDeck.value?.qa?.claim_source?.blocking_slides || []; if(blocked.length){ await ElMessageBox.confirm(`第 ${blocked.join('、')} 页存在无效来源或数字不一致。确认保留并继续渲染吗？`,'主张—来源审计',{type:'warning',confirmButtonText:'确认并继续'}); confirmUnsupported=true } rendering.value=true; const r=await renderPresentation(editingDeck.value.id,{use_scope:form.value.use_scope,include_figures:form.value.include_figures,rights_acknowledged:form.value.rights_acknowledged,confirm_unsupported_claims:confirmUnsupported}); submittedTaskId.value=r.task_id; notifyTaskSubmitted(); outlineVisible.value=false; ElMessage.success('已提交真实 PowerPoint 渲染与视觉审计'); await loadDecks() } catch(e){ if(e!=='cancel') ElMessage.error(e.message || '已取消') } finally{rendering.value=false} }
+const submitRender = async () => { try { await saveOutline(); let confirmUnsupported=false; const blocked=editingDeck.value?.qa?.claim_source?.blocking_slides || []; if(blocked.length){ await ElMessageBox.confirm(`第 ${blocked.join('、')} 页存在无效来源或数字不一致。确认保留并继续渲染吗？`,'主张—来源审计',{type:'warning',confirmButtonText:'确认并继续'}); confirmUnsupported=true } rendering.value=true; const r=await renderPresentation(editingDeck.value.id,{use_scope:form.value.use_scope,include_figures:form.value.include_figures,rights_acknowledged:form.value.rights_acknowledged,confirm_unsupported_claims:confirmUnsupported}); submittedTaskId.value=r.task_id; notifyTaskSubmitted(); outlineVisible.value=false; ElMessage.success('已提交 PPTX 生成；若 PowerPoint 不可自动化，将降级为结构验收'); await loadDecks() } catch(e){ if(e!=='cancel') ElMessage.error(e.message || '已取消') } finally{rendering.value=false} }
 const auditForSlide = (slideNo) => editingDeck.value?.qa?.claim_source?.items?.find(x => x.slide === slideNo)
 const openPreview = (row) => { previewDeck.value=row; previewVisible.value=true }
 const newResource = () => { resourceForm.value={id:null,role:'supplementary',resource_book_id:null,title:'',source_url:'',license_expression:'',rights_statement_uri:'',rights_status:'not_evaluated',attribution:'',allow_reuse:false}; resourceVisible.value=true }
@@ -228,10 +242,11 @@ const importCandidate = async (c) => { importingUrl.value=c.url; try{const r=awa
 const browserCandidate = async (c) => { try{const r=await openBrowserHandoff({...access.value,url:c.url}); window.open(r.url,'_blank','noopener'); ElMessage.info(`${r.instruction}；若没有新页面，请允许浏览器弹窗后重试。`)}catch(e){ElMessage.error(`无法打开浏览器接续路径：${e.message}`)} }
 const handoff = async () => { if(access.value.include_si===null) return ElMessage.warning('请选择是否需要补充材料'); try{const r=await openLibraryHandoff(access.value); window.open(r.url,'_blank','noopener'); ElMessage.info(`${r.instruction}；若没有新页面，请允许浏览器弹窗后重试。`)}catch(e){ElMessage.error(`馆藏入口不可用：${e.message}。请在右侧检查 HTTPS 入口设置。`)} }
 const saveConfig = async () => { savingConfig.value=true; try{await updateLiteratureConfig(config.value); ElMessage.success('馆藏入口与开放服务设置已保存')}catch(e){ElMessage.error(`入口没有保存：${e.message}`)}finally{savingConfig.value=false} }
-onMounted(async()=>{ try{const [b,c]=await Promise.all([listBooks({page_size:100}),getLiteratureConfig()]); books.value=b.items; config.value=c; if(form.value.book_id) await loadBook(); else await loadDecks()}catch(e){ElMessage.error(e.message)} })
+onMounted(async()=>{ try{const [,c]=await Promise.all([searchBookOptions(''),getLiteratureConfig()]); config.value=c; if(form.value.book_id) await loadBook(); else await loadDecks()}catch(e){ElMessage.error(e.message)} })
 </script>
 
 <style scoped>
+.transferred-scope{display:flex;flex-direction:column;gap:3px;margin-top:8px;padding:8px 10px;border-left:2px solid var(--el-color-primary);background:var(--study-surface-muted);font-size:12px}.transferred-scope span{color:var(--study-text-secondary)}
 .workbench{max-width:1500px}.workspace-tabs{margin-top:4px}.workspace-tabs :deep(.el-tabs__header){margin-bottom:8px}.workspace-tabs :deep(.el-tabs__item){height:40px;color:var(--study-text-secondary);font-weight:650}.workspace-tabs :deep(.el-tabs__item:hover),.workspace-tabs :deep(.el-tabs__item.is-active){color:var(--el-color-primary)}.workspace-tabs :deep(.el-tabs__nav-wrap::after){height:1px;background:var(--el-border-color)}.deck-grid,.access-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(360px,.72fr);gap:14px}.section-label{margin:18px 0 8px;font-size:var(--study-font-size-xs);font-weight:700;color:#756958;letter-spacing:.5px}.chapter-tree{max-height:280px;overflow:auto;padding:8px;border-radius:8px;background:var(--el-fill-color-extra-light)}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}.generate{width:100%;margin-top:24px}.history{margin-top:14px}.card-head,.candidate,.provider-list div{display:flex;align-items:center;justify-content:space-between;gap:12px}.candidate-list{margin-top:16px}.candidate{padding:12px 0;border-bottom:1px solid var(--el-border-color-lighter)}.candidate div{min-width:0}.candidate small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--el-text-color-secondary);max-width:680px}.candidate .candidate-note{margin-top:4px;color:#8b5a2b;white-space:normal}.boundary{margin-top:18px}.provider-list{margin-top:22px;padding-top:14px;border-top:1px solid var(--el-border-color-lighter)}.provider-list div{padding:7px 0;color:var(--el-text-color-regular)}@media(max-width:900px){.deck-grid,.access-grid{grid-template-columns:1fr}.two-col{grid-template-columns:1fr}}
 .deck-steps{display:grid;grid-template-columns:minmax(0,1fr) 250px;align-items:center;gap:20px;margin-bottom:14px;padding:16px 18px;border:1px solid rgba(139,90,43,.15);border-radius:14px;background:#f7f2e9}.scope-summary{display:flex;flex-direction:column;padding-left:18px;border-left:1px solid #ded3c3}.scope-summary b{font-size:11px;color:#8b5a2b}.scope-summary span{margin-top:5px;font-size:12px;color:#6d6559}@media(max-width:760px){.deck-steps{grid-template-columns:1fr}.scope-summary{padding:10px 0 0;border-left:0;border-top:1px solid #ded3c3}}
 .resource-checks{display:flex;flex-direction:column;gap:5px}.card-head small{display:block;margin-top:4px;color:var(--el-text-color-secondary);font-weight:400}.outline-toolbar{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;margin-bottom:12px;border:1px solid #e5e7eb;border-radius:10px;background:#f7f2e9;box-shadow:0 1px 2px rgba(15,23,42,.06)}.outline-toolbar div{display:flex;flex-direction:column}.outline-toolbar small{margin-top:4px;color:#7b7165}.outline-list{display:grid;gap:10px;max-height:62vh;overflow:auto;padding:2px 4px 10px}.outline-slide{border:1px solid #e5e7eb;box-shadow:0 1px 2px rgba(15,23,42,.06)}.outline-slide :deep(.el-card__body){display:grid;gap:9px}.audit-issues{padding:8px 10px;border-radius:7px;color:#9a5d28;background:#fff5e7;font-size:12px}.preview-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.preview-grid img{width:100%;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 1px 2px rgba(15,23,42,.06)}@media(max-width:760px){.preview-grid{grid-template-columns:1fr}.outline-toolbar{align-items:flex-start;gap:8px;flex-direction:column}}
