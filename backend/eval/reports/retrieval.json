@@ -1,0 +1,176 @@
+{
+  "dataset": "retrieval-v1",
+  "metrics": {
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "mrr": 1.0,
+    "citation_correct_rate": 1.0,
+    "no_answer_rejection_rate": 1.0,
+    "case_count": 10,
+    "answerable_count": 8,
+    "unanswerable_count": 2
+  },
+  "cases": [
+    {
+      "id": "q-lagrange",
+      "query": "拉格朗日中值定理需要什么条件",
+      "answerable": true,
+      "retrieved_ids": [
+        "math-lagrange",
+        "stats-clt"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "q-taylor",
+      "query": "如何用各阶导数做多项式近似",
+      "answerable": true,
+      "retrieved_ids": [
+        "math-taylor",
+        "math-lagrange"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "q-clt",
+      "query": "随机变量之和为什么趋近正态分布",
+      "answerable": true,
+      "retrieved_ids": [
+        "stats-clt",
+        "math-lagrange"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "q-bayes",
+      "query": "获得新证据后怎样更新先验判断",
+      "answerable": true,
+      "retrieved_ids": [
+        "stats-bayes"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "q-binary",
+      "query": "有序表每次把搜索区间缩小一半的算法",
+      "answerable": true,
+      "retrieved_ids": [
+        "cs-binary",
+        "math-lagrange",
+        "cs-bfs"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "q-bfs",
+      "query": "无权图最短路径使用队列逐层访问",
+      "answerable": true,
+      "retrieved_ids": [
+        "cs-bfs",
+        "math-taylor"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "q-admin",
+      "query": "行政组织的含义是什么",
+      "answerable": true,
+      "retrieved_ids": [
+        "admin-org",
+        "admin-control"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "q-validity",
+      "query": "因果可信度和结论推广能力分别是什么效度",
+      "answerable": true,
+      "retrieved_ids": [
+        "research-validity"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "q-none-1",
+      "query": "量子色动力学中的渐近自由如何推导",
+      "answerable": false,
+      "retrieved_ids": [],
+      "refused": true
+    },
+    {
+      "id": "q-none-2",
+      "query": "火星土壤种植马铃薯的最佳肥料配方",
+      "answerable": false,
+      "retrieved_ids": [],
+      "refused": true
+    }
+  ],
+  "thresholds": {
+    "passed": true,
+    "checks": {
+      "recall_at_1": {
+        "value": 1.0,
+        "minimum": 0.75,
+        "passed": true
+      },
+      "recall_at_3": {
+        "value": 1.0,
+        "minimum": 0.9,
+        "passed": true
+      },
+      "recall_at_5": {
+        "value": 1.0,
+        "minimum": 0.95,
+        "passed": true
+      },
+      "mrr": {
+        "value": 1.0,
+        "minimum": 0.8,
+        "passed": true
+      },
+      "citation_correct_rate": {
+        "value": 1.0,
+        "minimum": 0.75,
+        "passed": true
+      },
+      "no_answer_rejection_rate": {
+        "value": 1.0,
+        "minimum": 1.0,
+        "passed": true
+      }
+    }
+  }
+}

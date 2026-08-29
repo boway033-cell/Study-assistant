@@ -1,0 +1,36 @@
+{
+  "version": "retrieval-v1",
+  "description": "固定中文学习资料检索集；稳定 ID 与真实数据库主键无关。",
+  "thresholds": {
+    "recall_at_1": 0.75,
+    "recall_at_3": 0.9,
+    "recall_at_5": 0.95,
+    "mrr": 0.8,
+    "citation_correct_rate": 0.75,
+    "no_answer_rejection_rate": 1.0
+  },
+  "corpus": [
+    {"id":"math-lagrange","book":"高等数学","chapter":"微分中值定理","page":88,"text":"拉格朗日中值定理：函数在闭区间连续、开区间可导，则存在一点使函数增量等于该点导数乘以自变量增量。"},
+    {"id":"math-taylor","book":"高等数学","chapter":"泰勒公式","page":102,"text":"泰勒公式使用函数在一点的各阶导数构造多项式，并以余项描述近似误差。"},
+    {"id":"stats-clt","book":"概率论","chapter":"大数定律与中心极限定理","page":166,"text":"中心极限定理说明大量独立同分布随机变量之和经标准化后依分布收敛到正态分布。"},
+    {"id":"stats-bayes","book":"概率论","chapter":"贝叶斯公式","page":42,"text":"贝叶斯公式根据先验概率和似然计算后验概率，可用于在获得新证据后更新判断。"},
+    {"id":"cs-binary","book":"数据结构","chapter":"查找","page":211,"text":"二分查找要求顺序表已经按关键字有序，每次比较后将搜索区间缩小一半，时间复杂度为 O(log n)。"},
+    {"id":"cs-bfs","book":"数据结构","chapter":"图","page":278,"text":"广度优先搜索使用队列逐层访问图的顶点，在无权图上可以得到最短路径。"},
+    {"id":"admin-org","book":"行政管理学","chapter":"行政组织","page":124,"text":"行政组织是依法设置、承担公共行政职能并依照层级和分工运行的组织体系。"},
+    {"id":"admin-control","book":"行政管理学","chapter":"行政监督","page":301,"text":"行政监督包括内部监督与外部监督，其目标是约束行政权力并提升公共责任。"},
+    {"id":"research-validity","book":"研究方法","chapter":"效度","page":73,"text":"内部效度关注因果结论是否可信，外部效度关注研究结论能否推广到其他人群与情境。"},
+    {"id":"research-sampling","book":"研究方法","chapter":"抽样","page":51,"text":"分层抽样先按关键特征划分互不重叠的层，再从各层独立抽取样本以提升代表性。"}
+  ],
+  "cases": [
+    {"id":"q-lagrange","query":"拉格朗日中值定理需要什么条件","relevant_ids":["math-lagrange"],"answerable":true},
+    {"id":"q-taylor","query":"如何用各阶导数做多项式近似","relevant_ids":["math-taylor"],"answerable":true},
+    {"id":"q-clt","query":"随机变量之和为什么趋近正态分布","relevant_ids":["stats-clt"],"answerable":true},
+    {"id":"q-bayes","query":"获得新证据后怎样更新先验判断","relevant_ids":["stats-bayes"],"answerable":true},
+    {"id":"q-binary","query":"有序表每次把搜索区间缩小一半的算法","relevant_ids":["cs-binary"],"answerable":true},
+    {"id":"q-bfs","query":"无权图最短路径使用队列逐层访问","relevant_ids":["cs-bfs"],"answerable":true},
+    {"id":"q-admin","query":"行政组织的含义是什么","relevant_ids":["admin-org"],"answerable":true},
+    {"id":"q-validity","query":"因果可信度和结论推广能力分别是什么效度","relevant_ids":["research-validity"],"answerable":true},
+    {"id":"q-none-1","query":"量子色动力学中的渐近自由如何推导","relevant_ids":[],"answerable":false},
+    {"id":"q-none-2","query":"火星土壤种植马铃薯的最佳肥料配方","relevant_ids":[],"answerable":false}
+  ]
+}
