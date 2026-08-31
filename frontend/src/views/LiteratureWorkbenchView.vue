@@ -2,7 +2,7 @@
   <div class="workbench study-page">
     <StudyCommandBar compact class="workbench-commandbar" title="文献汇报" description="限定证据范围，人工审阅提纲，完成来源审计后再生成可编辑文件。">
       <div class="workbench-summary" aria-label="汇报任务概况"><span><b>{{ decks.length }}</b>全部任务</span><span><b>{{ outlineReadyCount }}</b>待审提纲</span><span><b>{{ finishedDeckCount }}</b>可下载</span></div>
-      <template #actions><el-button plain @click="writingLabOpen=true">写作实验室</el-button><el-button plain @click="recordsDrawer=true">输出记录</el-button></template>
+      <template #actions><el-button plain @click="router.push('/writing')">写作工作台</el-button><el-button plain @click="recordsDrawer=true">输出记录</el-button></template>
     </StudyCommandBar>
 
     <section class="primary-workflow">
@@ -22,6 +22,8 @@
               <b>研究报告来源 · {{ form.source_book_ids.length }} 本</b><span>已保留多书范围；下方目录只编辑主文献章节。</span>
             </div>
             <div class="scope-secondary-actions"><el-button plain @click="accessDrawer=true">获取或导入全文</el-button><el-button plain :disabled="!form.book_id" @click="rightsDrawer=true">来源与权利</el-button></div>
+            <div class="section-label">知识对象（必选）</div>
+            <el-select v-model="knowledgeKeys" multiple filterable collapse-tags :loading="knowledgeLoading" placeholder="选择笔记、证据卡或批判性审查报告" style="width:100%"><el-option v-for="item in knowledgeOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select>
             <div class="section-label">章节范围</div>
             <el-tree ref="chapterTree" :data="chapters" node-key="id" show-checkbox @check="onChapterCheck"
               :props="{ label: 'title', children: 'children' }" class="chapter-tree" empty-text="选择文献后显示章节" />
@@ -46,12 +48,13 @@
               <header><b>生成条件</b><small>来源、权利与输出规则集中确认</small></header>
             <div class="gate-list">
               <div :class="{ready:form.book_id}"><i>{{ form.book_id ? '✓' : '1' }}</i><span><b>来源已限定</b><small>{{ form.book_id ? scopeSummary : '请选择主文献' }}</small></span></div>
+              <div :class="{ready:knowledgeKeys.length}"><i>{{ knowledgeKeys.length ? '✓' : '2' }}</i><span><b>取材对象已选</b><small>{{ knowledgeKeys.length ? `${knowledgeKeys.length} 个知识对象；每页必须引用` : '请选择笔记、证据卡或批判性审查报告' }}</small></span></div>
               <div class="ready"><i>✓</i><span><b>证据叙事</b><small>一页一个主张，按论文类型组织论证</small></span></div>
               <div class="ready"><i>✓</i><span><b>来源可回溯</b><small>事实页写入 chunk、章节或页码来源</small></span></div>
               <div :class="{ready:!form.include_figures || form.rights_acknowledged}"><i>{{ !form.include_figures || form.rights_acknowledged ? '✓' : '!' }}</i><span><b>图像权利</b><small>{{ !form.include_figures ? '本次不复用来源图像' : form.rights_acknowledged ? '已确认，仍会执行资源门禁' : '请在高级设置中确认使用范围' }}</small></span></div>
             </div>
             <div class="output-spec"><b>默认输出</b><span>中文可编辑 PPTX</span><span>术语保持一致</span><span>逐页演讲者备注</span><span>真实渲染与溢出检查</span></div>
-            <el-button class="generate" type="primary" size="large" :loading="generating" :disabled="!form.book_id" @click="generate">生成并进入提纲审阅</el-button>
+            <el-button class="generate" type="primary" size="large" :loading="generating" :disabled="!form.book_id || !knowledgeKeys.length" @click="generate">从已选知识对象生成提纲</el-button>
             <p class="generate-tip">AI 只使用所选来源；资料不足时保留缺口，不补写未经支持的结论。</p>
             </section>
           </el-card>
@@ -119,6 +122,7 @@
     </el-drawer>
 
     <el-dialog v-model="outlineVisible" title="PPTX 提纲审阅" width="min(1320px,96vw)" destroy-on-close>
+      <el-alert v-if="editingDeck?.source_freshness && editingDeck.source_freshness.status!=='fresh'" :type="editingDeck.source_freshness.status==='unknown'?'info':'warning'" :closable="false" :title="editingDeck.source_freshness.message" class="freshness-alert" />
       <div v-if="editingDeck" class="outline-toolbar">
         <div><b>内容覆盖 {{ percent(editingDeck.qa?.coverage?.content_coverage) }}</b><small>结构覆盖 {{ percent(editingDeck.qa?.coverage?.structure_coverage) }} · {{ editingDeck.qa?.coverage?.covered_groups || 0 }}/{{ editingDeck.qa?.coverage?.total_groups || 0 }} 个来源组</small></div>
         <el-tag :type="editingDeck.qa?.claim_source?.ok ? 'success' : 'warning'">{{ editingDeck.qa?.claim_source?.ok ? '来源审计通过' : `${editingDeck.qa?.claim_source?.blocking_slides?.length || 0} 页需处理` }}</el-tag>
@@ -130,8 +134,6 @@
       </div>
       <template #footer><el-button @click="outlineVisible=false">稍后继续</el-button><el-button :loading="savingOutline" @click="saveOutline">保存并重新审计</el-button><el-button type="primary" :loading="rendering" @click="submitRender">确认提纲并生成 PPTX</el-button></template>
     </el-dialog>
-    <WritingLabDrawer v-model="writingLabOpen" />
-
     <el-dialog v-model="previewVisible" title="PowerPoint 视觉验收" width="min(1200px,96vw)">
       <div v-if="previewDeck" class="preview-toolbar"><div><b>{{ previewDeck.preview_count }} 页已渲染</b><span>逐页检查标题换行、内容溢出、图像裁切与视觉一致性</span></div><el-tag :type="previewDeck.qa?.visual?.ok ? 'success' : 'warning'">{{ previewDeck.qa?.visual?.ok ? '视觉检查通过' : '存在待复核项' }}</el-tag></div>
       <div class="preview-grid"><figure v-for="i in previewDeck?.preview_count || 0" :key="i"><img :src="presentationPreviewUrl(previewDeck.id,i)" :alt="`第 ${i} 页渲染预览`" loading="lazy" /><figcaption>第 {{ i }} 页</figcaption></figure></div>
@@ -150,21 +152,20 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StudyCommandBar from '../components/StudyCommandBar.vue'
-import WritingLabDrawer from '../components/WritingLabDrawer.vue'
 import { listBooks, getBook, listPresentations, presentationDownloadUrl,
   createPresentationOutline, updatePresentationOutline, renderPresentation, getPresentation, presentationPreviewUrl,
   getLiteratureConfig, updateLiteratureConfig, resolveLiterature, importOpenAccess, openLibraryHandoff, openBrowserHandoff,
-  listLiteratureResources, createLiteratureResource, updateLiteratureResource } from '../api'
+  listLiteratureResources, createLiteratureResource, updateLiteratureResource, listKnowledgeRecords, studyReports } from '../api'
 import { notifyTaskSubmitted } from '../stores/taskCenter'
 
 const route = useRoute()
+const router = useRouter()
 const accessDrawer = ref(route.query.tab === 'access')
 const rightsDrawer = ref(route.query.tab === 'rights')
 const recordsDrawer = ref(route.query.tab === 'records')
-const writingLabOpen = ref(route.query.tab === 'writing')
 const books = ref([]); const chapters = ref([]); const chapterTree = ref(); const decks = ref([]); const checkedChapterCount = ref(0)
 const booksLoading = ref(false)
 const generating = ref(false); const resolving = ref(false); const candidates = ref([]); const accessSearched = ref(false); const importingUrl = ref(''); const savingConfig = ref(false)
@@ -175,6 +176,8 @@ const transferredChapterIds = ref(parseStoredList('deckSourceChapterIds'))
 const transferredReportId = Number(sessionStorage.getItem('deckSourceReportId')) || null
 const primaryBookId = Number(route.query.bookId) || transferredBookIds[0] || null
 const form = ref({ book_id: primaryBookId, source_book_ids: transferredBookIds.length ? transferredBookIds : (primaryBookId ? [primaryBookId] : []), source_report_id: transferredReportId, selected_text: sessionStorage.getItem('deckSelectedText') || '', resource_ids: [], audience: '课题组', purpose: '文献精读汇报', duration_minutes: 15, slide_count: 12, max_source_chars: 52000, use_scope: 'personal', include_figures: true, rights_acknowledged: false })
+const knowledgeKeys = ref(transferredReportId ? [`report:${transferredReportId}`] : [])
+const knowledgeOptions = ref([]), knowledgeLoading = ref(false)
 for (const key of ['deckSelectedText','deckSourceBookIds','deckSourceReportId','deckSourceChapterIds']) sessionStorage.removeItem(key)
 const access = ref({ query: '', include_si: null }); const config = ref({ library_resource_url: '', unpaywall_email: '', providers: [] })
 const resources = ref([]); const outlineVisible = ref(false); const previewVisible = ref(false); const resourceVisible = ref(false)
@@ -215,12 +218,14 @@ const onChapterCheck = (_node, state) => { checkedChapterCount.value = state.che
 const statusLabel = (x) => ({pending:'排队中',outlining:'生成提纲',outline_ready:'待确认',rendering:'真实渲染',running:'生成中',done:'已完成',failed:'失败'}[x] || x)
 const percent = (value) => value == null ? '—' : `${Math.round(value * 100)}%`
 const loadResources = async () => { resources.value = form.value.book_id ? await listLiteratureResources(form.value.book_id) : [] }
-const loadBook = async () => { if (!form.value.book_id) return; try { const [b] = await Promise.all([getBook(form.value.book_id), loadResources()]); chapters.value = b.chapters || []; checkedChapterCount.value = 0; form.value.resource_ids = form.value.resource_ids.filter(id => resources.value.some(r => r.id === id)); await loadDecks() } catch(e) { ElMessage.error(`无法加载文献范围：${e.message}。请返回资料库确认解析已经完成。`) } }
+const loadKnowledgeOptions = async () => { knowledgeLoading.value=true;try{const ids=[...new Set([form.value.book_id,...form.value.source_book_ids].filter(Boolean))];const [records,reports]=await Promise.all([listKnowledgeRecords({book_ids:ids,record_types:['note','evidence'],page_size:100}),studyReports(1,50)]);const values=(records.items||[]).map(item=>({value:`${item.record_type}:${item.id}`,label:`${item.record_type==='note'?'笔记':'证据卡'}｜${item.title}`}));const reportValues=(reports.items||[]).filter(item=>(item.book_ids||[]).every(id=>ids.includes(id))).map(item=>({value:`report:${item.id}`,label:`批判性审查｜${item.focus||'综合研读'}`}));knowledgeOptions.value=[...reportValues,...values];knowledgeKeys.value=knowledgeKeys.value.filter(key=>knowledgeOptions.value.some(item=>item.value===key));form.value.source_report_id=Number(knowledgeKeys.value.find(key=>key.startsWith('report:'))?.split(':')[1])||null}finally{knowledgeLoading.value=false} }
+const loadBook = async () => { if (!form.value.book_id) return; try { const [b] = await Promise.all([getBook(form.value.book_id), loadResources(), loadKnowledgeOptions()]); chapters.value = b.chapters || []; checkedChapterCount.value = 0; form.value.resource_ids = form.value.resource_ids.filter(id => resources.value.some(r => r.id === id)); await loadDecks() } catch(e) { ElMessage.error(`无法加载文献范围：${e.message}。请返回资料库确认解析已经完成。`) } }
 const loadDecks = async () => { const response = await listPresentations(form.value.book_id); decks.value = response.items || [] }
 const generate = async () => {
   if (!form.value.book_id) return ElMessage.warning('请先选择主文献，再限定章节或选段')
+  if (!knowledgeKeys.value.length) return ElMessage.warning('请至少选择一个知识对象作为 PPTX 取材来源')
   generating.value = true
-  try { const chapterIds=[...new Set([...(chapterTree.value?.getCheckedKeys() || []),...transferredChapterIds.value])]; const r = await createPresentationOutline({...form.value, source_book_ids:[...new Set([form.value.book_id,...form.value.source_book_ids])], chapter_ids:chapterIds, chunk_ids: []}); submittedTaskId.value=r.task_id; notifyTaskSubmitted(); ElMessage.success(`提纲已进入任务中心；当前内容覆盖约 ${percent(r.coverage?.content_coverage)}`)
+  try { const noteIds=[],evidenceIds=[],reportIds=[];for(const key of knowledgeKeys.value){const [type,id]=key.split(':');if(type==='note')noteIds.push(Number(id));else if(type==='evidence')evidenceIds.push(Number(id));else if(type==='report')reportIds.push(Number(id))}form.value.source_report_id=reportIds[0]||null;const chapterIds=[...new Set([...(chapterTree.value?.getCheckedKeys() || []),...transferredChapterIds.value])]; const r = await createPresentationOutline({...form.value, knowledge_note_ids:noteIds, evidence_card_ids:evidenceIds, report_ids:reportIds, source_book_ids:[...new Set([form.value.book_id,...form.value.source_book_ids])], chapter_ids:chapterIds, chunk_ids: []}); submittedTaskId.value=r.task_id; notifyTaskSubmitted(); ElMessage.success(`提纲已进入任务中心；当前内容覆盖约 ${percent(r.coverage?.content_coverage)}`)
     await loadDecks()
   } catch(e){ElMessage.error(`提纲没有生成：${e.message}。当前选择会保留，可调整范围或模型设置后重试。`)} finally { generating.value=false }
 }
@@ -250,6 +255,7 @@ onMounted(async()=>{ try{const [,c]=await Promise.all([searchBookOptions(''),get
 .workbench{max-width:1500px}.workspace-tabs{margin-top:4px}.workspace-tabs :deep(.el-tabs__header){margin-bottom:8px}.workspace-tabs :deep(.el-tabs__item){height:40px;color:var(--study-text-secondary);font-weight:650}.workspace-tabs :deep(.el-tabs__item:hover),.workspace-tabs :deep(.el-tabs__item.is-active){color:var(--el-color-primary)}.workspace-tabs :deep(.el-tabs__nav-wrap::after){height:1px;background:var(--el-border-color)}.deck-grid,.access-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(360px,.72fr);gap:14px}.section-label{margin:18px 0 8px;font-size:var(--study-font-size-xs);font-weight:700;color:#756958;letter-spacing:.5px}.chapter-tree{max-height:280px;overflow:auto;padding:8px;border-radius:8px;background:var(--el-fill-color-extra-light)}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}.generate{width:100%;margin-top:24px}.history{margin-top:14px}.card-head,.candidate,.provider-list div{display:flex;align-items:center;justify-content:space-between;gap:12px}.candidate-list{margin-top:16px}.candidate{padding:12px 0;border-bottom:1px solid var(--el-border-color-lighter)}.candidate div{min-width:0}.candidate small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--el-text-color-secondary);max-width:680px}.candidate .candidate-note{margin-top:4px;color:#8b5a2b;white-space:normal}.boundary{margin-top:18px}.provider-list{margin-top:22px;padding-top:14px;border-top:1px solid var(--el-border-color-lighter)}.provider-list div{padding:7px 0;color:var(--el-text-color-regular)}@media(max-width:900px){.deck-grid,.access-grid{grid-template-columns:1fr}.two-col{grid-template-columns:1fr}}
 .deck-steps{display:grid;grid-template-columns:minmax(0,1fr) 250px;align-items:center;gap:20px;margin-bottom:14px;padding:16px 18px;border:1px solid rgba(139,90,43,.15);border-radius:14px;background:#f7f2e9}.scope-summary{display:flex;flex-direction:column;padding-left:18px;border-left:1px solid #ded3c3}.scope-summary b{font-size:11px;color:#8b5a2b}.scope-summary span{margin-top:5px;font-size:12px;color:#6d6559}@media(max-width:760px){.deck-steps{grid-template-columns:1fr}.scope-summary{padding:10px 0 0;border-left:0;border-top:1px solid #ded3c3}}
 .resource-checks{display:flex;flex-direction:column;gap:5px}.card-head small{display:block;margin-top:4px;color:var(--el-text-color-secondary);font-weight:400}.outline-toolbar{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;margin-bottom:12px;border:1px solid #e5e7eb;border-radius:10px;background:#f7f2e9;box-shadow:0 1px 2px rgba(15,23,42,.06)}.outline-toolbar div{display:flex;flex-direction:column}.outline-toolbar small{margin-top:4px;color:#7b7165}.outline-list{display:grid;gap:10px;max-height:62vh;overflow:auto;padding:2px 4px 10px}.outline-slide{border:1px solid #e5e7eb;box-shadow:0 1px 2px rgba(15,23,42,.06)}.outline-slide :deep(.el-card__body){display:grid;gap:9px}.audit-issues{padding:8px 10px;border-radius:7px;color:#9a5d28;background:#fff5e7;font-size:12px}.preview-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.preview-grid img{width:100%;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 1px 2px rgba(15,23,42,.06)}@media(max-width:760px){.preview-grid{grid-template-columns:1fr}.outline-toolbar{align-items:flex-start;gap:8px;flex-direction:column}}
+.freshness-alert{margin-bottom:10px}
 
 /* 文献工作台迁移：任务流 + 证据范围 + 输出门禁 */
 .workbench-commandbar{margin-bottom:0}.workbench-summary{display:flex;gap:18px}.workbench-summary span{display:flex;flex-direction:column;color:var(--study-text-secondary);font-size:var(--study-font-size-xs);text-align:center}.workbench-summary b{margin-bottom:1px;color:var(--el-color-primary);font:700 18px Georgia,serif}.workbench-boundary{display:flex;flex-direction:column;font-size:var(--study-font-size-xs);text-align:right}.workbench-boundary span{margin-top:2px;color:var(--study-text-secondary)}

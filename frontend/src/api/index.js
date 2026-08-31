@@ -34,6 +34,9 @@ export const subscribeTask = (taskId, onUpdate) => new Promise((resolve, reject)
 
 // ===== 书籍 =====
 export const listBooks = (params) => http.get('/books', { params, paramsSerializer: repeatedParams })
+export const reorderBooks = (bookIds, shelfId = null) => http.put('/books/order', { book_ids: bookIds, shelf_id: shelfId })
+export const getKnowledgeBaseHealth = () => http.get('/books/health')
+export const repairKnowledgeBaseHealth = (issueIds) => http.post('/books/health/repair', { issue_ids: issueIds })
 export const getBook = (id) => http.get(`/books/${id}`)
 export const uploadBook = (file) => {
   const form = new FormData()
@@ -46,11 +49,13 @@ export const uploadBookBatch = (files) => {
   return http.post('/books/upload-batch', form, { timeout: 600000 })
 }
 export const deleteBook = (id) => http.delete(`/books/${id}`)
+export const reparseBook = (id) => http.post(`/books/${id}/reparse`)
 export const renameBook = (id, title) => http.patch(`/books/${id}`, { title })
 export const searchBooks = (params) => http.get('/search', { params })
 export const getTask = (id) => http.get(`/tasks/${id}`)
 export const listTasks = (params = {}) => http.get('/tasks', { params })
 export const cancelTask = (id) => http.post(`/tasks/${id}/cancel`)
+export const retryTask = (id) => http.post(`/tasks/${id}/retry`)
 
 // ===== 原文定位 =====
 export const getChunkOriginal = (bookId, chunkId) => http.get(`/books/${bookId}/chunk/${chunkId}`)
@@ -134,10 +139,7 @@ export const putShelfBooks = (id, bookIds, mode = 'add') => http.put(`/shelves/$
 export const removeShelfBook = (id, bookId) => http.delete(`/shelves/${id}/books/${bookId}`)
 
 // ===== 统计 =====
-export const getOverview = () => http.get('/stats/overview')
-export const getMastery = (bookId) => http.get('/stats/mastery', { params: { book_id: bookId } })
-export const getActivity = (days) => http.get('/stats/activity', { params: { days } })
-export const getWeakness = () => http.get('/stats/weakness')
+export const getKnowledgeBaseInsights = (days = 30) => http.get('/stats/knowledge-base', { params: { days } })
 
 // ===== 知识树 =====
 export const getKnowledgeTree = (bookIds = []) => http.get('/knowledge/tree', {
@@ -185,6 +187,8 @@ export const aiSummarize = (data) => http.post('/ai/summarize', data)
 export const aiVision = (data) => http.post('/ai/vision', data)
 export const studyOverview = (data) => http.post('/study/overview', data)
 export const studyReports = (page = 1, pageSize = 20) => http.get('/study/reports', { params: { page, page_size: pageSize } })
+export const updateStudyReportClaims = (id, claims) => http.patch(`/study/reports/${id}/claims`, { claims })
+export const depositStudyReport = (id, data = {}) => http.post(`/study/reports/${id}/deposit`, data)
 export const getStudyReport = (id) => http.get(`/study/reports/${id}`)
 export const deleteStudyReport = (id) => http.delete(`/study/reports/${id}`)
 export const studyTrainStart = (data) => http.post('/study/train/start', data)
@@ -199,7 +203,11 @@ export const listCompatibleProviders = () => http.get('/settings/providers')
 export const saveCompatibleProvider = (data) => http.post('/settings/providers', data)
 export const deleteCompatibleProvider = (id) => http.delete(`/settings/providers/${id}`)
 export const probeCompatibleProvider = (id) => http.post(`/settings/providers/${id}/probe`)
+export const updateProviderRouting = (data) => http.put('/settings/providers/routing', data)
+export const getProviderUsage = () => http.get('/settings/providers/usage')
+export const listProviderModels = (id) => http.get(`/settings/providers/${id}/models`)
 export const getStorageUsage = () => http.get('/settings/storage')
+export const getCapacityStatus = () => http.get('/settings/capacity')
 export const cleanupStorage = (categories) => http.post('/settings/storage/cleanup', { categories })
 
 // ===== 文献汇报与合法全文获取 =====
@@ -217,6 +225,7 @@ export const getWritingProfile = (id) => http.get(`/writing/profiles/${id}`)
 export const createWritingProfile = (data) => http.post('/writing/profiles', data)
 export const refineWritingProfile = (id, data) => http.post(`/writing/profiles/${id}/refine`, data)
 export const imitateWriting = (id, data) => http.post(`/writing/profiles/${id}/imitate`, data, { timeout: 360000 })
+export const createLiteratureReview = (data) => http.post('/writing/literature-review', data, { timeout: 600000 })
 export const cleanAiToneText = (data) => http.post('/writing/clean-text', data, { timeout: 360000 })
 export const cleanAiToneDocx = (file, profileId) => { const form=new FormData(); form.append('file',file); if(profileId) form.append('profile_id',profileId); return http.post('/writing/clean-docx',form,{timeout:600000}) }
 export const listWritingOutputs = (params = {}) => http.get('/writing/outputs', { params })
@@ -244,10 +253,6 @@ export const getConceptSources = (name, bookIds) => http.get(`/graph/concept/${e
   params: { book_ids: bookIds }, paramsSerializer: repeatedParams,
 })
 
-// ===== 学习计划 =====
-export const getPlan = () => http.get('/plan')
-export const savePlan = (data) => http.post('/plan', data)
-export const planCheckin = (data) => http.post('/plan/checkin', data)
 
 // ===== 数据健康 =====
 export const getHealthData = () => http.get('/health/data')

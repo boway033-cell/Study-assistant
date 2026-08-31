@@ -1,11 +1,11 @@
 <template>
   <el-container class="layout" :class="{ 'is-reader-layout': $route.name === 'reader' }">
-    <el-aside :width="$route.name === 'reader' || sidebarCollapsed ? '76px' : '224px'" class="aside desktop-aside">
+    <el-aside :width="$route.name === 'reader' || sidebarCollapsed ? '76px' : '252px'" class="aside desktop-aside">
       <div class="logo">
         <span class="logo-dew">💧</span>
         <div v-if="$route.name !== 'reader' && !sidebarCollapsed" class="logo-text">
-          <span class="logo-title">Study assistant</span>
-          <span class="logo-sub">{{ term.name }} · {{ dateStr }}</span>
+          <span class="logo-title">知识库助手</span>
+          <span class="logo-sub">资料 · 研读 · 输出</span>
         </div>
       </div>
       <AppNavigation :collapsed="$route.name === 'reader' || sidebarCollapsed" />
@@ -33,8 +33,8 @@
       </el-main>
     </el-container>
 
-    <el-drawer v-model="mobileNav" direction="ltr" size="280px" :with-header="false" class="mobile-drawer">
-      <div class="mobile-logo"><span>💧</span><div><b>Study assistant</b><small>个人文献知识库</small></div></div>
+    <el-drawer v-model="mobileNav" direction="ltr" size="304px" :with-header="false" class="mobile-drawer">
+      <div class="mobile-logo"><span>💧</span><div><b>知识库助手</b><small>资料 · 研读 · 输出</small></div></div>
       <AppNavigation @navigate="mobileNav = false" />
     </el-drawer>
     <GlobalTaskCenter v-model="taskDrawerOpen" />
@@ -42,14 +42,14 @@
     <!-- 首次使用引导：未配置 API Key 时提示 -->
     <el-dialog v-model="showKeyGuide" title="可选：启用云端 AI 能力" width="520px" append-to-body @closed="rememberKeyGuide">
       <div class="guide-body">
-        <p>本应用的 <b>AI 问答与分析</b> 基于 <b>DeepSeek 云端</b> 大模型；<b>文本解析 / 切块 / 检索等分析全部在本地完成</b>，仅将「提问 + 检索片段」发送到云端。</p>
-        <p>使用前需要配置一个 <b>DeepSeek API Key</b>：</p>
+        <p>本应用支持为 <b>AI 问答、研究、写作和 PPT</b> 分别选择模型；<b>文本解析 / 切块 / 检索等分析全部在本地完成</b>，仅将「任务指令 + 检索片段」发送给你选择的模型供应商。</p>
+        <p>使用前需要至少配置一个 <b>AI 模型连接</b>：</p>
         <ol class="guide-steps">
-          <li>打开 <a href="https://platform.deepseek.com" target="_blank">platform.deepseek.com</a> 注册并创建 API Key；</li>
-          <li>点击下方「去设置」，把 Key 粘贴到 <b>设置 → DeepSeek API Key</b>；</li>
-          <li>保存后在 <b>设置</b> 页点击「重新检测」确认连接成功。</li>
+          <li>可直接配置 DeepSeek，也可添加 Kimi、智谱 GLM、通义、OpenAI、Anthropic、Gemini 或自定义连接；</li>
+          <li>在 <b>设置 → 模型连接与功能路由</b> 中选择全局默认模型；</li>
+          <li>点击「检测」确认连接成功，再按需为研究、写作和 PPT 单独分配模型。</li>
         </ol>
-        <p class="guide-tip">💡 模型档位：<b>flash</b>（快速，日常问答）/ <b>pro</b>（深度推理，难题分析），可在设置页或问答页随时切换。</p>
+        <p class="guide-tip">💡 连接与任务路由均保存在本机；API Key 加密保存，不会写入知识库正文。</p>
       </div>
       <template #footer>
         <el-button @click="showKeyGuide = false">稍后再说</el-button>
@@ -99,7 +99,7 @@ onMounted(async () => {
   // 首次使用引导：未配置 API Key 时弹窗提示
   try {
     const s = await getSettings()
-    if (!s.deepseek_configured && localStorage.getItem('aiKeyGuideSeen') !== 'true') {
+    if (!s.text_provider_configured && localStorage.getItem('aiKeyGuideSeen') !== 'true') {
       showKeyGuide.value = true
     }
   } catch { /* 后端未启动等场景静默 */ }

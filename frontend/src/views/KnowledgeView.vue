@@ -200,7 +200,7 @@
           </el-select>
         </el-form-item>
         <div class="form-tip">AI 按书逐本分析、逐本建树；多选不会把来源压成一棵混合树。</div>
-        <div class="form-tip" v-if="aiRunning">🤖 DeepSeek 正在分析教材章节与关键词… {{ aiStage }}</div>
+        <div class="form-tip" v-if="aiRunning">🤖 AI 正在分析教材章节与关键词… {{ aiStage }}</div>
       </el-form>
       <template #footer>
         <el-button @click="showAi = false" :disabled="aiRunning">取消</el-button>

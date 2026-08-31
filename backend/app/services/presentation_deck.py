@@ -7,6 +7,7 @@ results: each slide must retain local chunk/page source IDs.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 import tempfile
@@ -18,7 +19,8 @@ from sqlalchemy import select
 
 from backend.app.core.config import settings
 from backend.app.core.database import SessionLocal
-from backend.app.models import Book, Chapter, Chunk, LiteratureResource, PaperProfile, PresentationDeck
+from backend.app.models import (Book, Chapter, Chunk, EvidenceCard, KnowledgeNote, LiteratureResource,
+                                PaperProfile, PresentationDeck, StudyReport)
 from backend.app.services.llm import LLMRouter, load_llm_config, parse_json_response
 from backend.app.worker.tasks import update_progress
 
@@ -40,6 +42,11 @@ TYPE_KEYWORDS = {
     "review": "review perspective commentary systematic review 综述 述评 展望",
     "discovery": "mechanism pathway phenotype cell gene protein discovery 机制 通路 表型 细胞 基因",
 }
+
+
+def source_fingerprint(*values: object) -> str:
+    payload = json.dumps(values, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8", errors="ignore")).hexdigest()
 
 
 def classify_paper_type(title: str, text: str) -> str:
@@ -165,7 +172,9 @@ def collect_selection(db, book_id: int, chapter_ids: list[int], chunk_ids: list[
             sources.append({"source_id": f"chunk:{chunk.id}", "chunk_id": chunk.id,
                             "book_id": chunk.book_id, "resource_id": group["resource_id"],
                             "chapter_id": chunk.chapter_id, "chapter_title": chapter_map.get(chunk.chapter_id).title if chunk.chapter_id in chapter_map else None,
-                            "page_start": chunk.page_start, "page_end": chunk.page_end, "text": content})
+                            "page_start": chunk.page_start, "page_end": chunk.page_end, "text": content,
+                            "snapshot_hash": source_fingerprint(chunk.content, chunk.page_start,
+                                                                chunk.page_end, chunk.chapter_id)})
         coverage_groups.append({"key": group["key"], "title": group["title"],
                                 "available_chars": available_chars, "sampled_chars": sampled_chars,
                                 "total_chunks": len(group["chunks"]), "sampled_chunks": len(sampled),
@@ -173,7 +182,8 @@ def collect_selection(db, book_id: int, chapter_ids: list[int], chunk_ids: list[
     if user_text:
         sources.insert(0, {"source_id": "selection:user", "chunk_id": None, "book_id": book_id,
                            "resource_id": None, "chapter_id": None, "chapter_title": None,
-                           "page_start": None, "page_end": None, "text": user_text})
+                           "page_start": None, "page_end": None, "text": user_text,
+                           "snapshot_hash": source_fingerprint(user_text)})
     if not sources:
         raise ValueError("所选范围没有可用于汇报的正文")
     total_available = sum(available_by_group)
@@ -195,7 +205,10 @@ def collect_selection(db, book_id: int, chapter_ids: list[int], chunk_ids: list[
 
 def collect_multi_selection(db, primary_book_id: int, source_book_ids: list[int], chapter_ids: list[int],
                             chunk_ids: list[int], selected_text: str, resource_ids: list[int] | None = None,
-                            max_source_chars: int = 52000, source_report_id: int | None = None) -> dict:
+                            max_source_chars: int = 52000, source_report_id: int | None = None,
+                            knowledge_note_ids: list[int] | None = None,
+                            evidence_card_ids: list[int] | None = None,
+                            report_ids: list[int] | None = None) -> dict:
     """在多本书之间公平分配采样预算，并保留每条来源的书目归属。"""
     book_ids = list(dict.fromkeys([primary_book_id, *(source_book_ids or [])]))[:50]
     books = list(db.scalars(select(Book).where(Book.id.in_(book_ids))).all())
@@ -207,6 +220,54 @@ def collect_multi_selection(db, primary_book_id: int, source_book_ids: list[int]
     if set(chapter_ids or []) - set(chapter_books) or set(chunk_ids or []) - set(chunk_books):
         raise ValueError("选择范围包含不存在的章节或片段")
 
+    note_ids = list(dict.fromkeys(knowledge_note_ids or []))
+    card_ids = list(dict.fromkeys(evidence_card_ids or []))
+    notes = list(db.scalars(select(KnowledgeNote).where(KnowledgeNote.id.in_(note_ids))).all()) if note_ids else []
+    cards = list(db.scalars(select(EvidenceCard).where(EvidenceCard.id.in_(card_ids))).all()) if card_ids else []
+    selected_report_ids = list(dict.fromkeys([*([source_report_id] if source_report_id else []), *(report_ids or [])]))
+    reports = list(db.scalars(select(StudyReport).where(StudyReport.id.in_(selected_report_ids))).all()) if selected_report_ids else []
+    if ({item.id for item in notes} != set(note_ids) or {item.id for item in cards} != set(card_ids)
+            or {item.id for item in reports} != set(selected_report_ids)):
+        raise ValueError("所选知识对象不存在或已被删除")
+    if any(item.book_id not in set(book_ids) for item in [*notes, *cards]):
+        raise ValueError("所选知识对象超出本次 PPTX 文献范围")
+    for report in reports:
+        report_books = set(json.loads(report.book_ids_json or "[]"))
+        if not report_books or not report_books.issubset(set(book_ids)):
+            raise ValueError("所选研究报告超出本次 PPTX 文献范围")
+    if not notes and not cards and not reports:
+        raise ValueError("请至少选择一个知识对象（笔记、证据卡或批判性审查报告）作为 PPTX 取材来源")
+
+    knowledge_sources: list[dict] = []
+    for note in notes:
+        knowledge_sources.append({"source_id": f"note:{note.id}", "book_id": note.book_id,
+                                  "chapter_id": note.chapter_id, "chapter_title": note.title,
+                                  "page_start": note.page, "page_end": note.page,
+                                  "text": f"{note.title}\n{note.content}", "knowledge_type": "note",
+                                  "snapshot_hash": source_fingerprint(note.title, note.content,
+                                                                      note.source_refs_json)})
+    for card in cards:
+        knowledge_sources.append({"source_id": f"evidence:{card.id}", "book_id": card.book_id,
+                                  "chapter_id": card.chapter_id, "chapter_title": card.title,
+                                  "page_start": card.page, "page_end": card.page,
+                                  "text": f"主张：{card.claim_text or card.title}\n证据：{card.evidence_text}\n核验：{card.verification_status}",
+                                  "knowledge_type": "evidence",
+                                  "snapshot_hash": source_fingerprint(card.title, card.claim_text,
+                                                                      card.evidence_text, card.source_ref_json,
+                                                                      card.verification_status)})
+    for report in reports:
+        report_claims = json.loads(report.claims_json or "[]")
+        report_text = (report.content or "") + "\n\n结构化主张：\n" + "\n".join(
+            f"- {item.get('claim', '')}｜关系={item.get('synthesis_relation', 'unresolved')}｜质量={item.get('evidence_quality', 'not_assessed')}｜限制={item.get('counterpoint', '')}"
+            for item in report_claims
+        )
+        knowledge_sources.append({"source_id": f"report:{report.id}", "book_id": primary_book_id,
+                                  "chapter_id": None, "chapter_title": report.focus or "批判性审查报告",
+                                  "page_start": None, "page_end": None, "text": report_text[:16000],
+                                  "knowledge_type": "report",
+                                  "snapshot_hash": source_fingerprint(report.focus, report.content,
+                                                                      report.claims_json, report.selection_json)})
+
     per_book_budget = max(8000, max_source_chars // max(1, len(book_ids)))
     selections = [collect_selection(
         db, book_id,
@@ -215,7 +276,8 @@ def collect_multi_selection(db, primary_book_id: int, source_book_ids: list[int]
         selected_text if book_id == primary_book_id else "",
         resource_ids if book_id == primary_book_id else [], per_book_budget,
     ) for book_id in book_ids]
-    sources = [source for selection in selections for source in selection.get("sources", [])]
+    raw_sources = [source for selection in selections for source in selection.get("sources", [])]
+    sources = knowledge_sources + raw_sources
     groups = [group for selection in selections for group in selection.get("coverage", {}).get("groups", [])]
     available = sum(selection.get("coverage", {}).get("available_chars", 0) for selection in selections)
     sampled = sum(selection.get("coverage", {}).get("sampled_chars", 0) for selection in selections)
@@ -223,6 +285,9 @@ def collect_multi_selection(db, primary_book_id: int, source_book_ids: list[int]
         "book": {"id": primary_book_id, "title": by_id[primary_book_id].title},
         "books": [{"id": book_id, "title": by_id[book_id].title} for book_id in book_ids],
         "source_report_id": source_report_id,
+        "report_ids": selected_report_ids,
+        "knowledge_note_ids": note_ids, "evidence_card_ids": card_ids,
+        "knowledge_source_ids": [source["source_id"] for source in knowledge_sources],
         "chapter_ids": chapter_ids or [], "chunk_ids": chunk_ids or [], "resource_ids": resource_ids or [],
         "sources": sources,
         "coverage": {"max_source_chars": max_source_chars, "available_chars": available,
@@ -268,7 +333,8 @@ async def _ai_outline(provider, title: str, paper_type: str, sources: list[dict]
     prompt = f"""你是严谨的中文学术汇报编辑。论文类型：{PAPER_TYPE_LABELS[paper_type]}。
 受众：{options['audience']}；目的：{options['purpose']}；目标 {options['slide_count']} 页，{options['duration_minutes']} 分钟。
 先确定整场汇报的一句核心结论，再按“为什么重要→知识缺口→作者做了什么→关键证据→可信度→意义/复用→边界”建立证据链；不要机械复刻论文目录。
-只使用下方来源。不得补造数字、因果关系、实验或结论；不确定就写“原文未说明”。
+只使用下方来源。内容主线必须来自 note:、evidence: 或 report: 开头的已选知识对象；原始 chunk 只能用于定位和核查，不能另起未经选择的主张。
+不得补造数字、因果关系、实验或结论；保留知识对象中的冲突、共识、互补关系、证据质量和适用边界；不确定就写“原文未说明”。
 每页只有一个叙事职责和一个可直接讲出的主张；标题优先写结论，不写“研究背景”“结果分析”等空泛栏目名。
 中文短句，术语首次出现时可保留英文或缩写，后续称谓必须一致；数值逐字忠于来源。证据后紧跟它支持的意义，局限与外推边界必须显式呈现。
 不得把流程提示、编辑说明或证据不足的猜测写到观众可见页面。每个事实页必须列 source_ids。
@@ -496,10 +562,12 @@ def audit_pptx(path: Path, outline: list[dict]) -> dict:
     return {"ok": not issues, "slide_count": len(prs.slides), "issues": issues}
 
 
-def validate_outline(outline: list[dict], sources: list[dict]) -> list[dict]:
+def validate_outline(outline: list[dict], sources: list[dict],
+                     knowledge_source_ids: list[str] | None = None) -> list[dict]:
     if not 2 <= len(outline) <= 24:
         raise ValueError("提纲页数需为 2–24 页")
     allowed = {source["source_id"] for source in sources}
+    required = set(knowledge_source_ids or [])
     cleaned = []
     for index, raw in enumerate(outline):
         if not isinstance(raw, dict):
@@ -514,6 +582,8 @@ def validate_outline(outline: list[dict], sources: list[dict]) -> list[dict]:
         kind = "cover" if index == 0 else str(raw.get("kind") or "content")[:20]
         if index > 0 and not source_ids:
             raise ValueError(f"第 {index + 1} 页至少需要一个来源")
+        if index > 0 and required and not (set(source_ids) & required):
+            raise ValueError(f"第 {index + 1} 页必须引用至少一个已选知识对象")
         cleaned.append({"title": title, "kind": kind,
                         "claim": str(raw.get("claim") or "").strip()[:220],
                         "bullets": [str(item).strip()[:100] for item in raw.get("bullets", [])[:4] if str(item).strip()],
@@ -557,13 +627,19 @@ async def generate_outline_task(record, deck_id: int) -> dict:
         paper_type = classify_paper_type(book.title, "\n".join(source["text"] for source in sources))
         deck.paper_type = paper_type
         update_progress(record, .18, "deck_outline", f"已识别为{PAPER_TYPE_LABELS[paper_type]}论文")
-        outline = None; cfg = load_llm_config(db)
+        outline = None; cfg = load_llm_config(db, "presentation")
         if cfg.get("deepseek_api_key"):
             update_progress(record, .48, "deck_outline", "AI 正在按证据链组织可编辑提纲")
             outline = await _ai_outline(LLMRouter.get("auto", cfg), book.title, paper_type, sources, options)
+        try:
+            outline = validate_outline(outline, sources, selection.get("knowledge_source_ids", [])) if outline else None
+        except ValueError:
+            outline = None
         if not outline:
-            outline = _local_outline(book.title, paper_type, sources, options["slide_count"])
-        outline = validate_outline(outline, sources)
+            knowledge_ids = set(selection.get("knowledge_source_ids", []))
+            knowledge_sources = [source for source in sources if source.get("source_id") in knowledge_ids]
+            outline = _local_outline(book.title, paper_type, knowledge_sources, options["slide_count"])
+            outline = validate_outline(outline, sources, list(knowledge_ids))
         claim_audit = audit_claim_sources(outline, sources)
         deck.outline_json = json.dumps(outline, ensure_ascii=False)
         deck.qa_json = json.dumps({"stage": "outline", "claim_source": claim_audit,
@@ -589,7 +665,8 @@ async def render_deck_task(record, deck_id: int) -> dict:
         if not deck:
             raise ValueError("汇报任务不存在")
         selection = json.loads(deck.selection_json or "{}"); options = json.loads(deck.options_json or "{}")
-        outline = validate_outline(json.loads(deck.outline_json or "[]"), selection.get("sources", []))
+        outline = validate_outline(json.loads(deck.outline_json or "[]"), selection.get("sources", []),
+                                   selection.get("knowledge_source_ids", []))
         book = db.get(Book, deck.book_id); profile = db.get(PaperProfile, deck.book_id)
         rights = _rights_policy(db, deck.book_id, options)
         render_options = {**options, "include_figures": rights["allow_figures"]}

@@ -72,7 +72,32 @@ def test_rdfybk_keeps_precise_handoff_when_source_blocks_probe(monkeypatch):
 def test_default_text_router_remains_deepseek():
     from backend.app.services.llm import DeepSeekProvider, LLMRouter
 
-    assert isinstance(LLMRouter.get(), DeepSeekProvider)
+    assert isinstance(LLMRouter.get().providers[0], DeepSeekProvider)
+
+
+def test_presentation_freshness_detects_changed_selected_knowledge():
+    from uuid import uuid4
+    from backend.app.api.presentations import _source_freshness
+    from backend.app.core.database import SessionLocal
+    from backend.app.models import Book, KnowledgeNote
+    from backend.app.services.presentation_deck import source_fingerprint
+
+    db = SessionLocal()
+    book = Book(title=f"deck-freshness-{uuid4().hex}", file_path="deck.pdf", file_type="pdf", status="ready")
+    db.add(book); db.flush()
+    note = KnowledgeNote(book_id=book.id, title="PPT 来源", content="原始证据", source_refs_json="[]")
+    db.add(note); db.commit(); db.refresh(note)
+    selection = {"sources": [{"source_id": f"note:{note.id}", "chapter_title": note.title,
+                               "snapshot_hash": source_fingerprint(note.title, note.content, note.source_refs_json)}]}
+    try:
+        assert _source_freshness(db, selection)["status"] == "fresh"
+        note.content = "更新证据"; db.commit()
+        assert _source_freshness(db, selection)["status"] == "stale"
+    finally:
+        db.query(KnowledgeNote).filter(KnowledgeNote.id == note.id).delete(synchronize_session=False)
+        db.commit()
+        db.query(Book).filter(Book.id == book.id).delete(synchronize_session=False)
+        db.commit(); db.close()
 
 
 def test_local_outline_and_editable_pptx(tmp_path):
@@ -133,6 +158,41 @@ def test_stratified_selection_covers_each_selected_chapter():
         db.close()
 
 
+def test_pptx_requires_and_propagates_selected_knowledge_objects():
+    from backend.app.api.books import delete_book
+    from backend.app.core.database import SessionLocal
+    from backend.app.models import Book, Chapter, Chunk, KnowledgeNote
+    from backend.app.services.presentation_deck import collect_multi_selection, validate_outline
+
+    db = SessionLocal()
+    try:
+        book = Book(title="Knowledge-bound deck", file_path="missing.pdf", file_type="pdf", status="ready")
+        db.add(book); db.flush()
+        chapter = Chapter(book_id=book.id, title="证据章", level=1, order_index=0)
+        db.add(chapter); db.flush()
+        db.add(Chunk(book_id=book.id, chapter_id=chapter.id, chunk_index=0,
+                     content="原始文献定位材料。" * 200, page_start=1, page_end=1))
+        note = KnowledgeNote(book_id=book.id, title="已审查共识", content="两项独立研究在限定条件下方向一致。")
+        db.add(note); db.commit(); db.refresh(note)
+        with pytest.raises(ValueError, match="至少选择一个知识对象"):
+            collect_multi_selection(db, book.id, [book.id], [], [], "")
+        selection = collect_multi_selection(db, book.id, [book.id], [], [], "",
+                                            knowledge_note_ids=[note.id])
+        assert selection["knowledge_source_ids"] == [f"note:{note.id}"]
+        assert selection["sources"][0]["knowledge_type"] == "note"
+        slides = [{"title": "封面", "kind": "cover", "claim": "", "bullets": [], "source_ids": []},
+                  {"title": "结论", "kind": "content", "claim": "方向一致", "bullets": [],
+                   "source_ids": [f"note:{note.id}"]}]
+        assert validate_outline(slides, selection["sources"], selection["knowledge_source_ids"])[1]["source_ids"]
+        raw_id = next(item["source_id"] for item in selection["sources"] if item.get("knowledge_type") is None)
+        slides[1]["source_ids"] = [raw_id]
+        with pytest.raises(ValueError, match="必须引用至少一个已选知识对象"):
+            validate_outline(slides, selection["sources"], selection["knowledge_source_ids"])
+        delete_book(book.id, db)
+    finally:
+        db.close()
+
+
 def test_bookshelf_is_virtual_and_multi_membership():
     from backend.app.api.shelves import ShelfBooksWrite, ShelfWrite, create_shelf, delete_shelf, put_shelf_books
     from backend.app.api.books import delete_book
@@ -162,12 +222,22 @@ def test_fallback_app_ports_can_create_shelves():
 
     assert "http://127.0.0.1:8000" in _ALLOWED_ORIGINS
     assert "http://127.0.0.1:8010" in _ALLOWED_ORIGINS
+    assert "http://127.0.0.1:8011" in _ALLOWED_ORIGINS
     assert "http://localhost:8010" in _ALLOWED_ORIGINS
     assert all("0.0.0.0" not in origin for origin in _ALLOWED_ORIGINS)
     payload = health()
     assert payload["app"] == "study-assistant"
-    assert payload["api_revision"] >= 2
+    assert payload["api_revision"] >= 4
     assert payload["capabilities"]["shelves_write"] is True
+    assert payload["capabilities"]["knowledge_insights"] is True
+
+
+def test_runtime_launcher_rejects_backends_without_knowledge_insights():
+    root = Path(__file__).resolve().parents[2]
+    launcher = (root / "scripts" / "runtime" / "auto_start.ps1").read_text(encoding="utf-8")
+
+    assert "[int]$response.api_revision -ge 4" in launcher
+    assert "$response.capabilities.knowledge_insights -eq $true" in launcher
 
 
 def test_public_deck_excludes_unknown_rights_figures():

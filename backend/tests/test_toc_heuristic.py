@@ -80,6 +80,36 @@ class TestTocHeuristic:
         assert classify_heading("第 2 节 研究设计")[1] == 2
         assert classify_heading("3.2 Results")[1] == 2
 
+    def test_cross_disciplinary_unnumbered_academic_sections(self):
+        from backend.app.services.rag.toc_heuristic import classify_heading
+
+        # 社科
+        assert classify_heading("理论框架") == ("理论框架", 1)
+        assert classify_heading("田野调查") == ("田野调查", 1)
+        # 人文与文学
+        assert classify_heading("文本分析") == ("文本分析", 1)
+        assert classify_heading("历史语境") == ("历史语境", 1)
+        # 自然科学与生物医学
+        assert classify_heading("Experimental Procedures") == ("Experimental Procedures", 1)
+        assert classify_heading("Data Availability") == ("Data Availability", 1)
+        # 只接受稳定的短章节名，正文句不能被放大成目录。
+        assert classify_heading("研究结果表明该处理显著提高了存活率") is None
+
+    def test_academic_structure_audit_reports_unrecognized_core_roles_without_fabricating(self):
+        from backend.app.services.rag.toc_heuristic import analyze_academic_structure
+
+        rows = [
+            {"title": "Abstract", "level": 1, "page": 1},
+            {"title": "Introduction", "level": 1, "page": 2},
+            {"title": "Materials and Methods", "level": 1, "page": 3},
+            {"title": "Results", "level": 1, "page": 8},
+            {"title": "References", "level": 1, "page": 14},
+        ]
+        audit = analyze_academic_structure(rows)
+        assert audit["profile"] == "natural_biomedical"
+        assert "讨论或结论" in audit["missing_core_roles"]
+        assert len(rows) == 5
+
     def test_ocr_part_and_department_are_distinguished(self):
         from backend.app.services.rag.toc_heuristic import classify_heading
 
@@ -108,6 +138,44 @@ class TestTocHeuristic:
         assert [(x["title"], x["level"]) for x in toc] == [
             ("论文题名", 1), ("1 问题提出", 2), ("2 文献综述", 2)
         ]
+
+    def test_screenshot_fragmented_journal_headings_are_rejoined_and_noise_is_removed(self):
+        from backend.app.services.rag.toc_heuristic import merge_toc_sources
+
+        layout = [
+            {"title": "作为侵占的测量", "level": 1, "page": 1, "line": 0},
+            {"title": "“测量一切”为何无法成功", "level": 1, "page": 1, "line": 1},
+            {"title": "观点", "level": 2, "page": 1, "line": 2},
+            {"title": "[Perspective]", "level": 2, "page": 1, "line": 3},
+            {"title": "引言", "level": 2, "page": 1, "line": 4},
+            {"title": "二", "level": 2, "page": 3, "line": 0},
+            {"title": "绩效测量的悖论", "level": 2, "page": 3, "line": 1},
+            {"title": "三", "level": 2, "page": 5, "line": 0},
+            {"title": "测量的侵占本质", "level": 2, "page": 5, "line": 1},
+            {"title": "Encroachment", "level": 2, "page": 14, "line": 0},
+            {"title": "as", "level": 2, "page": 14, "line": 1},
+            {"title": "Measurement", "level": 2, "page": 14, "line": 2},
+            {"title": "Cannot", "level": 2, "page": 14, "line": 3},
+            {"title": "Succeed", "level": 2, "page": 14, "line": 4},
+        ]
+        merged = merge_toc_sources([], [], layout)
+        titles = [row["title"] for row in merged]
+        assert "二、绩效测量的悖论" in titles
+        assert "三、测量的侵占本质" in titles
+        assert "观点" not in titles and "[Perspective]" not in titles
+        assert not {"Encroachment", "as", "Measurement", "Cannot", "Succeed"}.intersection(titles)
+
+    def test_private_font_glyphs_and_trailing_markers_are_cleaned_from_headings(self):
+        from backend.app.services.rag.toc_heuristic import merge_toc_sources
+
+        merged = merge_toc_sources([], [], [
+            {"title": "读《转型中的地方政府》（第二版） \ue5d2 \ue5cf", "level": 1, "page": 1, "line": 0},
+            {"title": "行政发包制", "level": 2, "page": 2, "line": 0},
+            {"title": "（一）", "level": 2, "page": 2, "line": 1},
+        ])
+        assert merged[0]["title"] == "读《转型中的地方政府》(第二版)"
+        assert merged[1]["title"] == "（一）行政发包制"
+        assert all("\ue5d2" not in row["title"] and "\ue5cf" not in row["title"] for row in merged)
 
     def test_repeated_numbered_running_header_is_not_a_new_chapter(self):
         from backend.app.services.rag.toc_heuristic import extract_toc_heuristic

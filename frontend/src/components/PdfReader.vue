@@ -250,10 +250,20 @@ const annCard = ref({ visible: false, mode: 'create', page: 1, anchor: null, tex
 let pdfDoc = null
 let renderTasks = {}
 const pendingRenders = new Set()
+let loadingTask = null
+let renderQueue = Promise.resolve()
 let bookTitle = ''
 let renderGeneration = 0
 let zoomTimer = null
 let scrollFrame = null
+
+const withTimeout = (promise, milliseconds, message, onTimeout) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => {
+    try { onTimeout?.() } catch {}
+    reject(new Error(message))
+  }, milliseconds)
+  Promise.resolve(promise).then(value => { clearTimeout(timer); resolve(value) }, error => { clearTimeout(timer); reject(error) })
+})
 
 function setCanvasRef(p, el) {
   if (!el) { delete canvasRefs[p]; return }
@@ -293,7 +303,7 @@ const loadPdf = async () => {
   errorMsg.value = ''
   if (pdfDoc) { try { pdfDoc.destroy() } catch {} pdfDoc = null }
   try {
-    const doc = await pdfjsLib.getDocument({
+    loadingTask = pdfjsLib.getDocument({
       url: props.src, disableAutoFetch: true,
       // 必须使用站点根路径。阅读器位于 /reader/:id，相对路径会误请求
       // /reader/cmaps 并得到 SPA 的 index.html，进而造成 CID 字体解码失败。
@@ -301,14 +311,16 @@ const loadPdf = async () => {
       standardFontDataUrl: '/standard_fonts/',
       // CNKI 等 PDF 常用 JBIG2 图像；pdf.js 6 未配置 WASM 时会直接忽略 XObject，表现为整页白屏。
       wasmUrl: '/wasm/',
-    }).promise
+    })
+    const doc = await withTimeout(loadingTask.promise, 30000, 'PDF 响应超时，请检查文件或稍后重试', () => loadingTask?.destroy())
+    loadingTask = null
     pdfDoc = doc
     numPages.value = doc.numPages
     pageList.value = Array.from({ length: doc.numPages }, (_, i) => i + 1)
     // 只读取第一页尺寸作为默认值；实际渲染时惰性修正，避免导入 400+ 页对象。
     const HEIGHTS = {}
     const WIDTHS = {}
-    const firstPage = await doc.getPage(1)
+    const firstPage = await withTimeout(doc.getPage(1), 12000, 'PDF 首页解析超时')
     const firstViewport = firstPage.getViewport({ scale: 1 })
     for (let i = 1; i <= doc.numPages; i++) {
       HEIGHTS[i] = firstViewport.height
@@ -398,7 +410,12 @@ const renderVisible = async () => {
     if (!want.has(Number(p))) clearPage(Number(p))
   }
   const generation = renderGeneration
-  await Promise.all([...want].map(p => rendered.value[p] ? null : renderPage(Number(p), generation)))
+  // 单队列逐页渲染，避免复杂扫描页同时占用数个 20–30MB canvas 并卡死主线程。
+  for (const p of want) {
+    if (rendered.value[p]) continue
+    renderQueue = renderQueue.catch(() => {}).then(() => renderPage(Number(p), generation))
+    await renderQueue
+  }
 }
 
 const renderPage = async (p, generation = renderGeneration) => {
@@ -406,7 +423,7 @@ const renderPage = async (p, generation = renderGeneration) => {
   pendingRenders.add(p)
   try {
     if (renderTasks[p]) { try { renderTasks[p].cancel() } catch {} delete renderTasks[p] }
-    const pdfPage = await pdfDoc.getPage(p)
+    const pdfPage = await withTimeout(pdfDoc.getPage(p), 12000, `第 ${p} 页解析超时`)
     if (generation !== renderGeneration) return
     const vp1 = pdfPage.getViewport({ scale: 1 })
     if (baseWidths[p] !== vp1.width || baseHeights[p] !== vp1.height) {
@@ -417,9 +434,9 @@ const renderPage = async (p, generation = renderGeneration) => {
     const vp = pdfPage.getViewport({ scale: scale.value })
     const cv = canvasRefs[p]
     if (!cv) return
-    // 单页像素预算约 8MP（RGBA 约 32MB），避免扫描件/高倍缩放造成内存尖峰。
+    // 单页像素预算约 5MP（RGBA 约 20MB），为复杂扫描页和文本层留出内存。
     const cssPixels = Math.max(1, vp.width * vp.height)
-    const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(8_000_000 / cssPixels)))
+    const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 1.5, Math.sqrt(5_000_000 / cssPixels)))
     cv.width = Math.floor(vp.width * dpr)
     cv.height = Math.floor(vp.height * dpr)
     cv.style.width = Math.floor(vp.width) + 'px'
@@ -428,7 +445,7 @@ const renderPage = async (p, generation = renderGeneration) => {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     const task = pdfPage.render({ canvasContext: ctx, viewport: vp })
     renderTasks[p] = task
-    await task.promise
+    await withTimeout(task.promise, 20000, `第 ${p} 页渲染超时`, () => task.cancel())
     if (generation !== renderGeneration) return
     delete renderTasks[p]
     const tl = textRefs[p]
@@ -437,10 +454,16 @@ const renderPage = async (p, generation = renderGeneration) => {
       tl.style.width = Math.floor(vp.width) + 'px'
       tl.style.height = Math.floor(vp.height) + 'px'
       tl.innerHTML = ''
-      const textContent = await pdfPage.getTextContent()
-      if (generation !== renderGeneration) return
-      const tlInstance = new pdfjsLib.TextLayer({ textContentSource: textContent, container: tl, viewport: vp })
-      await tlInstance.render()
+      try {
+        const textContent = await withTimeout(pdfPage.getTextContent(), 8000, `第 ${p} 页文字层解析超时`)
+        if (generation !== renderGeneration) return
+        const tlInstance = new pdfjsLib.TextLayer({ textContentSource: textContent, container: tl, viewport: vp })
+        await withTimeout(tlInstance.render(), 8000, `第 ${p} 页文字层渲染超时`)
+      } catch (textError) {
+        // 图像页已经可读；文字层异常只降级选择/检索能力，不把整页判为失败。
+        console.warn('text layer degraded', p, textError)
+        tl.innerHTML = ''
+      }
       // 扫描页没有 PDF 文本层：仅为当前渲染页按需取得 OCR 坐标，不加载整本文档。
       if (!tl.querySelector('span') && props.bookId && p === page.value && generation === renderGeneration) {
         await renderOcrTextLayer(p, tl, generation)
@@ -971,6 +994,7 @@ onBeforeUnmount(() => {
   clearTimeout(zoomTimer)
   clearTimeout(saveTimer)
   if (scrollFrame) cancelAnimationFrame(scrollFrame)
+  if (loadingTask) { try { loadingTask.destroy() } catch {} loadingTask = null }
   for (const p of Object.keys(rendered.value)) clearPage(Number(p))
   if (pdfDoc) { try { pdfDoc.destroy() } catch {} }
 })

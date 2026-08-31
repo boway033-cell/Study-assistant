@@ -22,7 +22,7 @@
 
       <div v-if="!currentQuiz" class="quiz-list">
         <el-alert v-if="!quizzes.length" type="info" :closable="false" show-icon
-          title="暂无题目：点击右上角「AI 生成题目」，选择书籍后让 DeepSeek 分析教材内容自动生成"
+          title="暂无题目：点击右上角「AI 生成题目」，选择书籍后让已配置模型分析教材内容并自动生成"
           style="margin-bottom: 12px" />
         <el-table :data="quizzes" v-loading="loading" empty-text="暂无题目（点右上角 AI 生成）">
           <el-table-column prop="question" label="题目" min-width="200" show-overflow-tooltip />
@@ -89,7 +89,7 @@
     </el-card>
 
     <!-- AI 生成对话框 -->
-    <el-dialog v-model="showGen" title="🤖 AI 生成题目（DeepSeek 分析教材内容）" width="500px">
+    <el-dialog v-model="showGen" title="🤖 AI 生成题目（按通用生成模型路由）" width="500px">
       <el-form label-width="90px">
         <el-form-item label="选择书籍">
           <el-select v-model="genBook" placeholder="选择已解析完成的书籍" filterable remote :remote-method="searchBookOptions" :loading="booksLoading" style="width: 100%" @change="onGenBook">
@@ -104,7 +104,7 @@
         </el-form-item>
         <div v-if="genRunning" class="gen-progress">
           <el-progress :percentage="genProgress" :indeterminate="genProgress === 0" />
-          <div class="form-tip">🤖 {{ genStage }}（DeepSeek 正在分析教材原文）</div>
+          <div class="form-tip">🤖 {{ genStage }}（AI 正在分析教材原文）</div>
         </div>
       </el-form>
       <template #footer>

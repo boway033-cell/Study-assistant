@@ -93,6 +93,32 @@ def test_persisted_task_can_be_cancelled():
         db.close()
 
 
+def test_failed_import_task_can_be_explicitly_retried(monkeypatch):
+    from backend.app.core.database import SessionLocal
+    from backend.app.models import Book, ImportTask
+    from backend.app.worker import tasks
+
+    db = SessionLocal()
+    book = Book(title="Retry import", file_path="missing.pdf", file_type="pdf", status="failed",
+                error_msg="temporary failure")
+    db.add(book); db.flush()
+    original = ImportTask(id="import-explicit-retry", book_id=book.id, name="import", status="failed")
+    db.add(original); db.commit(); book_id = book.id
+    monkeypatch.setattr(tasks, "submit", lambda name, factory, book_id=0: tasks.TaskRecord(
+        id="reimport-explicit", book_id=book_id, status="pending"))
+    try:
+        result = tasks.retry_task(original.id)
+        db.expire_all()
+        assert result.id == "reimport-explicit"
+        assert db.get(Book, book_id).status == "pending"
+        assert db.get(Book, book_id).error_msg is None
+    finally:
+        db.query(ImportTask).filter(ImportTask.id == original.id).delete(synchronize_session=False)
+        db.commit()
+        db.query(Book).filter(Book.id == book_id).delete(synchronize_session=False)
+        db.commit(); db.close()
+
+
 def test_sqlite_online_backup_includes_wal_commits(tmp_path: Path):
     from backend.app.core.data_manager import _sqlite_backup
 

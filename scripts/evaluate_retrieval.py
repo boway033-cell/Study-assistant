@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT))
 from backend.app.services.rag.chunker import tokenize, tokenize_query  # noqa: E402
 from backend.app.services.rag.evaluation import compare_thresholds, evaluate_cases  # noqa: E402
 from backend.app.services.rag.reranker import rerank  # noqa: E402
+from backend.app.services.rag.retriever import explicitly_out_of_scope  # noqa: E402
 
 
 def build_search(corpus: list[dict]):
@@ -23,6 +24,8 @@ def build_search(corpus: list[dict]):
     by_id = {item["id"]: item for item in corpus}
 
     def search(query: str, limit: int) -> list[str]:
+        if explicitly_out_of_scope(query):
+            return []
         expression = tokenize_query(query)
         if not expression:
             return []
@@ -36,13 +39,31 @@ def build_search(corpus: list[dict]):
     return search
 
 
+def expand_cases(dataset: dict) -> list[dict]:
+    """展开紧凑的版本化评测声明；生成规则本身固定且不访问用户数据。"""
+    if dataset.get("cases"):
+        return list(dataset["cases"])
+    cases = []
+    for item in dataset.get("corpus", []):
+        for index, query in enumerate(item.get("queries", []), 1):
+            cases.append({"id": f"{item['id']}-q{index}", "query": query, "answerable": True,
+                          "relevant_ids": [item["id"]], "strata": item.get("strata", [])})
+    cases.extend(dataset.get("cross_cases", []))
+    for index, item in enumerate(dataset.get("unanswerable_queries", []), 1):
+        if isinstance(item, str):
+            item = {"query": item, "strata": ["unanswerable"]}
+        cases.append({"id": item.get("id") or f"none-q{index}", "query": item["query"],
+                      "answerable": False, "relevant_ids": [], "strata": item.get("strata", ["unanswerable"])})
+    return cases
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=Path, default=ROOT / "backend" / "eval" / "retrieval_v1.json")
+    parser.add_argument("--dataset", type=Path, default=ROOT / "backend" / "eval" / "retrieval_v2.json")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     dataset = json.loads(args.dataset.read_text(encoding="utf-8"))
-    report = {"dataset": dataset["version"], **evaluate_cases(dataset["cases"], build_search(dataset["corpus"]))}
+    report = {"dataset": dataset["version"], **evaluate_cases(expand_cases(dataset), build_search(dataset["corpus"]))}
     report["thresholds"] = compare_thresholds(report["metrics"], dataset["thresholds"])
     rendered = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:

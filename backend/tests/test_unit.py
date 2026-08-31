@@ -203,6 +203,81 @@ class TestLLMConfig:
         assert resolve_model("flash") == "deepseek-v4-flash"
         assert resolve_model("pro") == "deepseek-v4-pro"
 
+    def test_custom_provider_and_task_routing(self):
+        """自定义连接应能成为默认，并可由功能路由单独覆盖。"""
+        import json
+        from backend.app.models import Setting
+        from backend.app.services.llm import LLMRouter, load_llm_config
+
+        profiles = [{"id": "kimi-main", "name": "Kimi", "vendor": "kimi",
+                     "capability": "text", "protocol": "openai_chat",
+                     "base_url": "https://api.moonshot.cn/v1", "model": "kimi-k2.6"},
+                    {"id": "glm-research", "name": "智谱 GLM", "vendor": "zhipu",
+                     "capability": "text", "protocol": "openai_chat",
+                     "base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-5.2"}]
+        self._db.add_all([
+            Setting(key="compatible_provider_profiles", value=json.dumps(profiles)),
+            Setting(key="compatible_provider_key:kimi-main", value="sk-kimi-test"),
+            Setting(key="compatible_provider_key:glm-research", value="sk-glm-test"),
+            Setting(key="llm_provider_routing", value=json.dumps({
+                "default": "kimi-main", "tasks": {"research": "glm-research"}})),
+        ])
+        self._db.commit()
+
+        chat_cfg = load_llm_config(self._db, "chat")
+        research_cfg = load_llm_config(self._db, "research")
+        assert (chat_cfg["provider_id"], chat_cfg["model"]) == ("kimi-main", "kimi-k2.6")
+        assert (research_cfg["provider_id"], research_cfg["model"]) == ("glm-research", "glm-5.2")
+        assert LLMRouter.get("auto", chat_cfg).name == "kimi-main"
+
+    def test_native_protocol_adapters_are_selected(self):
+        from backend.app.services.llm import AnthropicMessagesProvider, GoogleGenerateProvider, LLMRouter
+
+        base = {"provider_id": "vendor", "provider_name": "Vendor", "api_key": "key",
+                "base_url": "https://example.com/v1", "model": "model"}
+        assert isinstance(LLMRouter.get(cfg={**base, "protocol": "anthropic_messages"}).providers[0],
+                          AnthropicMessagesProvider)
+        assert isinstance(LLMRouter.get(cfg={**base, "protocol": "google_generate"}).providers[0],
+                          GoogleGenerateProvider)
+
+    @pytest.mark.asyncio
+    async def test_router_falls_back_only_before_first_token(self, monkeypatch):
+        from backend.app.services.llm import LLMProvider, RoutedProvider
+
+        class Fake(LLMProvider):
+            def __init__(self, name, values, error=None): self.name, self.values, self.error = name, values, error
+            async def stream_chat(self, messages):
+                for value in self.values:
+                    yield value
+                if self.error:
+                    raise RuntimeError(self.error)
+
+        monkeypatch.setattr("backend.app.services.llm._record_usage", lambda *args, **kwargs: None)
+        provider = RoutedProvider([Fake("primary", [], "down"), Fake("backup", ["ok"])], "chat")
+        assert [value async for value in provider.stream_chat([{"role": "user", "content": "q"}])] == ["ok"]
+        provider = RoutedProvider([Fake("primary", ["partial"], "down"), Fake("backup", ["mixed"])], "chat")
+        with pytest.raises(RuntimeError, match="未执行降级"):
+            _ = [value async for value in provider.stream_chat([{"role": "user", "content": "q"}])]
+
+    def test_provider_settings_api_activates_saved_connection(self):
+        from backend.app.api.settings import (CompatibleProviderWrite, ProviderRoutingWrite,
+                                              list_compatible_providers, save_compatible_provider,
+                                              update_provider_routing)
+        from backend.app.services.llm import load_llm_config
+
+        saved = save_compatible_provider(CompatibleProviderWrite(
+            id="kimi-api", name="Kimi", vendor="kimi", capability="text",
+            protocol="openai_chat", base_url="https://api.moonshot.cn/v1",
+            model="kimi-k2.6", api_key="sk-kimi-api-test",
+        ), self._db)
+        update_provider_routing(ProviderRoutingWrite(
+            default_provider_id=saved["id"], task_routes={"research": saved["id"], "chat": ""},
+        ), self._db)
+        listing = list_compatible_providers(self._db)
+        assert listing["routing_locked"] is False
+        assert listing["default_text_provider"] == "kimi-api"
+        assert load_llm_config(self._db, "chat")["provider_id"] == "kimi-api"
+
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

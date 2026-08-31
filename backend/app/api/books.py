@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
@@ -30,7 +31,7 @@ from backend.app.schemas import (
 )
 from backend.app.services.rag import fts
 from backend.app.worker.import_task import run_import
-from backend.app.worker.tasks import cancel_task, get_task, submit
+from backend.app.worker.tasks import cancel_task, get_task, retry_task, submit
 
 router = APIRouter(prefix="/api", tags=["books"])
 
@@ -51,6 +52,15 @@ class TocReplaceReq(BaseModel):
 
 class TocRepairReq(BaseModel):
     apply: bool = False
+
+
+class HealthRepairReq(BaseModel):
+    issue_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class BookOrderReq(BaseModel):
+    book_ids: list[int] = Field(min_length=2, max_length=100)
+    shelf_id: int | None = None
 
 
 def _build_chapter_tree(chapters: list[Chapter]) -> list[ChapterNode]:
@@ -84,6 +94,10 @@ def list_books(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     shelf_id: int | None = Query(default=None),
+    sort_by: str = Query(
+        default="custom",
+        pattern="^(custom|newest|oldest|title_asc|title_desc|author_asc|year_desc|year_asc|last_read|progress_desc)$",
+    ),
     db: Session = Depends(get_db),
 ):
     stmt = select(Book)
@@ -112,7 +126,25 @@ def list_books(
     if shelf_id is not None:
         stmt = stmt.join(shelf_books, shelf_books.c.book_id == Book.id).where(shelf_books.c.shelf_id == shelf_id)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    books = db.scalars(stmt.order_by(Book.created_at.desc()).offset((page - 1) * page_size).limit(page_size)).all()
+    if sort_by in {"author_asc", "year_desc", "year_asc", "last_read", "progress_desc"}:
+        stmt = stmt.outerjoin(PaperProfile, PaperProfile.book_id == Book.id)
+    orderings = {
+        "newest": (Book.created_at.desc(), Book.id.desc()),
+        "oldest": (Book.created_at.asc(), Book.id.asc()),
+        "title_asc": (func.lower(Book.title).asc(), Book.id.asc()),
+        "title_desc": (func.lower(Book.title).desc(), Book.id.desc()),
+        "author_asc": (func.lower(func.coalesce(PaperProfile.authors, "")).asc(), func.lower(Book.title).asc()),
+        "year_desc": (func.coalesce(PaperProfile.published_year, -1).desc(), func.lower(Book.title).asc()),
+        "year_asc": (func.coalesce(PaperProfile.published_year, 9999).asc(), func.lower(Book.title).asc()),
+        "last_read": (PaperProfile.last_read_at.desc(), Book.created_at.desc()),
+        "progress_desc": (func.coalesce(PaperProfile.progress_page, 0).desc(), func.lower(Book.title).asc()),
+    }
+    if sort_by == "custom":
+        order_by = ((shelf_books.c.order_index.asc(), Book.id.asc()) if shelf_id is not None
+                    else (Book.library_order.asc(), Book.created_at.desc(), Book.id.desc()))
+    else:
+        order_by = orderings[sort_by]
+    books = db.scalars(stmt.order_by(*order_by).offset((page - 1) * page_size).limit(page_size)).all()
     book_ids = [book.id for book in books]
 
     # 只统计当前页，避免资料增长后每次列表请求扫描全库。
@@ -163,12 +195,269 @@ def list_books(
             reading_status=profiles[b.id].reading_status if b.id in profiles else "unread",
             favorite=bool(profiles[b.id].favorite) if b.id in profiles else False,
             progress_page=profiles[b.id].progress_page if b.id in profiles else 1,
+            library_order=b.library_order,
             shelf_ids=shelf_map.get(b.id, []),
             created_at=b.created_at,
         )
         for b in books
     ]
     return BookListResp(total=total, items=items)
+
+
+@router.put("/books/order")
+def reorder_books(req: BookOrderReq, db: Session = Depends(get_db)):
+    """重排全库或某个书架中的可见子集，并归一化整个范围的顺序。"""
+    requested = list(req.book_ids)
+    if len(requested) != len(set(requested)):
+        raise HTTPException(400, "排序列表中不能包含重复文献")
+
+    if req.shelf_id is not None:
+        from backend.app.models import Shelf
+
+        if not db.get(Shelf, req.shelf_id):
+            raise HTTPException(404, "书架不存在")
+        current = list(db.scalars(
+            select(shelf_books.c.book_id)
+            .where(shelf_books.c.shelf_id == req.shelf_id)
+            .order_by(shelf_books.c.order_index.asc(), shelf_books.c.book_id.asc())
+        ).all())
+    else:
+        current = list(db.scalars(
+            select(Book.id).order_by(Book.library_order.asc(), Book.created_at.desc(), Book.id.desc())
+        ).all())
+
+    requested_set = set(requested)
+    if not requested_set.issubset(set(current)):
+        raise HTTPException(400, "部分文献不属于当前排序范围")
+    positions = [index for index, book_id in enumerate(current) if book_id in requested_set]
+    reordered = list(current)
+    for position, book_id in zip(positions, requested, strict=True):
+        reordered[position] = book_id
+
+    if req.shelf_id is not None:
+        for index, book_id in enumerate(reordered):
+            db.execute(
+                update(shelf_books)
+                .where(shelf_books.c.shelf_id == req.shelf_id, shelf_books.c.book_id == book_id)
+                .values(order_index=index)
+            )
+    else:
+        for index, book_id in enumerate(reordered):
+            db.execute(update(Book).where(Book.id == book_id).values(library_order=index))
+    db.commit()
+    return {"book_ids": requested, "shelf_id": req.shelf_id, "updated": len(requested)}
+
+
+@router.get("/books/health")
+def knowledge_base_health(db: Session = Depends(get_db)):
+    """Explainable, read-only health audit for the personal knowledge base."""
+    from datetime import datetime, timezone
+    from backend.app.models import Annotation, EvidenceCard, KnowledgeNote
+
+    books = list(db.scalars(select(Book).order_by(Book.created_at.desc())).all())
+    if not books:
+        return {"score": 100, "book_count": 0, "healthy_book_count": 0, "issue_count": 0,
+                "categories": {}, "items": [], "checked_at": datetime.now(timezone.utc).isoformat()}
+    book_ids = [book.id for book in books]
+    chapter_counts = dict(db.execute(select(Chapter.book_id, func.count(Chapter.id))
+                                     .where(Chapter.book_id.in_(book_ids)).group_by(Chapter.book_id)).all())
+    chunk_stats = {book_id: {"chunks": int(count or 0), "chars": int(chars or 0), "replacement": int(replacement or 0)}
+                   for book_id, count, chars, replacement in db.execute(
+        select(Chunk.book_id, func.count(Chunk.id), func.sum(func.length(Chunk.content)),
+               func.sum(func.length(Chunk.content) - func.length(func.replace(Chunk.content, "�", ""))))
+        .where(Chunk.book_id.in_(book_ids)).group_by(Chunk.book_id)).all()}
+    profiles = {item.book_id: item for item in db.scalars(
+        select(PaperProfile).where(PaperProfile.book_id.in_(book_ids))).all()}
+    duplicate_hashes = {value for value, count in db.execute(
+        select(Book.file_hash, func.count(Book.id)).where(Book.file_hash.is_not(None))
+        .group_by(Book.file_hash).having(func.count(Book.id) > 1)).all() if value}
+    valid_books, totals = set(book_ids), {book.id: int(book.total_pages or 0) for book in books}
+    chapter_books = dict(db.execute(select(Chapter.id, Chapter.book_id)).all())
+    chunk_books = dict(db.execute(select(Chunk.id, Chunk.book_id)).all())
+    broken_anchors = {book.id: 0 for book in books}
+    broken_objects: dict[int, list[dict]] = {book.id: [] for book in books}
+    anchor_pattern = re.compile(r"^B(\d+)(?::CH(\d+))?(?::P(\d+)(?:-(\d+))?)?(?::C(\d+))?$")
+
+    def check_ref(raw, fallback_book_id: int, source: dict) -> None:
+        value = str(raw.get("ref") if isinstance(raw, dict) else raw or "").strip().strip("[]")
+        match = anchor_pattern.match(value)
+        if not match:
+            broken_anchors[fallback_book_id] = broken_anchors.get(fallback_book_id, 0) + 1
+            broken_objects.setdefault(fallback_book_id, []).append({**source, "ref": value, "reason": "来源锚点格式无效"})
+            return
+        ref_book, chapter_id, page_start, page_end, chunk_id = (int(item) if item else None for item in match.groups())
+        invalid = (ref_book not in valid_books
+                   or (chapter_id is not None and chapter_books.get(chapter_id) != ref_book)
+                   or (chunk_id is not None and chunk_books.get(chunk_id) != ref_book)
+                   or (page_start is not None and (page_start < 1 or (totals.get(ref_book, 0) and page_start > totals[ref_book])))
+                   or (page_end is not None and totals.get(ref_book, 0) and page_end > totals[ref_book]))
+        if invalid:
+            broken_anchors[fallback_book_id] = broken_anchors.get(fallback_book_id, 0) + 1
+            broken_objects.setdefault(fallback_book_id, []).append({**source, "ref": value, "reason": "来源对象已不存在或页码越界"})
+
+    for note in db.scalars(select(KnowledgeNote)).all():
+        try: refs = json.loads(note.source_refs_json or "[]")
+        except (TypeError, ValueError): refs = ["invalid-json"]
+        for ref in refs: check_ref(ref, note.book_id, {"type": "note", "id": note.id, "title": note.title,
+                                                       "action_path": f"/notes?noteId={note.id}"})
+    for card in db.scalars(select(EvidenceCard)).all():
+        try:
+            payload = json.loads(card.source_ref_json or "{}")
+            refs = payload.get("refs", []) if isinstance(payload, dict) else []
+        except (TypeError, ValueError): refs = ["invalid-json"]
+        for ref in refs: check_ref(ref, card.book_id, {"type": "evidence", "id": card.id, "title": card.title,
+                                                       "action_path": f"/knowledge-hub?record=evidence:{card.id}"})
+    book_map = {book.id: book for book in books}
+    for annotation in db.scalars(select(Annotation)).all():
+        invalid = annotation.status != "active" or annotation.page < 0
+        total = totals.get(annotation.book_id, 0)
+        if total and annotation.page > total:
+            invalid = True
+        if annotation.anchor_json:
+            try:
+                anchor = json.loads(annotation.anchor_json)
+                fingerprint = anchor.get("document_fingerprint") if isinstance(anchor, dict) else None
+                book = book_map.get(annotation.book_id)
+                if fingerprint and book and book.file_hash and fingerprint != book.file_hash:
+                    invalid = True
+            except (TypeError, ValueError):
+                invalid = True
+        if invalid:
+            broken_anchors[annotation.book_id] = broken_anchors.get(annotation.book_id, 0) + 1
+            broken_objects.setdefault(annotation.book_id, []).append({
+                "type": "annotation", "id": annotation.id, "title": (annotation.text or "批注")[:80],
+                "page": annotation.page, "reason": "批注位置或文档指纹失效",
+                "action_path": f"/reader/{annotation.book_id}?page={max(annotation.page, 1)}",
+            })
+
+    category_meta = {
+        "unparsed": ("未解析", "danger", "重新解析"),
+        "low_quality_ocr": ("疑似低质量 OCR", "warning", "重新解析并核对 OCR"),
+        "missing_toc": ("无目录", "warning", "打开阅读器修复目录"),
+        "missing_metadata": ("无元数据", "info", "补全文献档案"),
+        "duplicate": ("重复资料", "warning", "核对重复项"),
+        "broken_anchor": ("失效锚点", "danger", "核对来源回链"),
+    }
+    issues, affected_books = [], set()
+
+    def add_issue(book: Book, kind: str, reason: str, evidence: dict | None = None) -> None:
+        label, severity, action = category_meta[kind]
+        issues.append({"id": f"{kind}:{book.id}", "type": kind, "label": label,
+                       "severity": severity, "book_id": book.id, "book_title": book.title,
+                       "reason": reason, "evidence": evidence or {}, "action_label": action,
+                       "action_path": f"/reader/{book.id}" if kind in {"missing_toc", "broken_anchor"} else f"/library?bookId={book.id}"})
+        affected_books.add(book.id)
+
+    for book in books:
+        stats = chunk_stats.get(book.id, {"chunks": 0, "chars": 0, "replacement": 0})
+        if book.status != "ready" or stats["chunks"] == 0:
+            add_issue(book, "unparsed", book.error_msg or f"当前状态为 {book.status}，全文检索与知识功能不可可靠使用",
+                      {"status": book.status, "chunk_count": stats["chunks"]})
+        if book.status == "ready" and book.file_type == "pdf" and (book.total_pages or 0) >= 3:
+            avg_chars = round(stats["chars"] / max(book.total_pages or 1, 1), 1)
+            replacement_ratio = round(stats["replacement"] / max(stats["chars"], 1), 4)
+            if avg_chars < 180 or replacement_ratio > .01:
+                add_issue(book, "low_quality_ocr", "可检索文本过少或包含较多无法识别字符，需要对照原页抽查",
+                          {"average_chars_per_page": avg_chars, "replacement_ratio": replacement_ratio})
+        if book.status == "ready" and chapter_counts.get(book.id, 0) == 0:
+            add_issue(book, "missing_toc", "没有可导航目录，阅读、检索定位和汇报取材会退化", {"chapter_count": 0})
+        profile = profiles.get(book.id)
+        if not profile or not any([profile.authors, profile.journal, profile.published_year, profile.doi, profile.arxiv_id]):
+            add_issue(book, "missing_metadata", "缺少作者、来源、年份、DOI 或 arXiv 等基本档案字段")
+        if book.duplicate_of or (book.file_hash and book.file_hash in duplicate_hashes):
+            add_issue(book, "duplicate", "文件哈希或正文相似性提示该资料可能与库内记录重复",
+                      {"duplicate_of": book.duplicate_of, "file_hash": book.file_hash})
+        if broken_anchors.get(book.id, 0):
+            add_issue(book, "broken_anchor", f"发现 {broken_anchors[book.id]} 条无法回到当前原文的来源锚点",
+                      {"count": broken_anchors[book.id], "objects": broken_objects.get(book.id, [])[:50]})
+
+    categories = {kind: {"label": meta[0], "count": sum(item["type"] == kind for item in issues),
+                         "severity": meta[1]} for kind, meta in category_meta.items()}
+    # Normalize issue burden by library size without rounding small libraries' issues away.
+    # A budget of two maximum-severity issues per book maps to a zero score.
+    weights = {"danger": 1.0, "warning": 0.625, "info": 0.25}
+    issue_burden = sum(weights[item["severity"]] for item in issues)
+    score = max(0, round(100 * (1 - min(issue_burden / max(len(books) * 2, 1), 1))))
+    return {"score": score, "book_count": len(books), "healthy_book_count": len(books) - len(affected_books),
+            "issue_count": len(issues), "categories": categories, "items": issues,
+            "boundary": "健康检查为可解释的本地启发式审计；低质量 OCR 与重复资料需要人工核对后再处理。",
+            "checked_at": datetime.now(timezone.utc).isoformat()}
+
+
+@router.post("/books/health/repair", status_code=202)
+def repair_health_issues(req: HealthRepairReq, db: Session = Depends(get_db)):
+    """批量执行确定性安全修复；需判断/删除的项目只返回精确人工入口。"""
+    from backend.app.models import Annotation, ImportTask
+    from backend.app.api.annotations import repair_annotation
+
+    results = []
+    for issue_id in dict.fromkeys(req.issue_ids):
+        match = re.fullmatch(r"(unparsed|low_quality_ocr|missing_toc|missing_metadata|duplicate|broken_anchor):(\d+)", issue_id)
+        if not match:
+            results.append({"issue_id": issue_id, "status": "invalid", "message": "问题标识无效"})
+            continue
+        kind, raw_book_id = match.groups()
+        book_id = int(raw_book_id)
+        book = db.get(Book, book_id)
+        if not book:
+            results.append({"issue_id": issue_id, "status": "gone", "message": "资料已不存在"})
+            continue
+        if kind in {"unparsed", "low_quality_ocr"}:
+            active = db.scalar(select(ImportTask).where(
+                ImportTask.book_id == book_id,
+                ImportTask.status.in_(["pending", "running", "cancelling"]),
+            ).order_by(ImportTask.created_at.desc()))
+            if active:
+                results.append({"issue_id": issue_id, "status": "already_running", "task_id": active.id,
+                                "message": "已有解析任务在运行"})
+            else:
+                task = reparse_book(book_id, db)
+                results.append({"issue_id": issue_id, "status": "submitted", "task_id": task["task_id"],
+                                "message": "已提交重新解析"})
+            continue
+        if kind == "broken_anchor":
+            # A book-level broken-anchor issue can be caused by a note or evidence card.
+            # Only pass annotations that fail the same checks as the health audit to
+            # repair_annotation; touching every valid annotation would silently move
+            # healthy user highlights.
+            annotations = []
+            for annotation in db.scalars(select(Annotation).where(Annotation.book_id == book_id)).all():
+                invalid = annotation.status != "active" or annotation.page < 0
+                if book.total_pages and annotation.page > book.total_pages:
+                    invalid = True
+                if annotation.anchor_json:
+                    try:
+                        anchor = json.loads(annotation.anchor_json)
+                        fingerprint = anchor.get("document_fingerprint") if isinstance(anchor, dict) else None
+                        if fingerprint and book.file_hash and fingerprint != book.file_hash:
+                            invalid = True
+                    except (TypeError, ValueError):
+                        invalid = True
+                if invalid:
+                    annotations.append(annotation)
+            repaired = 0
+            unresolved = 0
+            for annotation in annotations:
+                before = annotation.status
+                try:
+                    response = repair_annotation(annotation.id, db)
+                    if response.status == "active":
+                        repaired += 1
+                    elif before != "active" or response.status == "needs_reanchor":
+                        unresolved += 1
+                except Exception:  # one damaged annotation must not abort the batch
+                    unresolved += 1
+            results.append({"issue_id": issue_id, "status": "repaired" if repaired else "manual_required",
+                            "repaired": repaired, "unresolved": unresolved,
+                            "action_path": f"/reader/{book_id}",
+                            "message": f"自动恢复 {repaired} 条批注；其余知识对象需人工核对"})
+            continue
+        action_path = f"/reader/{book_id}?toc=review" if kind == "missing_toc" else f"/library?bookId={book_id}"
+        results.append({"issue_id": issue_id, "status": "manual_required", "action_path": action_path,
+                        "message": {"missing_toc": "目录需要对照原页确认", "missing_metadata": "档案字段需要人工确认",
+                                    "duplicate": "重复资料涉及删除或合并，必须人工决定"}[kind]})
+    return {"results": results, "submitted": sum(item["status"] == "submitted" for item in results),
+            "repaired": sum(item["status"] == "repaired" for item in results)}
 
 
 @router.get("/books/{book_id}", response_model=BookDetailResp)
@@ -373,6 +662,7 @@ async def upload_book(file: UploadFile, db: Session = Depends(get_db)):
         file_size=file_size,
         file_hash=file_hash,
         status="pending",
+        library_order=(db.scalar(select(func.min(Book.library_order))) or 0) - 1,
     )
     db.add(book)
     db.commit()
@@ -415,6 +705,7 @@ async def upload_books_batch(files: list[UploadFile], db: Session = Depends(get_
                 file_size=file_size,
                 file_hash=file_hash,
                 status="pending",
+                library_order=(db.scalar(select(func.min(Book.library_order))) or 0) - 1,
             )
             db.add(book)
             db.commit()
@@ -709,6 +1000,16 @@ def cancel_task_status(task_id: str):
     }
 
 
+@router.post("/tasks/{task_id}/retry", status_code=202)
+def retry_task_status(task_id: str):
+    try:
+        record = retry_task(task_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"task_id": record.id, "status": record.status, "book_id": record.book_id,
+            "message": "已重新排队；OCR 页面缓存将继续复用"}
+
+
 @router.get("/tasks")
 def list_task_statuses(
     active_only: bool = Query(default=False),
@@ -838,6 +1139,14 @@ def review_book_toc(book_id: int, db: Session = Depends(get_db)):
                                .order_by(Chapter.order_index)).all())
     from backend.app.services.rag.toc_editor import review_chapters
     return review_chapters(chapters)
+
+
+@router.post("/maintenance/toc-rebuild-all", status_code=202)
+def rebuild_all_book_tocs():
+    """复用已落盘的版面证据重识别全库目录；每本目录均生成可恢复修订。"""
+    from backend.app.services.rag.toc_rebuild import rebuild_all_tocs
+    record = submit("toc-rebuild", rebuild_all_tocs)
+    return {"task_id": record.id}
 
 
 @router.post("/books/{book_id}/toc-auto-repair")

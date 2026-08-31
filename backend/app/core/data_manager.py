@@ -16,7 +16,7 @@ from backend.app.core.config import settings
 from backend.app.core.database import engine
 
 # 当前数据层版本（每次 schema 变更递增）
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # FTS 索引版本（FTS schema 变更时递增，init_fts 据此判断是否重建）
 FTS_INDEX_VERSION = 2

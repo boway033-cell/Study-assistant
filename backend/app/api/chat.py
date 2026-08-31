@@ -28,7 +28,7 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
     messages = retriever.build_prompt(req.question, sources)
 
     # 从数据库读取 LLM 配置（设置页改模型/填 Key 即时生效）
-    cfg = load_llm_config(db)
+    cfg = load_llm_config(db, "chat")
     if req.model is not None:
         cfg = {**cfg, "deepseek_model": req.model}
     provider = LLMRouter.get("auto", cfg)

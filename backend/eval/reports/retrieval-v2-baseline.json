@@ -1,0 +1,2249 @@
+{
+  "dataset": "retrieval-v2",
+  "metrics": {
+    "recall_at_1": 0.9706,
+    "recall_at_3": 0.9902,
+    "recall_at_5": 0.9902,
+    "mrr": 0.9853,
+    "citation_correct_rate": 0.9804,
+    "no_answer_rejection_rate": 1.0,
+    "case_count": 114,
+    "answerable_count": 102,
+    "unanswerable_count": 12
+  },
+  "by_stratum": {
+    "biology": {
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "citation_correct_rate": 1.0,
+      "no_answer_rejection_rate": null,
+      "case_count": 4,
+      "answerable_count": 4,
+      "unanswerable_count": 0
+    },
+    "biomedical": {
+      "recall_at_1": 0.95,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 0.975,
+      "citation_correct_rate": 0.95,
+      "no_answer_rejection_rate": null,
+      "case_count": 20,
+      "answerable_count": 20,
+      "unanswerable_count": 0
+    },
+    "computing": {
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "citation_correct_rate": 1.0,
+      "no_answer_rejection_rate": null,
+      "case_count": 12,
+      "answerable_count": 12,
+      "unanswerable_count": 0
+    },
+    "cross_document": {
+      "recall_at_1": 0.8333,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "citation_correct_rate": 1.0,
+      "no_answer_rejection_rate": null,
+      "case_count": 6,
+      "answerable_count": 6,
+      "unanswerable_count": 0
+    },
+    "digital_text": {
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "citation_correct_rate": 1.0,
+      "no_answer_rejection_rate": null,
+      "case_count": 32,
+      "answerable_count": 32,
+      "unanswerable_count": 0
+    },
+    "english": {
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "citation_correct_rate": 1.0,
+      "no_answer_rejection_rate": null,
+      "case_count": 16,
+      "answerable_count": 16,
+      "unanswerable_count": 0
+    },
+    "history": {
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "citation_correct_rate": 1.0,
+      "no_answer_rejection_rate": null,
+      "case_count": 4,
+      "answerable_count": 4,
+      "unanswerable_count": 0
+    },
+    "humanities": {
+      "recall_at_1": 0.94,
+      "recall_at_3": 0.96,
+      "recall_at_5": 0.96,
+      "mrr": 0.96,
+      "citation_correct_rate": 0.96,
+      "no_answer_rejection_rate": null,
+      "case_count": 25,
+      "answerable_count": 25,
+      "unanswerable_count": 0
+    },
+    "literature": {
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "citation_correct_rate": 1.0,
+      "no_answer_rejection_rate": null,
+      "case_count": 8,
+      "answerable_count": 8,
+      "unanswerable_count": 0
+    },
+    "methods": {
+      "recall_at_1": 0.94,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 0.98,
+      "citation_correct_rate": 0.96,
+      "no_answer_rejection_rate": null,
+      "case_count": 25,
+      "answerable_count": 25,
+      "unanswerable_count": 0
+    },
+    "ocr": {
+      "recall_at_1": 0.9375,
+      "recall_at_3": 0.9375,
+      "recall_at_5": 0.9375,
+      "mrr": 0.9375,
+      "citation_correct_rate": 0.9375,
+      "no_answer_rejection_rate": null,
+      "case_count": 16,
+      "answerable_count": 16,
+      "unanswerable_count": 0
+    },
+    "qualitative": {
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "citation_correct_rate": 1.0,
+      "no_answer_rejection_rate": null,
+      "case_count": 4,
+      "answerable_count": 4,
+      "unanswerable_count": 0
+    },
+    "quantitative": {
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "citation_correct_rate": 1.0,
+      "no_answer_rejection_rate": null,
+      "case_count": 12,
+      "answerable_count": 12,
+      "unanswerable_count": 0
+    },
+    "social_science": {
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0,
+      "citation_correct_rate": 1.0,
+      "no_answer_rejection_rate": null,
+      "case_count": 20,
+      "answerable_count": 20,
+      "unanswerable_count": 0
+    },
+    "unanswerable": {
+      "recall_at_1": null,
+      "recall_at_3": null,
+      "recall_at_5": null,
+      "mrr": null,
+      "citation_correct_rate": null,
+      "no_answer_rejection_rate": 1.0,
+      "case_count": 12,
+      "answerable_count": 0,
+      "unanswerable_count": 12
+    }
+  },
+  "cases": [
+    {
+      "id": "soc-causal-q1",
+      "query": "双重差分的关键假设是什么",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "soc-causal"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-causal-q2",
+      "query": "政策前后处理组对照组比较方法",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "soc-causal",
+        "ocr-table",
+        "cross-triangulation",
+        "cs-binary",
+        "soc-qualitative"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-causal-q3",
+      "query": "平行趋势用于哪种因果识别",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "soc-causal",
+        "ocr-ecology",
+        "soc-validity"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-causal-q4",
+      "query": "如何识别平均处理效应的DID方法",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "soc-causal",
+        "cross-triangulation",
+        "ocr-table",
+        "bio-effect",
+        "soc-qualitative"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-qualitative-q1",
+      "query": "质性访谈如何说明研究者位置",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "qualitative"
+      ],
+      "retrieved_ids": [
+        "soc-qualitative",
+        "hum-context",
+        "math-clt",
+        "bio-observational"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-qualitative-q2",
+      "query": "编码过程和资料饱和度需要怎样报告",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "qualitative"
+      ],
+      "retrieved_ids": [
+        "soc-qualitative",
+        "bio-reproducibility"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-qualitative-q3",
+      "query": "质性研究为什么处理反例",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "qualitative"
+      ],
+      "retrieved_ids": [
+        "soc-qualitative",
+        "hum-context",
+        "ocr-table",
+        "soc-causal",
+        "bio-observational"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-qualitative-q4",
+      "query": "访谈研究的抽样与反身性要求",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "qualitative"
+      ],
+      "retrieved_ids": [
+        "soc-qualitative",
+        "math-lagrange",
+        "hum-context",
+        "cs-binary",
+        "bio-observational"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-governance-q1",
+      "query": "协同治理有哪些参与主体",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "soc-governance"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-governance-q2",
+      "query": "制度化协商如何解决公共问题",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "soc-governance",
+        "hum-context",
+        "cross-triangulation",
+        "ocr-admin"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-governance-q3",
+      "query": "政府社会组织公众共同治理概念",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "soc-governance",
+        "hum-context"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-governance-q4",
+      "query": "相互依赖条件下的公共治理模式",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "soc-governance",
+        "ocr-admin"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-validity-q1",
+      "query": "内部效度关注什么",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "soc-validity",
+        "ocr-admin"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-validity-q2",
+      "query": "外部效度与结论推广有什么关系",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "soc-validity",
+        "ocr-admin"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-validity-q3",
+      "query": "因果可信度和推广能力分别是什么",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "soc-validity",
+        "cross-triangulation"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "soc-validity-q4",
+      "query": "研究结论推广到其他情境的效度",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "soc-validity",
+        "hum-context",
+        "soc-qualitative",
+        "hum-narrator",
+        "bio-observational"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-close-reading-q1",
+      "query": "文本细读依据哪些语言细节",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "literature"
+      ],
+      "retrieved_ids": [
+        "hum-close-reading",
+        "hum-context"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-close-reading-q2",
+      "query": "叙述视角和修辞结构如何参与阐释",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "literature"
+      ],
+      "retrieved_ids": [
+        "hum-close-reading",
+        "cross-triangulation",
+        "ocr-poetry",
+        "hum-narrator"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-close-reading-q3",
+      "query": "文学解释为什么要受具体文本约束",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "literature"
+      ],
+      "retrieved_ids": [
+        "hum-close-reading",
+        "cross-triangulation",
+        "ocr-admin"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-close-reading-q4",
+      "query": "从措辞意象句法出发的研究方法",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "literature"
+      ],
+      "retrieved_ids": [
+        "hum-close-reading",
+        "cross-triangulation",
+        "hum-context",
+        "soc-qualitative",
+        "bio-observational"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-narrator-q1",
+      "query": "什么是不可靠叙述者",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "literature"
+      ],
+      "retrieved_ids": [
+        "hum-narrator",
+        "hum-close-reading"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-narrator-q2",
+      "query": "叙述者陈述与作品事实的距离",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "literature"
+      ],
+      "retrieved_ids": [
+        "hum-narrator",
+        "hum-context",
+        "hum-close-reading"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-narrator-q3",
+      "query": "如何通过其他人物证词识别不可靠叙述",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "literature"
+      ],
+      "retrieved_ids": [
+        "hum-narrator",
+        "soc-causal",
+        "soc-validity",
+        "hum-close-reading",
+        "ocr-ecology"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-narrator-q4",
+      "query": "隐含作者规范与叙述可信度",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "literature"
+      ],
+      "retrieved_ids": [
+        "hum-narrator",
+        "cross-triangulation",
+        "soc-validity",
+        "hum-variants",
+        "hum-close-reading"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-context-q1",
+      "query": "历史语境研究如何避免时代错置",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "history"
+      ],
+      "retrieved_ids": [
+        "hum-context",
+        "soc-qualitative",
+        "ocr-poetry",
+        "bio-observational"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-context-q2",
+      "query": "出版制度和读者共同体为何重要",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "history"
+      ],
+      "retrieved_ids": [
+        "hum-context",
+        "soc-governance"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-context-q3",
+      "query": "把后来概念投射到过去有什么问题",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "history"
+      ],
+      "retrieved_ids": [
+        "hum-context",
+        "cross-triangulation",
+        "soc-governance"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-context-q4",
+      "query": "作品与同时代文献网络的关系",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "history"
+      ],
+      "retrieved_ids": [
+        "hum-context",
+        "bio-observational",
+        "hum-narrator"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-variants-q1",
+      "query": "版本校勘需要区分哪些改动",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "hum-variants"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-variants-q2",
+      "query": "作者修订与编者干预如何区分",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "hum-variants",
+        "hum-narrator"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-variants-q3",
+      "query": "异文底本和改动层次是什么",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "hum-variants"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "hum-variants-q4",
+      "query": "传抄错误与排印差异的校勘",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "hum-variants",
+        "bio-effect"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-randomized-q1",
+      "query": "随机分配如何降低混杂",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "bio-randomized",
+        "bio-observational",
+        "math-clt"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-randomized-q2",
+      "query": "分配隐藏防止什么偏倚",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "bio-randomized"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-randomized-q3",
+      "query": "盲法减少哪些偏倚",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "bio-randomized"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-randomized-q4",
+      "query": "随机对照试验的三个偏倚控制环节",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "bio-randomized",
+        "ocr-table",
+        "math-clt",
+        "soc-causal"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-effect-q1",
+      "query": "效应量与置信区间分别说明什么",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "bio-effect",
+        "ocr-table",
+        "math-lagrange",
+        "soc-qualitative",
+        "soc-causal"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-effect-q2",
+      "query": "统计显著是否等于临床意义",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "bio-effect",
+        "math-lagrange"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-effect-q3",
+      "query": "如何表达估计不确定性",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "bio-effect",
+        "ocr-ecology"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-effect-q4",
+      "query": "差异大小和生物学意义如何判断",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "bio-effect",
+        "hum-variants"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-reproducibility-q1",
+      "query": "可重复性报告要提供哪些材料",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "bio-reproducibility"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-reproducibility-q2",
+      "query": "实验批次和排除标准为何要公开",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "bio-reproducibility",
+        "math-clt"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-reproducibility-q3",
+      "query": "原始数据分析代码与预注册",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "bio-reproducibility",
+        "cross-triangulation",
+        "cs-binary"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-reproducibility-q4",
+      "query": "试剂来源如何影响实验复现",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "bio-reproducibility",
+        "cross-triangulation",
+        "bio-observational"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-observational-q1",
+      "query": "观察性研究的混杂变量是什么",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "bio-observational",
+        "math-lagrange",
+        "hum-context",
+        "soc-qualitative",
+        "bio-randomized"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-observational-q2",
+      "query": "倾向评分能否消除未测量混杂",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "bio-observational",
+        "bio-randomized"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-observational-q3",
+      "query": "什么变量同时影响暴露与结局",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "bio-observational",
+        "hum-context",
+        "cross-triangulation",
+        "math-lagrange",
+        "math-clt"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "bio-observational-q4",
+      "query": "倾向评分的证据边界",
+      "answerable": true,
+      "strata": [
+        "biomedical",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "cross-triangulation",
+        "bio-observational"
+      ],
+      "recall_at_1": 0.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 0.5,
+      "citation_correct": false
+    },
+    {
+      "id": "math-lagrange-q1",
+      "query": "拉格朗日中值定理的条件",
+      "answerable": true,
+      "strata": [
+        "quantitative",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "math-lagrange",
+        "soc-governance",
+        "math-clt"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "math-lagrange-q2",
+      "query": "闭区间连续开区间可导的定理",
+      "answerable": true,
+      "strata": [
+        "quantitative",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "math-lagrange",
+        "ocr-table",
+        "math-clt",
+        "cs-binary",
+        "bio-effect"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "math-lagrange-q3",
+      "query": "函数增量等于某点导数乘自变量增量",
+      "answerable": true,
+      "strata": [
+        "quantitative",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "math-lagrange",
+        "bio-observational",
+        "math-clt"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "math-lagrange-q4",
+      "query": "中值定理保证存在什么点",
+      "answerable": true,
+      "strata": [
+        "quantitative",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "math-lagrange",
+        "hum-narrator",
+        "math-clt"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "math-clt-q1",
+      "query": "中心极限定理说明什么",
+      "answerable": true,
+      "strata": [
+        "quantitative",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "math-clt",
+        "math-lagrange",
+        "soc-qualitative"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "math-clt-q2",
+      "query": "随机变量之和为何趋近正态分布",
+      "answerable": true,
+      "strata": [
+        "quantitative",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "math-clt",
+        "math-lagrange",
+        "bio-randomized",
+        "bio-observational"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "math-clt-q3",
+      "query": "独立同分布变量标准化后的极限",
+      "answerable": true,
+      "strata": [
+        "quantitative",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "math-clt",
+        "math-lagrange",
+        "bio-reproducibility",
+        "bio-observational"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "math-clt-q4",
+      "query": "依分布收敛到正态分布的定理",
+      "answerable": true,
+      "strata": [
+        "quantitative",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "math-clt",
+        "math-lagrange"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cs-binary-q1",
+      "query": "二分查找要求什么前提",
+      "answerable": true,
+      "strata": [
+        "computing",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "cs-binary",
+        "math-lagrange"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cs-binary-q2",
+      "query": "每次把搜索区间缩小一半的算法",
+      "answerable": true,
+      "strata": [
+        "computing",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "cs-binary",
+        "math-lagrange",
+        "ocr-table",
+        "cs-bfs",
+        "bio-effect"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cs-binary-q3",
+      "query": "有序数据O(log n)查找",
+      "answerable": true,
+      "strata": [
+        "computing",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "cs-binary",
+        "cross-triangulation",
+        "bio-reproducibility"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cs-binary-q4",
+      "query": "二分查找时间复杂度",
+      "answerable": true,
+      "strata": [
+        "computing",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "cs-binary"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cs-bfs-q1",
+      "query": "广度优先搜索使用什么数据结构",
+      "answerable": true,
+      "strata": [
+        "computing",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "cs-bfs",
+        "cs-binary",
+        "cross-triangulation",
+        "ocr-poetry",
+        "hum-close-reading"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cs-bfs-q2",
+      "query": "无权图最短路径如何求",
+      "answerable": true,
+      "strata": [
+        "computing",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "cs-bfs"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cs-bfs-q3",
+      "query": "队列逐层访问图顶点的算法",
+      "answerable": true,
+      "strata": [
+        "computing",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "cs-bfs"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cs-bfs-q4",
+      "query": "BFS得到哪种最短路径",
+      "answerable": true,
+      "strata": [
+        "computing",
+        "digital_text"
+      ],
+      "retrieved_ids": [
+        "cs-bfs"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-admin-q1",
+      "query": "行政监督包括哪两类",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-admin",
+        "bio-reproducibility"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-admin-q2",
+      "query": "内部监督和外部监督的目标",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-admin",
+        "soc-validity"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-admin-q3",
+      "query": "约束行政权力提升公共责任",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-admin",
+        "hum-close-reading",
+        "soc-governance"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-admin-q4",
+      "query": "扫描资料中的行政监督定义",
+      "answerable": true,
+      "strata": [
+        "social_science",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-admin",
+        "soc-qualitative"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-ecology-q1",
+      "query": "样方法如何调查植物群落",
+      "answerable": true,
+      "strata": [
+        "biology",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-ecology",
+        "cross-triangulation"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-ecology-q2",
+      "query": "固定面积样方记录哪些指标",
+      "answerable": true,
+      "strata": [
+        "biology",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-ecology",
+        "hum-variants"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-ecology-q3",
+      "query": "植物种类个体数量和盖度",
+      "answerable": true,
+      "strata": [
+        "biology",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-ecology"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-ecology-q4",
+      "query": "估计群落组成的样方调查",
+      "answerable": true,
+      "strata": [
+        "biology",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-ecology",
+        "bio-effect"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-poetry-q1",
+      "query": "诗歌意象是否只是孤立物象",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-poetry",
+        "hum-close-reading"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-poetry-q2",
+      "query": "意象承载情感记忆文化联想",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-poetry",
+        "hum-close-reading"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-poetry-q3",
+      "query": "语境中的审美结构是什么",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-poetry",
+        "hum-context",
+        "hum-close-reading"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-poetry-q4",
+      "query": "扫描诗学资料如何定义意象",
+      "answerable": true,
+      "strata": [
+        "humanities",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "soc-qualitative",
+        "hum-close-reading"
+      ],
+      "recall_at_1": 0.0,
+      "recall_at_3": 0.0,
+      "recall_at_5": 0.0,
+      "reciprocal_rank": 0.0,
+      "citation_correct": false
+    },
+    {
+      "id": "ocr-table-q1",
+      "query": "处理组与对照组均值差是多少",
+      "answerable": true,
+      "strata": [
+        "quantitative",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-table",
+        "soc-causal",
+        "soc-qualitative",
+        "bio-randomized"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-table-q2",
+      "query": "表2的处理组均值",
+      "answerable": true,
+      "strata": [
+        "quantitative",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-table",
+        "soc-causal",
+        "soc-qualitative"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-table-q3",
+      "query": "百分之九十五置信区间范围",
+      "answerable": true,
+      "strata": [
+        "quantitative",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-table",
+        "bio-effect"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "ocr-table-q4",
+      "query": "对照组均值15.1对应什么结果",
+      "answerable": true,
+      "strata": [
+        "quantitative",
+        "ocr"
+      ],
+      "retrieved_ids": [
+        "ocr-table",
+        "soc-causal",
+        "cross-triangulation",
+        "bio-randomized"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-rag-q1",
+      "query": "What grounds retrieval-augmented generation responses",
+      "answerable": true,
+      "strata": [
+        "english",
+        "computing"
+      ],
+      "retrieved_ids": [
+        "en-rag"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-rag-q2",
+      "query": "RAG should preserve which links",
+      "answerable": true,
+      "strata": [
+        "english",
+        "computing"
+      ],
+      "retrieved_ids": [
+        "en-rag"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-rag-q3",
+      "query": "retrieved source passages and model responses",
+      "answerable": true,
+      "strata": [
+        "english",
+        "computing"
+      ],
+      "retrieved_ids": [
+        "en-rag",
+        "en-bias",
+        "en-metaphor"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-rag-q4",
+      "query": "citation links in retrieval augmented generation",
+      "answerable": true,
+      "strata": [
+        "english",
+        "computing"
+      ],
+      "retrieved_ids": [
+        "en-rag",
+        "en-bias"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-bias-q1",
+      "query": "What is selection bias",
+      "answerable": true,
+      "strata": [
+        "english",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "en-bias",
+        "en-control"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-bias-q2",
+      "query": "analytic sample inclusion exposure outcome",
+      "answerable": true,
+      "strata": [
+        "english",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "en-bias",
+        "en-control"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-bias-q3",
+      "query": "When inclusion depends on exposure and outcome",
+      "answerable": true,
+      "strata": [
+        "english",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "en-bias",
+        "en-control",
+        "en-rag"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-bias-q4",
+      "query": "definition of sample selection bias",
+      "answerable": true,
+      "strata": [
+        "english",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "en-bias",
+        "en-metaphor"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-metaphor-q1",
+      "query": "What does a conceptual metaphor map",
+      "answerable": true,
+      "strata": [
+        "english",
+        "humanities"
+      ],
+      "retrieved_ids": [
+        "en-metaphor",
+        "en-control"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-metaphor-q2",
+      "query": "source domain and target domain",
+      "answerable": true,
+      "strata": [
+        "english",
+        "humanities"
+      ],
+      "retrieved_ids": [
+        "en-metaphor",
+        "en-rag",
+        "en-bias"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-metaphor-q3",
+      "query": "metaphor shapes patterns of inference",
+      "answerable": true,
+      "strata": [
+        "english",
+        "humanities"
+      ],
+      "retrieved_ids": [
+        "en-metaphor"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-metaphor-q4",
+      "query": "why metaphor is not merely decoration",
+      "answerable": true,
+      "strata": [
+        "english",
+        "humanities"
+      ],
+      "retrieved_ids": [
+        "en-metaphor",
+        "en-control"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-control-q1",
+      "query": "What is a negative control",
+      "answerable": true,
+      "strata": [
+        "english",
+        "biomedical"
+      ],
+      "retrieved_ids": [
+        "en-control",
+        "en-metaphor"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-control-q2",
+      "query": "detect residual confounding with controls",
+      "answerable": true,
+      "strata": [
+        "english",
+        "biomedical"
+      ],
+      "retrieved_ids": [
+        "en-control"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-control-q3",
+      "query": "exposure expected not to be causally affected",
+      "answerable": true,
+      "strata": [
+        "english",
+        "biomedical"
+      ],
+      "retrieved_ids": [
+        "en-control",
+        "en-bias",
+        "en-rag"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "en-control-q4",
+      "query": "negative control and systematic error",
+      "answerable": true,
+      "strata": [
+        "english",
+        "biomedical"
+      ],
+      "retrieved_ids": [
+        "en-control",
+        "en-rag",
+        "en-bias"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cross-triangulation-q1",
+      "query": "证据三角互证如何处理不一致",
+      "answerable": true,
+      "strata": [
+        "cross_document",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "cross-triangulation",
+        "ocr-table",
+        "soc-causal",
+        "soc-qualitative"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cross-triangulation-q2",
+      "query": "不同方法数据来源如何并置",
+      "answerable": true,
+      "strata": [
+        "cross_document",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "cross-triangulation",
+        "bio-reproducibility",
+        "cs-binary"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cross-triangulation-q3",
+      "query": "一致结果怎样增强可信度",
+      "answerable": true,
+      "strata": [
+        "cross_document",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "cross-triangulation",
+        "soc-validity"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cross-triangulation-q4",
+      "query": "三角互证暴露什么解释问题",
+      "answerable": true,
+      "strata": [
+        "cross_document",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "cross-triangulation",
+        "hum-close-reading",
+        "soc-governance",
+        "bio-observational"
+      ],
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cross-causal-validity",
+      "query": "因果研究既要控制混杂又要说明结论推广边界",
+      "answerable": true,
+      "strata": [
+        "cross_document",
+        "methods"
+      ],
+      "retrieved_ids": [
+        "soc-validity",
+        "bio-observational",
+        "soc-qualitative",
+        "cross-triangulation",
+        "hum-context"
+      ],
+      "recall_at_1": 0.5,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "cross-interpretation",
+      "query": "文学解释如何同时依靠文本细节与历史语境",
+      "answerable": true,
+      "strata": [
+        "cross_document",
+        "humanities"
+      ],
+      "retrieved_ids": [
+        "hum-context",
+        "hum-close-reading",
+        "cross-triangulation",
+        "bio-observational"
+      ],
+      "recall_at_1": 0.5,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "reciprocal_rank": 1.0,
+      "citation_correct": true
+    },
+    {
+      "id": "none-q1",
+      "query": "火星土壤种植马铃薯的最佳肥料配方",
+      "answerable": false,
+      "strata": [
+        "unanswerable"
+      ],
+      "retrieved_ids": [],
+      "refused": true
+    },
+    {
+      "id": "none-q2",
+      "query": "量子色动力学渐近自由的三圈推导",
+      "answerable": false,
+      "strata": [
+        "unanswerable"
+      ],
+      "retrieved_ids": [],
+      "refused": true
+    },
+    {
+      "id": "none-q3",
+      "query": "明代某县每年精确降雨量",
+      "answerable": false,
+      "strata": [
+        "unanswerable"
+      ],
+      "retrieved_ids": [],
+      "refused": true
+    },
+    {
+      "id": "none-q4",
+      "query": "未上传小说的最终结局",
+      "answerable": false,
+      "strata": [
+        "unanswerable"
+      ],
+      "retrieved_ids": [],
+      "refused": true
+    },
+    {
+      "id": "none-q5",
+      "query": "特定患者下周血糖数值",
+      "answerable": false,
+      "strata": [
+        "unanswerable"
+      ],
+      "retrieved_ids": [],
+      "refused": true
+    },
+    {
+      "id": "none-q6",
+      "query": "2027年某公司股票价格",
+      "answerable": false,
+      "strata": [
+        "unanswerable"
+      ],
+      "retrieved_ids": [],
+      "refused": true
+    },
+    {
+      "id": "none-q7",
+      "query": "某未收录药物的最佳剂量",
+      "answerable": false,
+      "strata": [
+        "unanswerable"
+      ],
+      "retrieved_ids": [],
+      "refused": true
+    },
+    {
+      "id": "none-q8",
+      "query": "海王星地下海洋的盐度",
+      "answerable": false,
+      "strata": [
+        "unanswerable"
+      ],
+      "retrieved_ids": [],
+      "refused": true
+    },
+    {
+      "id": "none-q9",
+      "query": "未提供档案中的作者身份证号码",
+      "answerable": false,
+      "strata": [
+        "unanswerable"
+      ],
+      "retrieved_ids": [],
+      "refused": true
+    },
+    {
+      "id": "none-q10",
+      "query": "不存在实验的原始测序数据",
+      "answerable": false,
+      "strata": [
+        "unanswerable"
+      ],
+      "retrieved_ids": [],
+      "refused": true
+    },
+    {
+      "id": "none-q11",
+      "query": "某城市明天逐分钟交通流量",
+      "answerable": false,
+      "strata": [
+        "unanswerable"
+      ],
+      "retrieved_ids": [],
+      "refused": true
+    },
+    {
+      "id": "none-q12",
+      "query": "未上传访谈对象的真实姓名",
+      "answerable": false,
+      "strata": [
+        "unanswerable"
+      ],
+      "retrieved_ids": [],
+      "refused": true
+    }
+  ],
+  "thresholds": {
+    "passed": true,
+    "checks": {
+      "recall_at_1": {
+        "value": 0.9706,
+        "minimum": 0.78,
+        "passed": true
+      },
+      "recall_at_3": {
+        "value": 0.9902,
+        "minimum": 0.9,
+        "passed": true
+      },
+      "recall_at_5": {
+        "value": 0.9902,
+        "minimum": 0.95,
+        "passed": true
+      },
+      "mrr": {
+        "value": 0.9853,
+        "minimum": 0.82,
+        "passed": true
+      },
+      "citation_correct_rate": {
+        "value": 0.9804,
+        "minimum": 0.78,
+        "passed": true
+      },
+      "no_answer_rejection_rate": {
+        "value": 1.0,
+        "minimum": 1.0,
+        "passed": true
+      }
+    }
+  }
+}

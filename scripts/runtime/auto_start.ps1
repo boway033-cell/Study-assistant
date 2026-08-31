@@ -36,8 +36,9 @@ function Test-StudyAssistant([int]$candidatePort) {
         $response = Invoke-RestMethod -Uri "http://127.0.0.1:$candidatePort/api/health" -TimeoutSec 2
         return $response.status -eq "ok" -and
             $response.app -eq "study-assistant" -and
-            [int]$response.api_revision -ge 2 -and
-            $response.capabilities.shelves_write -eq $true
+            [int]$response.api_revision -ge 4 -and
+            $response.capabilities.shelves_write -eq $true -and
+            $response.capabilities.knowledge_insights -eq $true
     } catch { return $false }
 }
 

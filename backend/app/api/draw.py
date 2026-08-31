@@ -39,7 +39,7 @@ class DrawSessionResp(BaseModel):
 @router.post("/generate", response_model=DrawSessionResp)
 async def generate_diagram(req: DrawGenerateReq, db: Session = Depends(get_db)):
     """Generate draw.io XML from natural language."""
-    cfg = load_llm_config(db)
+    cfg = load_llm_config(db, "utility")
     if not cfg.get("deepseek_api_key"):
         raise HTTPException(400, "DeepSeek API Key not configured")
     if req.model:
@@ -94,7 +94,7 @@ async def modify_diagram(req: DrawModifyReq, db: Session = Depends(get_db)):
     sess = _draw_sessions.get(req.session_id)
     if not sess:
         raise HTTPException(404, "Drawing session not found")
-    cfg = load_llm_config(db)
+    cfg = load_llm_config(db, "utility")
     if not cfg.get("deepseek_api_key"):
         raise HTTPException(400, "DeepSeek API Key not configured")
     provider = LLMRouter.get("auto", cfg)

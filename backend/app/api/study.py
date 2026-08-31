@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
-from backend.app.models import Book, Chapter, Chunk, KnowledgeNote
+from backend.app.models import Book, Chapter, Chunk, EvidenceCard, KnowledgeNote, StudyReport
 from backend.app.services.llm import LLMRouter, load_llm_config
 
 router = APIRouter(prefix="/api/study", tags=["study"])
@@ -41,6 +41,9 @@ class StudyOverviewReq(BaseModel):
     note_ids: list[int] = Field(default_factory=list, max_length=80)
     research_mode: Literal["adaptive", "comparative", "critical", "gap"] = "adaptive"
     reasoning_depth: Literal["standard", "deep"] = "deep"
+    writing_style: Literal["analytical_essay", "structured_report"] = "analytical_essay"
+    extension_level: Literal["grounded", "exploratory"] = "exploratory"
+    target_length: int = Field(default=3000, ge=800, le=12000)
 
 
 _MODE_GUIDANCE = {
@@ -134,6 +137,8 @@ def _normalize_claims(raw_claims, allowed_refs: set[str]) -> list[dict]:
     allowed_status = {"supported", "partial", "needs_review", "unsupported"}
     allowed_types = {"descriptive", "associational", "causal", "interpretive"}
     allowed_confidence = {"high", "medium", "low"}
+    allowed_relations = {"consensus", "complementary", "conflict", "single_source", "unresolved"}
+    allowed_quality = {"high", "moderate", "low", "very_low", "not_assessed"}
     claims = []
     for claim in raw_claims[:30] if isinstance(raw_claims, list) else []:
         if not isinstance(claim, dict) or not str(claim.get("claim") or "").strip():
@@ -148,6 +153,12 @@ def _normalize_claims(raw_claims, allowed_refs: set[str]) -> list[dict]:
             status = "needs_review"
         claim_type = str(claim.get("claim_type") or "interpretive")
         confidence = str(claim.get("confidence") or "low")
+        relation = str(claim.get("synthesis_relation") or "unresolved")
+        quality = str(claim.get("evidence_quality") or "not_assessed")
+        bias_flags = [str(item).strip()[:120] for item in (claim.get("bias_flags") or [])
+                      if str(item).strip()][:8]
+        alternatives = [str(item).strip()[:240] for item in (claim.get("alternative_explanations") or [])
+                        if str(item).strip()][:6]
         claims.append({
             "claim": str(claim["claim"]).strip()[:1000],
             "claim_type": claim_type if claim_type in allowed_types else "interpretive",
@@ -156,13 +167,55 @@ def _normalize_claims(raw_claims, allowed_refs: set[str]) -> list[dict]:
             "confidence": confidence if confidence in allowed_confidence else "low",
             "reason": str(claim.get("reason") or "")[:1000],
             "counterpoint": str(claim.get("counterpoint") or "")[:1000],
+            "synthesis_relation": relation if relation in allowed_relations else "unresolved",
+            "evidence_quality": quality if quality in allowed_quality else "not_assessed",
+            "bias_flags": bias_flags,
+            "alternative_explanations": alternatives,
+            "human_review_required": bool(claim.get("human_review_required", True)),
         })
     return claims
 
 
+def _normalize_hypotheses(raw_hypotheses, allowed_refs: set[str]) -> list[dict]:
+    """Hypotheses remain candidates and must preserve evidence/rival boundaries."""
+    result = []
+    for item in raw_hypotheses[:12] if isinstance(raw_hypotheses, list) else []:
+        if not isinstance(item, dict) or not str(item.get("statement") or "").strip():
+            continue
+        refs = []
+        for raw_ref in item.get("source_refs") or []:
+            ref = str(raw_ref).strip().strip("[]")[:100]
+            if ref in allowed_refs and ref not in refs:
+                refs.append(ref)
+        result.append({
+            "statement": str(item["statement"]).strip()[:800],
+            "status": "candidate",
+            "claim_type": str(item.get("claim_type") or "associational")[:40],
+            "source_refs": refs,
+            "rival_explanations": [str(value).strip()[:240] for value in (item.get("rival_explanations") or [])
+                                   if str(value).strip()][:6],
+            "falsifier": str(item.get("falsifier") or "")[:500],
+            "boundary_conditions": str(item.get("boundary_conditions") or "")[:500],
+            "human_review_required": True,
+        })
+    return result
+
+
+def _evidence_summary(claims: list[dict]) -> dict:
+    relations = {key: 0 for key in ("consensus", "complementary", "conflict", "single_source", "unresolved")}
+    qualities = {key: 0 for key in ("high", "moderate", "low", "very_low", "not_assessed")}
+    for claim in claims:
+        relations[claim.get("synthesis_relation", "unresolved")] += 1
+        qualities[claim.get("evidence_quality", "not_assessed")] += 1
+    return {"relations": relations, "qualities": qualities,
+            "human_review_required": sum(bool(item.get("human_review_required")) for item in claims)}
+
+
 async def run_overview(record, book_ids: list[int], focus: str = "", framework: str = "",
                        chapter_ids: list[int] | None = None, note_ids: list[int] | None = None,
-                       research_mode: str = "adaptive", reasoning_depth: str = "deep") -> dict:
+                       research_mode: str = "adaptive", reasoning_depth: str = "deep",
+                       writing_style: str = "analytical_essay", extension_level: str = "exploratory",
+                       target_length: int = 3000) -> dict:
     from backend.app.core.database import SessionLocal
     from backend.app.worker.tasks import update_progress
 
@@ -216,13 +269,13 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
         overview_context = selected_context or _book_context(db, book_ids)
         if not overview_context:
             raise ValueError("没有可用的文献")
-        cfg = load_llm_config(db)
-        if not cfg.get("deepseek_api_key"):
-            raise ValueError("未配置 DeepSeek API Key")
+        cfg = load_llm_config(db, "research")
+        if not cfg.get("configured"):
+            raise ValueError("研究模型尚未配置或不可用，请在设置中选择并检测一个模型")
         provider = LLMRouter.get("auto", cfg)
         plan = _normalize_plan({}, research_mode)
         if reasoning_depth == "deep":
-            update_progress(record, 0.32, "research-plan", "DeepSeek 正在拆分问题并规划证据路径...")
+            update_progress(record, 0.32, "research-plan", "AI 正在拆分问题并规划论证路径...")
             plan_messages = [
                 {"role": "system", "content": (
                     "你是独立研究分析助手。不要套用 Nature 或任何期刊的固定写作模板，也不要机械复述目录。"
@@ -230,7 +283,8 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                     "只输出 JSON 对象："
                     '{"material_type":"材料类型判断","subquestions":["3-6个子问题"],'
                     '"analysis_axes":["2-5个分析维度"],"evidence_needs":["需核查的证据"],'
-                    '"report_outline":["自适应报告章节"]}。不要输出思维过程或答案正文。'
+                    '"report_outline":["自适应报告章节"]}。规划应包含中心论题与连贯的论证推进，'
+                    '而不是材料清单。不要输出思维过程或答案正文。'
                 )},
                 {"role": "user", "content": (
                     f"研读方式：{_MODE_GUIDANCE.get(research_mode, _MODE_GUIDANCE['adaptive'])}\n"
@@ -249,40 +303,63 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
         else:
             update_progress(record, 0.52, "evidence", "正在按研究路径检索和整理证据...")
             from backend.app.services.rag import retriever
-            queries = [focus.strip()] + plan.get("subquestions", [])[:4]
+            queries = [focus.strip()] + plan.get("subquestions", [])[:3]
             retrieved: list[dict] = []
             seen: set[int] = set()
-            for query in queries:
-                if not query:
-                    continue
-                for item in retriever.retrieve(query, book_ids=book_ids, top_k=5):
-                    chunk_id = int(item.get("chunk_id") or 0)
-                    if chunk_id and chunk_id not in seen:
-                        seen.add(chunk_id)
-                        retrieved.append(item)
-            evidence_context, allowed_refs = _format_retrieved_context(retrieved)
+            # 每本文献都获得独立召回预算，避免相关性最高的一本文献垄断上下文。
+            for book_id in book_ids:
+                accepted = 0
+                for query in queries:
+                    if not query or accepted >= 5:
+                        continue
+                    for item in retriever.retrieve(query, book_ids=[book_id], top_k=5):
+                        chunk_id = int(item.get("chunk_id") or 0)
+                        if chunk_id and chunk_id not in seen:
+                            seen.add(chunk_id); retrieved.append(item); accepted += 1
+                            if accepted >= 5:
+                                break
+            evidence_context, allowed_refs = _format_retrieved_context(retrieved, max_chars=42000)
             if not evidence_context:
                 evidence_context = overview_context[:22000]
 
-        update_progress(record, 0.7, "synthesis", "DeepSeek 正在综合证据、检验反例与形成报告...")
+        update_progress(record, 0.7, "synthesis", "AI 正在跨文献综合并形成连贯文章...")
         prompt = [
             {"role": "system", "content": (
-                "你是独立、审慎的研究分析助手。Nature 类技能在这里不决定报告结构；你必须根据文章内容和研究问题自主判断。"
+                "你是独立、审慎且有创造力的个人知识库研究作者。批判性思考、同行审查和假设生成只是辅助能力，不是写作清单，"
+                "不得让方法标签切碎正文或压制正常推演。围绕一个中心论题写成逻辑连续的中文文章，段落之间必须有因果、递进、转折或回应关系。"
                 "不要机械摘要，不要逐篇流水账，不要补造来源。先区分原文信息、作者解释和你的综合推断，再综合一致、互补、冲突、"
-                "替代解释与适用边界。标题应由问题和材料决定，不使用固定期刊模板。只输出 JSON 对象："
+                "替代解释与适用边界。对跨文献结论明确标记 consensus（独立证据同向）、complementary（回答不同环节）、"
+                "conflict（结论方向或解释矛盾）、single_source 或 unresolved；不能用文献数量代替证据质量。"
+                "审查研究设计、分析单位、混杂、选择/测量偏倚、因果外推、统计不确定性和可复现性；缺少报告只能写 not_assessed，不能判定方法错误。"
+                "允许在证据基础上自由提出概念联系、机制解释、比较框架、反事实问题和后续研究方向。综合判断应自然写入论证；"
+                "只有当读者可能把你的推演误认成作者原结论时，才简洁说明这是本文分析，不要反复使用“本文推断”等防御性标签。"
+                "来源锚点用于支撑事实与推断前提，不要求每段重复堆叠。优先准确转述；只有原文措辞本身是分析对象时才短引，"
+                "同一段通常不超过一处直接引语。先说主张，再给证据；必要限制集中写一次，不在段首和结论中反复自我削弱。"
+                "输出前自行删去不增加证据、范围或逻辑的免责声明，合并连续的可能性修饰词，并检查每段只承担一个主要论证任务。"
+                "标题与章节应服从论证，不使用固定期刊模板。只输出 JSON 对象："
                 '{"report_markdown":"中文 Markdown 报告","claims":[{"claim":"可核验主张",'
                 '"claim_type":"descriptive|associational|causal|interpretive","source_refs":["来源锚点"],'
                 '"status":"supported|partial|needs_review|unsupported","confidence":"high|medium|low",'
-                '"reason":"支持或降级理由","counterpoint":"反例、限制或替代解释"}],'
-                '"open_questions":["材料尚未回答或需要继续核查的问题"]}。\n'
+                '"reason":"支持或降级理由","counterpoint":"反例或限制",'
+                '"synthesis_relation":"consensus|complementary|conflict|single_source|unresolved",'
+                '"evidence_quality":"high|moderate|low|very_low|not_assessed",'
+                '"bias_flags":["具体且有来源依据的偏倚风险"],"alternative_explanations":["竞争性解释"],'
+                '"human_review_required":true}],"open_questions":["材料尚未回答或需要继续核查的问题"],'
+                '"hypotheses":[{"statement":"候选假设","claim_type":"descriptive|associational|predictive|causal|mechanistic",'
+                '"source_refs":["来源锚点"],"rival_explanations":["竞争性解释"],"falsifier":"什么结果会挑战它",'
+                '"boundary_conditions":"适用边界"}]}。\n'
                 "每项关键结论必须使用材料中逐字存在的 [B…] 来源锚点；没有有效锚点的判断必须标为 needs_review。"
                 "直接支持=supported；仅部分支持或含外推=partial；材料不足=needs_review；材料反驳=unsupported。"
-                "因果主张必须有相称的因果证据，不能因表达流畅或多处重复就提高置信度。"
+                "因果主张必须有明确估计目标和相称的因果证据，不能因表达流畅或多处重复就提高置信度。"
+                "hypotheses 始终只是 candidate；仅在 gap 模式或材料确有冲突/空白时给出，并同时给出竞争性解释和可证伪条件。"
             )},
             {"role": "user", "content": (
                 f"研读方式：{_MODE_GUIDANCE.get(research_mode, _MODE_GUIDANCE['adaptive'])}\n"
                 f"研究问题：{focus.strip()}\n用户补充维度：{framework.strip() or '无，允许 AI 自主选择'}\n"
                 f"AI 研究路径（可调整结构，不是答案）：{json.dumps(plan, ensure_ascii=False)}\n\n"
+                f"写作形态：{'连贯分析文章' if writing_style == 'analytical_essay' else '结构化研究报告'}；"
+                f"推演自由度：{'允许有标识的探索性延伸' if extension_level == 'exploratory' else '以直接证据解释为主'}；"
+                f"目标长度：约 {target_length} 字。\n"
                 f"可引用材料：\n{evidence_context[:48000]}"
             )},
         ]
@@ -297,12 +374,20 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
             report_content = str(parsed.get("report_markdown") or "").strip()
             raw_claims = parsed.get("claims") if isinstance(parsed.get("claims"), list) else []
             open_questions = [str(item).strip()[:300] for item in (parsed.get("open_questions") or []) if str(item).strip()][:10]
+            raw_hypotheses = parsed.get("hypotheses") if isinstance(parsed.get("hypotheses"), list) else []
         else:
             report_content, raw_claims = answer, []
             open_questions = []
+            raw_hypotheses = []
         if not report_content:
             report_content = answer
         claims = _normalize_claims(raw_claims, allowed_refs)
+        hypotheses = _normalize_hypotheses(raw_hypotheses, allowed_refs)
+        from backend.app.services.writing_citations import database_source_labels, readable_citations
+        citation_labels = database_source_labels(db, allowed_refs)
+        report_content, citation_notes = readable_citations(
+            report_content, valid_anchors=allowed_refs, labels=citation_labels,
+        )
         # 持久化报告及其选择范围/核验主张，不复制原文附件。
         from backend.app.models import StudyReport
         report = StudyReport(
@@ -310,7 +395,15 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
             selection_json=json.dumps({
                 "chapter_ids": chapter_ids or [], "note_ids": note_ids or [],
                 "research_mode": research_mode, "reasoning_depth": reasoning_depth,
+                "writing_style": writing_style, "extension_level": extension_level,
+                "target_length": target_length,
+                "citation_notes": citation_notes,
                 "research_plan": plan, "open_questions": open_questions,
+                "hypotheses": hypotheses, "evidence_summary": _evidence_summary(claims),
+                "method_profile": {
+                    "critical_thinking": "1.2", "peer_review": "2.1",
+                    "hypothesis_generation": "2.1", "human_accountability": True,
+                },
             }, ensure_ascii=False),
             focus=focus, framework=framework, claims_json=json.dumps(claims, ensure_ascii=False),
             content=report_content,
@@ -318,7 +411,8 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
         db.add(report)
         db.commit()
         update_progress(record, 1.0, "overview", "完成")
-        return {"report_id": report.id, "chars": len(report_content), "claims": len(claims), "plan_steps": len(plan.get("subquestions", []))}
+        return {"report_id": report.id, "chars": len(report_content), "claims": len(claims),
+                "hypotheses": len(hypotheses), "plan_steps": len(plan.get("subquestions", []))}
     except Exception as e:  # noqa: BLE001
         raise
     finally:
@@ -334,7 +428,8 @@ def study_overview(req: StudyOverviewReq, db: Session = Depends(get_db)):
         raise HTTPException(422, "请先写明研究问题")
     record = submit("study-overview", lambda rec: run_overview(
         rec, req.book_ids, req.focus, req.framework, req.chapter_ids, req.note_ids,
-        req.research_mode, req.reasoning_depth,
+        req.research_mode, req.reasoning_depth, req.writing_style, req.extension_level,
+        req.target_length,
     ))
     return {"task_id": record.id}
 
@@ -346,8 +441,14 @@ def _report_payload(r, include_content: bool = True) -> dict:
         "focus": r.focus or "", "framework": r.framework or "", "selection": selection,
         "research_plan": selection.get("research_plan", {}),
         "open_questions": selection.get("open_questions", []),
+        "hypotheses": selection.get("hypotheses", []),
+        "evidence_summary": selection.get("evidence_summary", {}),
+        "method_profile": selection.get("method_profile", {}),
         "research_mode": selection.get("research_mode", "adaptive"),
         "reasoning_depth": selection.get("reasoning_depth", "standard"),
+        "writing_style": selection.get("writing_style", "analytical_essay"),
+        "extension_level": selection.get("extension_level", "exploratory"),
+        "target_length": selection.get("target_length", 3000),
         "content_preview": (r.content or "")[:300], "content_length": len(r.content or ""),
         "claim_count": len(json.loads(r.claims_json or "[]")), "created_at": r.created_at.isoformat(),
     }
@@ -369,18 +470,144 @@ def list_reports(page: int = 1, page_size: int = 20, db: Session = Depends(get_d
 
 @router.get("/reports/{report_id}")
 def get_report(report_id: int, db: Session = Depends(get_db)):
-    from backend.app.models import StudyReport
     report = db.get(StudyReport, report_id)
     if not report:
         raise HTTPException(404, "报告不存在")
     return _report_payload(report, True)
 
 
+class StudyClaimsUpdateReq(BaseModel):
+    claims: list[dict] = Field(max_length=30)
+
+
+@router.patch("/reports/{report_id}/claims")
+def update_report_claims(report_id: int, req: StudyClaimsUpdateReq, db: Session = Depends(get_db)):
+    """保存人工核验后的证据台账；来源锚点只能来自该报告原始检索范围。"""
+    from datetime import datetime, timezone
+
+    report = db.get(StudyReport, report_id)
+    if not report:
+        raise HTTPException(404, "报告不存在")
+    previous = json.loads(report.claims_json or "[]")
+    allowed_refs = {str(ref) for claim in previous for ref in (claim.get("source_refs") or [])}
+    claims = _normalize_claims(req.claims, allowed_refs)
+    if len(claims) != len(req.claims):
+        raise HTTPException(422, "主张存在空文本、无效结构或超过 30 条")
+    selection = json.loads(report.selection_json or "{}")
+    selection["evidence_summary"] = _evidence_summary(claims)
+    selection["claims_reviewed_at"] = datetime.now(timezone.utc).isoformat()
+    selection["claims_reviewed_by"] = "user"
+    report.claims_json = json.dumps(claims, ensure_ascii=False)
+    report.selection_json = json.dumps(selection, ensure_ascii=False)
+    db.commit(); db.refresh(report)
+    return _report_payload(report, True)
+
+
+class DepositStudyReportReq(BaseModel):
+    include_report_note: bool = True
+    include_claim_cards: bool = True
+
+
+def _claim_book_id(claim: dict, allowed_book_ids: list[int]) -> int:
+    for ref in claim.get("source_refs") or []:
+        head = str(ref).split(":", 1)[0]
+        if head.startswith("B") and head[1:].isdigit() and int(head[1:]) in allowed_book_ids:
+            return int(head[1:])
+    return allowed_book_ids[0]
+
+
+@router.post("/reports/{report_id}/deposit")
+def deposit_report(report_id: int, req: DepositStudyReportReq, db: Session = Depends(get_db)):
+    """Idempotently deposit a critical review as a note and claim-level evidence cards."""
+    report = db.get(StudyReport, report_id)
+    if not report:
+        raise HTTPException(404, "报告不存在")
+    book_ids = [int(value) for value in json.loads(report.book_ids_json or "[]") if int(value) > 0]
+    if not book_ids or db.scalar(select(func.count()).select_from(Book).where(Book.id.in_(book_ids))) != len(set(book_ids)):
+        raise HTTPException(409, "报告关联的文献已不存在，无法沉淀")
+    selection = json.loads(report.selection_json or "{}")
+    claims = json.loads(report.claims_json or "[]")
+    all_refs = list(dict.fromkeys(ref for claim in claims for ref in (claim.get("source_refs") or [])))
+    scope = {
+        "report_id": report.id, "book_ids": book_ids,
+        "research_mode": selection.get("research_mode", "adaptive"),
+        "evidence_summary": selection.get("evidence_summary", {}),
+        "method_profile": selection.get("method_profile", {}),
+        "human_review_required": True,
+    }
+    note = db.scalar(select(KnowledgeNote).where(
+        KnowledgeNote.source_report_id == report.id,
+        KnowledgeNote.origin == "ai",
+    ))
+    if req.include_report_note:
+        appendix = "\n\n---\n\n## 结构化审查附录\n\n" + json.dumps({
+            "evidence_summary": selection.get("evidence_summary", {}),
+            "open_questions": selection.get("open_questions", []),
+            "hypotheses": selection.get("hypotheses", []),
+            "human_review_required": True,
+        }, ensure_ascii=False, indent=2)
+        if not note:
+            note = KnowledgeNote(book_id=book_ids[0], source_report_id=report.id, origin="ai")
+            db.add(note)
+        note.title = f"批判性审查｜{(report.focus or '综合研读')[:220]}"
+        note.content = (report.content or "") + appendix
+        note.source_scope_json = json.dumps(scope, ensure_ascii=False)
+        note.source_refs_json = json.dumps(all_refs, ensure_ascii=False)
+        note.tags_json = json.dumps(["批判性审查", "跨文献综合"], ensure_ascii=False)
+
+    existing_cards = list(db.scalars(select(EvidenceCard).where(
+        EvidenceCard.source_report_id == report.id,
+        EvidenceCard.origin == "ai",
+    ).order_by(EvidenceCard.id)).all())
+    relation_labels = {
+        "consensus": "共识证据", "complementary": "互补证据", "conflict": "冲突证据",
+        "single_source": "单一来源", "unresolved": "未决证据",
+    }
+    if req.include_claim_cards:
+        for claim_index, claim in enumerate(claims):
+            claim_text = str(claim.get("claim") or "").strip()
+            if not claim_text:
+                continue
+            relation = str(claim.get("synthesis_relation") or "unresolved")
+            evidence = [
+                f"证据关系：{relation_labels.get(relation, '未决证据')}",
+                f"证据质量：{claim.get('evidence_quality') or 'not_assessed'}",
+                f"判断理由：{claim.get('reason') or '未说明'}",
+            ]
+            if claim.get("counterpoint"):
+                evidence.append(f"反例或限制：{claim['counterpoint']}")
+            if claim.get("bias_flags"):
+                evidence.append("偏倚风险：" + "；".join(claim["bias_flags"]))
+            if claim.get("alternative_explanations"):
+                evidence.append("竞争解释：" + "；".join(claim["alternative_explanations"]))
+            card_scope = {**scope, "claim_index": claim_index, "synthesis_relation": relation,
+                          "evidence_quality": claim.get("evidence_quality", "not_assessed")}
+            card = existing_cards[claim_index] if claim_index < len(existing_cards) else EvidenceCard(
+                source_report_id=report.id, origin="ai")
+            card.book_id = _claim_book_id(claim, book_ids); card.title = claim_text[:255]
+            card.evidence_text = "\n".join(evidence); card.claim_text = claim_text
+            card.source_ref_json = json.dumps({"refs": claim.get("source_refs") or []}, ensure_ascii=False)
+            card.source_scope_json = json.dumps(card_scope, ensure_ascii=False)
+            card.tags_json = json.dumps(["批判性审查", relation_labels.get(relation, "未决证据")], ensure_ascii=False)
+            card.verification_status = claim.get("status") or "needs_review"
+            if claim_index >= len(existing_cards):
+                db.add(card)
+        for stale_card in existing_cards[len(claims):]:
+            stale_card.verification_status = "superseded"
+    db.commit()
+    note = db.scalar(select(KnowledgeNote).where(KnowledgeNote.source_report_id == report.id,
+                                                  KnowledgeNote.origin == "ai"))
+    cards = list(db.scalars(select(EvidenceCard).where(EvidenceCard.source_report_id == report.id,
+                                                        EvidenceCard.origin == "ai")
+                            .order_by(EvidenceCard.id)).all())
+    return {"report_id": report.id, "note_id": note.id if note else None,
+            "evidence_card_ids": [card.id for card in cards], "claim_count": len(cards),
+            "human_review_required": True}
+
+
 @router.delete("/reports/{report_id}", status_code=204)
 def delete_report(report_id: int, db: Session = Depends(get_db)):
     """删除一条综合阅读报告。"""
-    from backend.app.models import StudyReport
-
     r = db.get(StudyReport, report_id)
     if not r:
         raise HTTPException(404, "报告不存在")
@@ -397,7 +624,7 @@ class TrainStartReq(BaseModel):
 
 @router.post("/train/start")
 async def train_start(req: TrainStartReq, db: Session = Depends(get_db)):
-    cfg = load_llm_config(db)
+    cfg = load_llm_config(db, "research")
     if not cfg.get("deepseek_api_key"):
         raise HTTPException(400, "未配置 DeepSeek API Key")
     context = _book_context(db, req.book_ids, limit_per_book=6000)
@@ -423,7 +650,7 @@ class TrainAskReq(BaseModel):
 
 @router.post("/train/ask")
 async def train_ask(req: TrainAskReq, db: Session = Depends(get_db)):
-    cfg = load_llm_config(db)
+    cfg = load_llm_config(db, "research")
     provider = LLMRouter.get("auto", cfg)
     sess = _sessions.get(req.session_id)
     if not sess:

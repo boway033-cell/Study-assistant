@@ -74,7 +74,7 @@ async def run_deep_analysis(record, book_id: int) -> dict:
         update_progress(record, 0.3, "deep", f"核对完成：{verify['chapters']}章/{verify['sections']}节，缺失 {len(verify['issues'])} 项")
 
         # AI 补全（有 Key 时）
-        cfg = load_llm_config(db)
+        cfg = load_llm_config(db, "research")
         provider = LLMRouter.get("auto", cfg)
         use_ai = bool(cfg.get("deepseek_api_key"))
         if use_ai and verify["issues"]:
@@ -294,7 +294,7 @@ async def classify_book(book_id: int, db: Session = Depends(get_db)):
     if not book:
         raise HTTPException(404, "书籍不存在")
     keywords, chapters = _get_classify_inputs(db, book_id)
-    cfg = load_llm_config(db)
+    cfg = load_llm_config(db, "research")
     if not cfg.get("deepseek_api_key"):
         # 本地降级分类
         category = classify_local(book.title, keywords, chapters)
@@ -336,7 +336,7 @@ async def classify_all(db: Session = Depends(get_db)):
     from backend.app.services.llm import LLMRouter, load_llm_config
     from backend.app.services.analyzer.classify import classify_local
 
-    cfg = load_llm_config(db)
+    cfg = load_llm_config(db, "research")
     has_key = bool(cfg.get("deepseek_api_key"))
     provider = LLMRouter.get("auto", cfg) if has_key else None
     books = db.scalars(select(Book).where(Book.status == "ready")).all()

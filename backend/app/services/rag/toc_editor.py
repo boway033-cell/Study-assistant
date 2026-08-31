@@ -26,6 +26,8 @@ def review_chapters(chapters: list[Chapter]) -> dict:
              "page": chapter.start_page or 1,
              "parent_index": index_by_id.get(chapter.parent_id)} for chapter in ordered]
     audit = analyze_toc_rows(rows)
+    from backend.app.services.rag.toc_heuristic import analyze_academic_structure
+    audit["academic_structure"] = analyze_academic_structure(rows)
     for item in audit["items"]:
         parent_index = item.get("inferred_parent_index")
         item["inferred_parent_id"] = ordered[parent_index].id if parent_index is not None else None

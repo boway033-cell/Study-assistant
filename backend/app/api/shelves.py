@@ -104,9 +104,13 @@ def put_shelf_books(shelf_id: int, req: ShelfBooksWrite, db: Session = Depends(g
     if req.mode == "replace":
         db.execute(delete(shelf_books).where(shelf_books.c.shelf_id == shelf_id))
     existing = set(db.scalars(select(shelf_books.c.book_id).where(shelf_books.c.shelf_id == shelf_id)).all())
-    for index, book_id in enumerate(req.book_ids):
+    next_order = (db.scalar(select(func.max(shelf_books.c.order_index))
+                            .where(shelf_books.c.shelf_id == shelf_id)) or -1) + 1
+    for offset, book_id in enumerate(req.book_ids):
         if book_id not in existing:
-            db.execute(insert(shelf_books).values(shelf_id=shelf_id, book_id=book_id, order_index=index))
+            db.execute(insert(shelf_books).values(
+                shelf_id=shelf_id, book_id=book_id, order_index=next_order + offset,
+            ))
     db.commit()
     return {"shelf_id": shelf_id, "book_ids": sorted(valid), "mode": req.mode}
 

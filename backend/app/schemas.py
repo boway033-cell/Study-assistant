@@ -29,6 +29,7 @@ class BookListItem(BaseModel):
     reading_status: str = "unread"
     favorite: bool = False
     progress_page: int = 1
+    library_order: int = 0
     shelf_ids: list[int] = []
     created_at: datetime
 
@@ -255,50 +256,6 @@ class AttemptResp(BaseModel):
 
 class SelfGradeReq(BaseModel):
     is_correct: bool
-
-
-# ---------- 统计 ----------
-class OverviewResp(BaseModel):
-    book_count: int
-    quiz_count: int
-    attempts_total: int
-    avg_mastery: float
-    streak_days: int
-
-
-class ChapterMastery(BaseModel):
-    chapter_id: int
-    title: str
-    mastery: float
-    quizzes: int
-    wrong_rate: float
-
-
-class MasteryResp(BaseModel):
-    book_id: int
-    chapters: list[ChapterMastery]
-
-
-class DailyActivity(BaseModel):
-    date: str
-    attempts: int
-
-
-class ActivityResp(BaseModel):
-    daily: list[DailyActivity]
-
-
-class WeaknessItem(BaseModel):
-    book_id: int
-    book_title: str
-    chapter_id: int
-    chapter_title: str
-    mastery: float
-    suggest: str
-
-
-class WeaknessResp(BaseModel):
-    items: list[WeaknessItem]
 
 
 # ---------- 知识树 ----------
@@ -533,6 +490,9 @@ class SettingsResp(BaseModel):
     vector_search: bool
     deepseek_configured: bool
     vision_configured: bool
+    text_provider_configured: bool = False
+    active_text_provider: str = "deepseek"
+    active_text_model: str = ""
 
 
 class SettingsUpdateReq(BaseModel):
@@ -553,3 +513,4 @@ class ProbeItem(BaseModel):
 class ProbeResp(BaseModel):
     deepseek: ProbeItem
     vision: ProbeItem
+    text: ProbeItem | None = None

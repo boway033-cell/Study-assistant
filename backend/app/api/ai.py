@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 @router.post("/explain", response_model=AiResp)
 async def ai_explain(req: AiExplainReq, db: Session = Depends(get_db)):
     """选中文字 → AI 解释 / 翻译（仅发送选中文本，不发送整页）。"""
-    cfg = load_llm_config(db)
+    cfg = load_llm_config(db, "utility")
     provider = LLMRouter.get("auto", cfg)
     if req.action == "translate":
         system = (
@@ -62,7 +62,7 @@ async def ai_summarize(req: AiSummaryReq, db: Session = Depends(get_db)):
         raise HTTPException(400, "该章节没有内容")
     material = "\n".join(c.content for c in chunks)[:12000]
     book = db.get(Book, req.book_id)
-    cfg = load_llm_config(db)
+    cfg = load_llm_config(db, "utility")
     provider = LLMRouter.get("auto", cfg)
     messages = [
         {"role": "system", "content": (

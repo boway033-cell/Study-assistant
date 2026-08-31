@@ -49,6 +49,7 @@ def save_upload(file_name: str, content: bytes) -> tuple[Path, str]:
 async def run_import(record: TaskRecord, book_id: int) -> dict:
     """执行完整导入流水线。book 需已创建且 status=pending。"""
     db = SessionLocal()
+    ocr_used = False
     try:
         book = db.get(Book, book_id)
         if book is None:
@@ -80,6 +81,7 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                 return {"book_id": book.id, "status": "needs_ocr",
                         "message": "扫描版 PDF，需安装 OCR 引擎"}
             if weak_pages and has_ocr_engine():
+                ocr_used = True
                 update_progress(record, 0.15, "ocr", "检测到弱文本页，正在按页 OCR...")
                 # OCR 逐页回调：页级进度细化（0.15 → 0.30），支持断点续跑。
                 completed = 0
@@ -338,7 +340,7 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
             "definitions": len(keyinfo["definitions"]),
             "theorems": len(keyinfo["theorems"]),
             "keywords": len(keyinfo["keywords"]),
-            "ocr": bool(result.pages and detect_scanned(result.pages)),
+            "ocr": ocr_used,
         }
     except Exception as e:  # noqa: BLE001
         db.rollback()

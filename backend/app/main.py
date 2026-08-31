@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, literature, plan, presentations, quizzes, settings, shelves, stats, study, tags, writing
+from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, literature, presentations, quizzes, settings, shelves, stats, study, tags, writing
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import Base, engine
 from backend.app.services.rag import fts
@@ -30,6 +30,17 @@ def _migrate():
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_books_file_hash ON books(file_hash)"))
             if "duplicate_of" not in cols:
                 conn.execute(text("ALTER TABLE books ADD COLUMN duplicate_of INTEGER"))
+            if "library_order" not in cols:
+                conn.execute(text("ALTER TABLE books ADD COLUMN library_order INTEGER NOT NULL DEFAULT 0"))
+                # 初始顺序与旧版列表一致：最近导入的资料在前。
+                conn.execute(text("""
+                    WITH ranked AS (
+                        SELECT id, ROW_NUMBER() OVER (ORDER BY created_at DESC, id DESC) - 1 AS position
+                        FROM books
+                    )
+                    UPDATE books
+                    SET library_order = (SELECT position FROM ranked WHERE ranked.id = books.id)
+                """))
             # 文献档案的发布、可见性与元数据可信度由用户明确维护，不再从题名推断。
             try:
                 profile_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(paper_profiles)")).fetchall()]
@@ -225,7 +236,7 @@ async def lifespan(_app: FastAPI):
         pass
 
 
-app = FastAPI(title="Study assistant", version="1.2.0", lifespan=lifespan)
+app = FastAPI(title="Study assistant", version="2.0.0", lifespan=lifespan)
 
 
 class SPAStaticFiles(StaticFiles):
@@ -244,7 +255,8 @@ class SPAStaticFiles(StaticFiles):
         return await super().get_response("index.html", scope)
 
 # 本地访问控制：只允许本服务与本地开发源，拒绝任意来源跨域（防恶意网页调用本地 API）
-_LOCAL_APP_PORTS = {*range(8000, 8011), app_settings.port}
+# 8000–8010 are runtime fallback ports; 8011 is the documented isolated UI-smoke port.
+_LOCAL_APP_PORTS = {*range(8000, 8012), app_settings.port}
 _ALLOWED_ORIGINS = [
     f"http://{host}:{port}"
     for host in ("127.0.0.1", "localhost")
@@ -280,7 +292,6 @@ app.include_router(ai.router)
 app.include_router(deep.router)
 app.include_router(study.router)
 app.include_router(graph.router)
-app.include_router(plan.router)
 app.include_router(tags.router)
 app.include_router(shelves.router)
 app.include_router(draw.router)
@@ -295,9 +306,9 @@ def health():
     return {
         "status": "ok",
         "app": "study-assistant",
-        "api_revision": 3,
+        "api_revision": 4,
         "capabilities": {"shelves_write": True, "knowledge_records": True, "annotation_underline": True,
-                         "writing_dna": True, "ai_tone_docx": True},
+                         "writing_dna": True, "ai_tone_docx": True, "knowledge_insights": True},
     }
 
 

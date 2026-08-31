@@ -23,11 +23,7 @@
         <el-card shadow="never" class="chat-card">
           <template #header>
             <div class="chat-header">
-              <span>AI 问答（DeepSeek 云端）</span>
-              <el-radio-group v-model="model" size="small">
-                <el-radio-button value="flash">⚡ flash</el-radio-button>
-                <el-radio-button value="pro">🧠 pro</el-radio-button>
-              </el-radio-group>
+              <span>AI 问答（按设置中的模型路由）</span>
             </div>
           </template>
           <div ref="msgBox" class="msg-box">
@@ -104,7 +100,6 @@ const route = useRoute()
 const books = ref([])
 const booksLoading = ref(false)
 const bookId = ref(null)
-const model = ref('flash')
 const question = ref('')
 const messages = ref([])
 const sending = ref(false)
@@ -202,7 +197,7 @@ const send = async () => {
   sending.value = true
   scrollBottom()
   try {
-    await chatStream({ book_id: bookId.value || null, question: q, model: model.value }, (event, data) => {
+    await chatStream({ book_id: bookId.value || null, question: q }, (event, data) => {
       if (event === 'token') {
         aiMsg.value.content += data.text
         scrollBottom()

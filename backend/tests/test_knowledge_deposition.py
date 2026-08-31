@@ -50,7 +50,7 @@ def test_study_overview_rejects_implicit_all_scope():
 
 
 def test_research_plan_and_claim_audit_are_bounded():
-    from backend.app.api.study import _normalize_claims, _normalize_plan
+    from backend.app.api.study import _evidence_summary, _normalize_claims, _normalize_hypotheses, _normalize_plan
 
     plan = _normalize_plan({
         "material_type": "公共管理教材与案例论文",
@@ -64,13 +64,85 @@ def test_research_plan_and_claim_audit_are_bounded():
 
     claims = _normalize_claims([
         {"claim": "有精确来源", "claim_type": "causal", "source_refs": ["B2:CH4:P7:C9"],
-         "status": "supported", "confidence": "high", "reason": "原文直接支持"},
+         "status": "supported", "confidence": "high", "reason": "原文直接支持",
+         "synthesis_relation": "conflict", "evidence_quality": "moderate",
+         "bias_flags": ["选择偏倚"], "alternative_explanations": ["反向因果"]},
         {"claim": "伪造来源", "source_refs": ["B2:CH999"], "status": "supported"},
     ], {"B2:CH4:P7:C9"})
     assert claims[0]["status"] == "supported"
     assert claims[0]["claim_type"] == "causal"
+    assert claims[0]["synthesis_relation"] == "conflict"
+    assert claims[0]["evidence_quality"] == "moderate"
+    assert _evidence_summary(claims)["relations"]["conflict"] == 1
     assert claims[1]["source_refs"] == []
     assert claims[1]["status"] == "needs_review"
+    hypotheses = _normalize_hypotheses([{"statement": "候选机制", "source_refs": ["B2:CH4:P7:C9"],
+                                         "rival_explanations": ["共同原因"], "falsifier": "干预后无变化"}],
+                                       {"B2:CH4:P7:C9"})
+    assert hypotheses[0]["status"] == "candidate"
+    assert hypotheses[0]["human_review_required"] is True
+
+
+def test_critical_review_deposit_is_idempotent():
+    import json
+    from backend.app.api.study import DepositStudyReportReq, deposit_report
+    from backend.app.core.database import SessionLocal
+    from backend.app.models import Book, EvidenceCard, KnowledgeNote, StudyReport
+
+    db = SessionLocal()
+    book = Book(title=f"deposit-{uuid4().hex}", file_path="deposit.pdf", file_type="pdf", status="ready")
+    db.add(book); db.commit(); db.refresh(book)
+    claim = {"claim": "两组证据结论冲突", "source_refs": [f"B{book.id}:P2"], "status": "partial",
+             "synthesis_relation": "conflict", "evidence_quality": "moderate", "reason": "方向不一致",
+             "counterpoint": "样本不同", "bias_flags": ["选择偏倚"], "alternative_explanations": ["测量口径不同"]}
+    report = StudyReport(book_ids_json=json.dumps([book.id]), focus="比较效应",
+                         selection_json=json.dumps({"research_mode": "critical", "evidence_summary": {"relations": {"conflict": 1}}}),
+                         claims_json=json.dumps([claim], ensure_ascii=False), content="# 批判性审查\n\n结论存在冲突。")
+    db.add(report); db.commit(); db.refresh(report)
+    try:
+        first = deposit_report(report.id, DepositStudyReportReq(), db)
+        second = deposit_report(report.id, DepositStudyReportReq(), db)
+        assert first["note_id"] == second["note_id"]
+        assert first["evidence_card_ids"] == second["evidence_card_ids"]
+        assert first["claim_count"] == 1
+        note = db.get(KnowledgeNote, first["note_id"])
+        card = db.get(EvidenceCard, first["evidence_card_ids"][0])
+        assert "批判性审查" in note.title
+        assert "冲突证据" in card.evidence_text
+        assert card.verification_status == "partial"
+    finally:
+        db.query(EvidenceCard).filter(EvidenceCard.source_report_id == report.id).delete(synchronize_session=False)
+        db.query(KnowledgeNote).filter(KnowledgeNote.source_report_id == report.id).delete(synchronize_session=False)
+        db.delete(report); db.delete(book); db.commit(); db.close()
+
+
+def test_human_claim_review_updates_ledger_and_rejects_new_anchors():
+    import json
+    from backend.app.api.study import StudyClaimsUpdateReq, update_report_claims
+    from backend.app.core.database import SessionLocal
+    from backend.app.models import Book, StudyReport
+
+    db = SessionLocal()
+    book = Book(title=f"ledger-{uuid4().hex}", file_path="ledger.pdf", file_type="pdf", status="ready")
+    db.add(book); db.flush()
+    anchor = f"B{book.id}:P2"
+    report = StudyReport(book_ids_json=json.dumps([book.id]), focus="复核台账",
+                         selection_json="{}", content="报告",
+                         claims_json=json.dumps([{"claim": "原主张", "source_refs": [anchor],
+                                                  "status": "needs_review"}], ensure_ascii=False))
+    db.add(report); db.commit(); db.refresh(report)
+    try:
+        payload = update_report_claims(report.id, StudyClaimsUpdateReq(claims=[{
+            "claim": "人工修订主张", "source_refs": [anchor, "B999999:P1"], "status": "supported",
+            "synthesis_relation": "conflict", "evidence_quality": "moderate",
+            "reason": "人工核验原文", "human_review_required": False,
+        }]), db)
+        assert payload["claims"][0]["claim"] == "人工修订主张"
+        assert payload["claims"][0]["source_refs"] == [anchor]
+        assert payload["selection"]["claims_reviewed_by"] == "user"
+        assert payload["selection"]["evidence_summary"]["relations"]["conflict"] == 1
+    finally:
+        db.delete(report); db.delete(book); db.commit(); db.close()
 
 
 def test_multi_book_vector_retrieval_stays_in_scope(monkeypatch):

@@ -595,7 +595,7 @@ def ai_generate(req: KnowledgeAiGenerateReq, db: Session = Depends(get_db)):
         # 后台线程独立 Session（不共享请求级 Session）
         db2 = SessionLocal()
         try:
-            cfg = load_llm_config(db2)
+            cfg = load_llm_config(db2, "research")
             cfg = {**cfg, "deepseek_model": "flash"}  # 批量生成固定用 flash
             provider = LLMRouter.get("auto", cfg)
             total = 0
@@ -692,7 +692,7 @@ def expand_node(req: KnowledgeNodeExpandReq, db: Session = Depends(get_db)):
     from backend.app.worker.tasks import submit
 
     node = _get_node(db, req.node_id)
-    cfg = load_llm_config(db)
+    cfg = load_llm_config(db, "research")
     if not cfg.get("deepseek_api_key"):
         raise HTTPException(400, "未配置 DeepSeek API Key")
 
@@ -802,7 +802,7 @@ async def review_note(node_id: int, db: Session = Depends(get_db)):
     from backend.app.services.llm import LLMRouter, load_llm_config
 
     node = _get_node(db, node_id)
-    cfg = load_llm_config(db)
+    cfg = load_llm_config(db, "research")
     if not cfg.get("deepseek_api_key"):
         raise HTTPException(400, "未配置 DeepSeek API Key")
     provider = LLMRouter.get("auto", cfg)

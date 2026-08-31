@@ -15,7 +15,11 @@ def evaluate_cases(cases: list[dict], search: Callable[[str, int], list[str]], *
         ranked = list(dict.fromkeys(search(case["query"], limit)))[:limit]
         relevant = set(case.get("relevant_ids", []))
         answerable = bool(case.get("answerable", True))
+        strata = case.get("strata") or case.get("stratum") or []
+        if isinstance(strata, str):
+            strata = [strata]
         row = {"id": case["id"], "query": case["query"], "answerable": answerable,
+               "strata": list(dict.fromkeys(str(value) for value in strata if value)),
                "retrieved_ids": ranked}
         if answerable:
             recalls = {f"recall_at_{k}": len(set(ranked[:k]) & relevant) / max(len(relevant), 1) for k in ks}
@@ -31,15 +35,25 @@ def evaluate_cases(cases: list[dict], search: Callable[[str, int], list[str]], *
             rejection_rows.append(row)
         rows.append(row)
 
-    metrics = {}
-    for k in ks:
-        metrics[f"recall_at_{k}"] = round(mean(r[f"recall_at_{k}"] for r in answerable_rows), 4) if answerable_rows else 0.0
-    metrics["mrr"] = round(mean(r["reciprocal_rank"] for r in answerable_rows), 4) if answerable_rows else 0.0
-    metrics["citation_correct_rate"] = round(mean(float(r["citation_correct"]) for r in answerable_rows), 4) if answerable_rows else 0.0
-    metrics["no_answer_rejection_rate"] = round(mean(float(r["refused"]) for r in rejection_rows), 4) if rejection_rows else 0.0
-    metrics.update({"case_count": len(rows), "answerable_count": len(answerable_rows),
-                    "unanswerable_count": len(rejection_rows)})
-    return {"metrics": metrics, "cases": rows}
+    def summarize(selected: list[dict]) -> dict:
+        answerable_selected = [row for row in selected if row["answerable"]]
+        rejection_selected = [row for row in selected if not row["answerable"]]
+        values = {}
+        for k in ks:
+            values[f"recall_at_{k}"] = round(mean(r[f"recall_at_{k}"] for r in answerable_selected), 4) if answerable_selected else None
+        values["mrr"] = round(mean(r["reciprocal_rank"] for r in answerable_selected), 4) if answerable_selected else None
+        values["citation_correct_rate"] = round(mean(float(r["citation_correct"]) for r in answerable_selected), 4) if answerable_selected else None
+        values["no_answer_rejection_rate"] = round(mean(float(r["refused"]) for r in rejection_selected), 4) if rejection_selected else None
+        values.update({"case_count": len(selected), "answerable_count": len(answerable_selected),
+                       "unanswerable_count": len(rejection_selected)})
+        return values
+
+    metrics = summarize(rows)
+    # 顶层指标保持旧版数值契约：没有对应案例时返回 0；分层报告用 null 表示不适用。
+    metrics = {key: (0.0 if value is None else value) for key, value in metrics.items()}
+    stratum_names = sorted({name for row in rows for name in row["strata"]})
+    by_stratum = {name: summarize([row for row in rows if name in row["strata"]]) for name in stratum_names}
+    return {"metrics": metrics, "by_stratum": by_stratum, "cases": rows}
 
 
 def compare_thresholds(metrics: dict, thresholds: dict) -> dict:

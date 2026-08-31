@@ -10,7 +10,8 @@ from playwright.sync_api import sync_playwright
 
 ROUTES = [
     "/library", "/literature-workbench", "/chat", "/knowledge-hub?view=notes",
-    "/knowledge", "/graph", "/study", "/quiz", "/draw", "/plan", "/stats", "/settings",
+    "/knowledge", "/graph", "/study", "/writing", "/knowledge-health",
+    "/quiz", "/draw", "/stats", "/settings",
 ]
 VIEWPORTS = [{"name": "desktop", "width": 1440, "height": 900},
              {"name": "mobile", "width": 390, "height": 844}]

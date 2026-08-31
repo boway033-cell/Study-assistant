@@ -11,25 +11,28 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core import crypto
 from backend.app.core.config import DEEPSEEK_MODELS, settings as app_settings
 from backend.app.core.database import get_db
-from backend.app.models import Setting
+from backend.app.models import Book, Chunk, Setting
 from backend.app.schemas import ProbeItem, ProbeResp, SettingsResp, SettingsUpdateReq
-from backend.app.services.llm import DeepSeekProvider, load_llm_config
+from backend.app.services.llm import (LLM_TASKS, PROFILES_KEY, ROUTING_KEY, LLMRouter,
+                                      load_llm_config, load_provider_routing)
 from backend.app.services.vision import VisionProvider, load_vision_config
 
 router = APIRouter(prefix="/api", tags=["settings"])
-_PROFILES_KEY = "compatible_provider_profiles"
+_PROFILES_KEY = PROFILES_KEY
 
 
 class CompatibleProviderWrite(BaseModel):
     id: str | None = Field(default=None, max_length=40)
     name: str = Field(min_length=1, max_length=80)
     capability: str = Field(pattern="^(text|vision)$")
-    protocol: str = Field(default="openai_chat", pattern="^openai_chat$")
+    vendor: str = Field(default="custom", pattern="^(kimi|zhipu|qwen|openai|anthropic|gemini|custom)$")
+    protocol: str = Field(default="openai_chat", pattern="^(openai_chat|anthropic_messages|google_generate)$")
     base_url: str = Field(min_length=8, max_length=1000)
     model: str = Field(min_length=1, max_length=120)
     api_key: str | None = Field(default=None, max_length=1000)
@@ -37,6 +40,12 @@ class CompatibleProviderWrite(BaseModel):
 
 class StorageCleanupReq(BaseModel):
     categories: list[str] = Field(min_length=1, max_length=3)
+
+
+class ProviderRoutingWrite(BaseModel):
+    default_provider_id: str = Field(min_length=3, max_length=40)
+    task_routes: dict[str, str] = Field(default_factory=dict)
+    fallback_provider_ids: list[str] = Field(default_factory=list, max_length=5)
 
 _DEFAULTS = {
     "deepseek_api_key": app_settings.deepseek_api_key,
@@ -83,8 +92,9 @@ def _compatible_profiles(db: Session) -> list[dict]:
 def _validate_api_base(value: str) -> str:
     url = value.strip().rstrip("/")
     parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-        raise HTTPException(400, "兼容接口 Base URL 必须是不含凭据的 HTTPS 地址")
+    local_http = parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    if (parsed.scheme != "https" and not local_http) or not parsed.hostname or parsed.username or parsed.password:
+        raise HTTPException(400, "Base URL 必须为 HTTPS；仅 localhost/127.0.0.1 可使用 HTTP")
     return url
 
 
@@ -103,6 +113,9 @@ def get_settings(db: Session = Depends(get_db)):
         vector_search=_get_setting(db, "vector_search") == "true",
         deepseek_configured=bool(api_key),
         vision_configured=bool(vcfg["vision_api_key"]),
+        text_provider_configured=bool(cfg.get("configured")),
+        active_text_provider=str(cfg.get("provider_name") or "DeepSeek"),
+        active_text_model=str(cfg.get("model") or ""),
     )
 
 
@@ -140,26 +153,35 @@ def update_settings(req: SettingsUpdateReq, db: Session = Depends(get_db)):
 async def probe(db: Session = Depends(get_db)):
     cfg = load_llm_config(db)
     vcfg = load_vision_config(db)
-    deepseek = DeepSeekProvider(api_key=cfg["deepseek_api_key"], base_url=cfg["deepseek_base_url"],
-                                model=cfg["deepseek_model"])
-    deepseek_ok, deepseek_reason = await deepseek.check_available()
+    text_provider = LLMRouter.get("auto", cfg)
+    text_ok, text_reason = await text_provider.check_available()
     vision = VisionProvider(api_key=vcfg["vision_api_key"], base_url=vcfg["vision_base_url"],
                             model=vcfg["vision_model"])
     vision_ok, vision_reason = await vision.check_available()
     return ProbeResp(
-        deepseek=ProbeItem(ok=deepseek_ok, reason=deepseek_reason),
+        deepseek=ProbeItem(ok=text_ok, reason=text_reason),
         vision=ProbeItem(ok=vision_ok, reason=vision_reason),
+        text=ProbeItem(ok=text_ok, reason=text_reason),
     )
 
 
 @router.get("/settings/providers")
 def list_compatible_providers(db: Session = Depends(get_db)):
-    items = []
+    deepseek_key = crypto.decrypt(_get_setting(db, "deepseek_api_key"))
+    items = [{"id": "deepseek", "name": "DeepSeek", "vendor": "deepseek",
+              "capability": "text", "protocol": "openai_chat",
+              "base_url": _get_setting(db, "deepseek_base_url") or app_settings.deepseek_base_url,
+              "model": _get_setting(db, "deepseek_model") or app_settings.deepseek_model,
+              "configured": bool(deepseek_key), "api_key": _mask_key(deepseek_key), "builtin": True}]
     for profile in _compatible_profiles(db):
         key = crypto.decrypt(_get_setting(db, f"compatible_provider_key:{profile.get('id', '')}"))
-        items.append({**profile, "configured": bool(key), "api_key": _mask_key(key)})
-    return {"default_text_provider": "deepseek", "default_vision_provider": "qwen-vl",
-            "routing_locked": True, "items": items}
+        local = str(profile.get("base_url") or "").startswith(("http://localhost", "http://127.0.0.1"))
+        items.append({**profile, "configured": bool(key) or local, "api_key": _mask_key(key)})
+    routing = load_provider_routing(db)
+    return {"default_text_provider": routing["default"], "default_vision_provider": "qwen-vl",
+            "routing_locked": False, "task_routes": routing["tasks"], "tasks": list(LLM_TASKS),
+            "fallback_provider_ids": routing.get("fallbacks", []),
+            "items": items}
 
 
 @router.post("/settings/providers", status_code=201)
@@ -168,7 +190,8 @@ def save_compatible_provider(req: CompatibleProviderWrite, db: Session = Depends
     if not re.fullmatch(r"[a-z0-9_-]{3,40}", provider_id):
         raise HTTPException(400, "接口 ID 只能包含小写字母、数字、_ 和 -")
     profiles = _compatible_profiles(db)
-    profile = {"id": provider_id, "name": req.name.strip(), "capability": req.capability,
+    profile = {"id": provider_id, "name": req.name.strip(), "vendor": req.vendor,
+               "capability": req.capability,
                "protocol": req.protocol, "base_url": _validate_api_base(req.base_url),
                "model": req.model.strip()}
     existing = next((index for index, item in enumerate(profiles) if item.get("id") == provider_id), None)
@@ -180,11 +203,18 @@ def save_compatible_provider(req: CompatibleProviderWrite, db: Session = Depends
     if req.api_key:
         _set_setting(db, f"compatible_provider_key:{provider_id}", crypto.encrypt(req.api_key.strip()))
     db.commit()
-    return {**profile, "configured": bool(req.api_key or crypto.decrypt(_get_setting(db, f"compatible_provider_key:{provider_id}")))}
+    configured = bool(req.api_key or crypto.decrypt(_get_setting(db, f"compatible_provider_key:{provider_id}")))
+    configured = configured or profile["base_url"].startswith(("http://localhost", "http://127.0.0.1"))
+    return {**profile, "configured": configured}
 
 
 @router.delete("/settings/providers/{provider_id}", status_code=204)
 def delete_compatible_provider(provider_id: str, db: Session = Depends(get_db)):
+    routing = load_provider_routing(db)
+    if provider_id == "deepseek":
+        raise HTTPException(400, "内置 DeepSeek 连接不可删除")
+    if provider_id == routing["default"] or provider_id in routing["tasks"].values() or provider_id in routing.get("fallbacks", []):
+        raise HTTPException(409, "该连接正在被默认路由或功能路由使用，请先切换路由")
     profiles = [item for item in _compatible_profiles(db) if item.get("id") != provider_id]
     _set_setting(db, _PROFILES_KEY, json.dumps(profiles, ensure_ascii=False))
     key_row = db.get(Setting, f"compatible_provider_key:{provider_id}")
@@ -195,21 +225,101 @@ def delete_compatible_provider(provider_id: str, db: Session = Depends(get_db)):
 
 @router.post("/settings/providers/{provider_id}/probe")
 async def probe_compatible_provider(provider_id: str, db: Session = Depends(get_db)):
+    if provider_id == "deepseek":
+        provider = LLMRouter.get("auto", {
+            "provider_id": "deepseek",
+            "api_key": crypto.decrypt(_get_setting(db, "deepseek_api_key")),
+            "base_url": _get_setting(db, "deepseek_base_url") or app_settings.deepseek_base_url,
+            "deepseek_model": _get_setting(db, "deepseek_model") or app_settings.deepseek_model,
+        })
+        ok, reason = await provider.check_available()
+        return {"ok": ok, "reason": reason}
     profile = next((item for item in _compatible_profiles(db) if item.get("id") == provider_id), None)
     if not profile:
         raise HTTPException(404, "兼容接口不存在")
     key = crypto.decrypt(_get_setting(db, f"compatible_provider_key:{provider_id}"))
-    if not key:
-        return {"ok": False, "reason": "未配置 API Key"}
+    cfg = {**profile, "provider_id": provider_id, "provider_name": profile.get("name", provider_id),
+           "api_key": key}
+    ok, reason = await LLMRouter.get("auto", cfg).check_available()
+    return {"ok": ok, "reason": reason}
+
+
+@router.put("/settings/providers/routing")
+def update_provider_routing(req: ProviderRoutingWrite, db: Session = Depends(get_db)):
+    known = {"deepseek", *(item.get("id") for item in _compatible_profiles(db))}
+    if req.default_provider_id not in known:
+        raise HTTPException(400, "默认连接不存在")
+    unknown_tasks = set(req.task_routes) - set(LLM_TASKS)
+    unknown_providers = {value for value in req.task_routes.values() if value} - known
+    unknown_fallbacks = set(req.fallback_provider_ids) - known
+    if unknown_tasks:
+        raise HTTPException(400, f"未知功能路由：{', '.join(sorted(unknown_tasks))}")
+    if unknown_providers:
+        raise HTTPException(400, f"路由连接不存在：{', '.join(sorted(unknown_providers))}")
+    if unknown_fallbacks:
+        raise HTTPException(400, f"降级连接不存在：{', '.join(sorted(unknown_fallbacks))}")
+    value = {"default": req.default_provider_id,
+             "tasks": {task: provider_id for task, provider_id in req.task_routes.items()
+                       if provider_id and provider_id != req.default_provider_id},
+             "fallbacks": [provider_id for provider_id in dict.fromkeys(req.fallback_provider_ids)
+                           if provider_id != req.default_provider_id]}
+    _set_setting(db, ROUTING_KEY, json.dumps(value, ensure_ascii=False))
+    db.commit()
+    return value
+
+
+@router.get("/settings/providers/usage")
+def provider_usage(db: Session = Depends(get_db)):
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5)) as client:
-            response = await client.get(f"{profile['base_url'].rstrip('/')}/models",
-                                        headers={"Authorization": f"Bearer {key}"})
-        if response.status_code == 200:
-            return {"ok": True, "reason": f"接口可达；已配置模型 {profile['model']}"}
-        return {"ok": False, "reason": f"HTTP {response.status_code}: {response.text[:160]}"}
+        rows = json.loads(_get_setting(db, "llm_usage_stats") or "{}")
+    except (TypeError, ValueError):
+        rows = {}
+    items = sorted((value for value in rows.values() if isinstance(value, dict)),
+                   key=lambda item: (item.get("provider_id", ""), item.get("task", "")))
+    totals = {key: sum(int(item.get(key, 0)) for item in items) for key in
+              ("calls", "successes", "failures", "fallback_activations", "input_chars", "output_chars", "estimated_tokens", "elapsed_ms")}
+    return {"items": items, "totals": totals,
+            "boundary": "Token 为按输入输出字符数除以 4 的本地估算；供应商未返回标准 usage 时不代表账单用量或费用。"}
+
+
+@router.get("/settings/providers/{provider_id}/models")
+async def list_provider_models(provider_id: str, db: Session = Depends(get_db)):
+    if provider_id == "deepseek":
+        cfg = {"provider_id": "deepseek", "protocol": "openai_chat",
+               "api_key": crypto.decrypt(_get_setting(db, "deepseek_api_key")),
+               "base_url": _get_setting(db, "deepseek_base_url") or app_settings.deepseek_base_url}
+    else:
+        profile = next((item for item in _compatible_profiles(db) if item.get("id") == provider_id), None)
+        if not profile:
+            raise HTTPException(404, "模型连接不存在")
+        cfg = {**profile, "provider_id": provider_id,
+               "api_key": crypto.decrypt(_get_setting(db, f"compatible_provider_key:{provider_id}"))}
+    headers = {}
+    params = {}
+    if cfg.get("protocol") == "anthropic_messages":
+        headers = {"x-api-key": cfg.get("api_key", ""), "anthropic-version": "2023-06-01"}
+    elif cfg.get("protocol") == "google_generate":
+        params = {"key": cfg.get("api_key", "")}
+    elif cfg.get("api_key"):
+        headers = {"Authorization": f"Bearer {cfg['api_key']}"}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12, connect=5)) as client:
+            response = await client.get(f"{str(cfg.get('base_url', '')).rstrip('/')}/models",
+                                        headers=headers, params=params)
+        if response.status_code != 200:
+            raise HTTPException(response.status_code, f"模型列表读取失败：{response.text[:200]}")
+        data = response.json()
+        values = data.get("data") if isinstance(data, dict) else None
+        if values is None and isinstance(data, dict):
+            values = data.get("models", [])
+        models = []
+        for item in values or []:
+            model_id = item.get("id") or item.get("name") if isinstance(item, dict) else str(item)
+            if model_id:
+                models.append(str(model_id).removeprefix("models/"))
+        return {"items": sorted(set(models))}
     except httpx.HTTPError as exc:
-        return {"ok": False, "reason": f"连接失败：{type(exc).__name__}: {exc}"}
+        raise HTTPException(502, f"模型列表读取失败：{exc}") from exc
 
 
 def _path_size(path: Path) -> int:
@@ -250,6 +360,32 @@ def get_storage_usage():
     # 预览图包含在 presentations 中，汇总时避免重复计算。
     return {"total_bytes": sum(item["bytes"] for item in items if item["key"] != "presentation_previews"),
             "items": items, "protected": ["originals", "database", "backups", "presentations"]}
+
+
+@router.get("/settings/capacity")
+def get_capacity_status(db: Session = Depends(get_db)):
+    """Report an explicit local-library tier; thresholds are operational guardrails, not hard limits."""
+    books = int(db.scalar(select(func.count()).select_from(Book)) or 0)
+    chunks = int(db.scalar(select(func.count()).select_from(Chunk)) or 0)
+    database_bytes = _path_size(app_settings.db_path)
+    thresholds = {
+        "attention_above": {"books": 1000, "chunks": 250_000, "database_bytes": 8 * 1024 ** 3},
+        "migration_review_above": {"books": 2000, "chunks": 1_000_000, "database_bytes": 20 * 1024 ** 3},
+    }
+    migrate = thresholds["migration_review_above"]
+    attention = thresholds["attention_above"]
+    if books > migrate["books"] or chunks > migrate["chunks"] or database_bytes > migrate["database_bytes"]:
+        tier = "migration_review"
+        recommendation = "已进入超大库评审区：先运行固定压力测试、完成可恢复备份，再评估 PostgreSQL/外部检索索引迁移。"
+    elif books > attention["books"] or chunks > attention["chunks"] or database_bytes > attention["database_bytes"]:
+        tier = "attention"
+        recommendation = "接近个人库高负载区：建议运行容量基准、检查慢查询与备份恢复耗时，不要只凭资料本数判断。"
+    else:
+        tier = "normal"
+        recommendation = "当前仍在 SQLite 个人知识库常规区间；继续关注检索延迟、数据库体积和备份可恢复性。"
+    return {"tier": tier, "books": books, "chunks": chunks, "database_bytes": database_bytes,
+            "thresholds": thresholds, "recommendation": recommendation,
+            "boundary": "阈值是工程预警线，不是 SQLite 理论容量；迁移决策还应结合设备、全文长度、并发和实测延迟。"}
 
 
 @router.post("/settings/storage/cleanup")

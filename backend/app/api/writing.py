@@ -14,10 +14,11 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
-from backend.app.models import WritingDnaProfile, WritingDnaRevision, WritingOutput
+from backend.app.models import (Book, Chunk, EvidenceCard, KnowledgeNote, StudyReport,
+                                WritingDnaProfile, WritingDnaRevision, WritingOutput)
 from backend.app.services.writing_lab import (apply_docx_changes, apply_text_changes,
-    clean_blocks, create_word_output, distill_profile_task, docx_blocks, imitate,
-    output_path, text_blocks, validate_corpus)
+    clean_blocks, content_fingerprint, create_word_output, distill_profile_task, docx_blocks,
+    generate_literature_review, imitate, output_path, text_blocks, validate_corpus)
 from backend.app.worker.tasks import submit
 
 router = APIRouter(prefix="/api/writing", tags=["writing"])
@@ -41,6 +42,20 @@ class ImitateReq(BaseModel):
     genre: str = Field(default="深度文章", max_length=80)
     length: int = Field(default=1800, ge=300, le=12000)
     brief: str = Field(default="", max_length=4000)
+    knowledge_note_ids: list[int] = Field(default_factory=list, max_length=40)
+    evidence_card_ids: list[int] = Field(default_factory=list, max_length=40)
+    report_ids: list[int] = Field(default_factory=list, max_length=10)
+
+
+class LiteratureReviewReq(BaseModel):
+    title: str = Field(min_length=2, max_length=255)
+    question: str = Field(min_length=4, max_length=1200)
+    book_ids: list[int] = Field(min_length=2, max_length=50)
+    review_type: str = Field(default="narrative", pattern="^(narrative|scoping|evidence_map)$")
+    discipline: str = Field(default="auto", pattern="^(auto|social_science|humanities|natural_biomedical)$")
+    length: int = Field(default=3500, ge=1200, le=20000)
+    profile_id: int | None = None
+    ai_tone_constraints: bool = True
 
 
 class CleanTextReq(BaseModel):
@@ -90,6 +105,72 @@ def _output(row: WritingOutput, detail: bool = True) -> dict:
     else:
         value.update({"output_preview": (row.output_text or "")[:180], "output_length": len(row.output_text or "")})
     return value
+
+
+def _source_freshness(db: Session, row: WritingOutput) -> dict:
+    audit = _loads(row.audit_json, {})
+    changed: list[dict] = []
+    missing: list[dict] = []
+    checked = 0
+    legacy = False
+    for item in audit.get("knowledge_objects", []) if isinstance(audit.get("knowledge_objects"), list) else []:
+        kind, object_id, expected = item.get("type"), item.get("id"), item.get("fingerprint")
+        model = {"note": KnowledgeNote, "evidence": EvidenceCard, "report": StudyReport}.get(kind)
+        current = db.get(model, object_id) if model and object_id else None
+        if not current:
+            missing.append({"type": kind, "id": object_id, "title": item.get("title")})
+            continue
+        if not expected:
+            legacy = True
+            continue
+        checked += 1
+        if kind == "note":
+            actual = content_fingerprint(current.title, current.content, current.source_refs_json)
+        elif kind == "evidence":
+            actual = content_fingerprint(current.title, current.claim_text, current.evidence_text,
+                                         current.source_ref_json, current.verification_status)
+        else:
+            actual = content_fingerprint(current.focus, current.content, current.claims_json,
+                                         current.selection_json)
+        if actual != expected:
+            changed.append({"type": kind, "id": object_id, "title": item.get("title")})
+    manifests = audit.get("evidence_manifest", []) if isinstance(audit.get("evidence_manifest"), list) else []
+    for manifest in manifests:
+        book_id = manifest.get("book_id")
+        book = db.get(Book, book_id) if book_id else None
+        if not book:
+            missing.append({"type": "book", "id": book_id, "title": manifest.get("title")})
+            continue
+        expected_book_hash = manifest.get("book_file_hash")
+        if expected_book_hash and expected_book_hash != book.file_hash:
+            changed.append({"type": "book", "id": book_id, "title": manifest.get("title")})
+        fingerprints = manifest.get("source_fingerprints")
+        if not isinstance(fingerprints, list):
+            legacy = True
+            continue
+        for source in fingerprints:
+            chunk_id, expected = source.get("chunk_id"), source.get("fingerprint")
+            chunk = db.get(Chunk, chunk_id) if chunk_id else None
+            if not chunk:
+                missing.append({"type": "chunk", "id": chunk_id, "book_id": book_id})
+                continue
+            checked += 1
+            actual = content_fingerprint(chunk.content, chunk.page_start, chunk.page_end, chunk.chapter_id)
+            if expected and actual != expected:
+                changed.append({"type": "chunk", "id": chunk_id, "book_id": book_id})
+    if missing:
+        status, message = "missing", "部分原始知识对象或文献片段已被删除，请重新生成后再引用。"
+    elif changed:
+        status, message = "stale", "生成后来源内容发生变化，当前正文与引用需要重新核对。"
+    elif checked:
+        status, message = "fresh", "生成时使用的知识对象与文献片段未发生变化。"
+    elif legacy:
+        status, message = "unknown", "这是旧版输出，未保存来源指纹，无法自动判断是否过期。"
+    else:
+        status, message = "not_applicable", "该输出没有可复核的知识库来源快照。"
+    return {"status": status, "message": message, "checked_sources": checked,
+            "changed": changed, "missing": missing,
+            "checked_at": datetime.now(timezone.utc).isoformat()}
 
 
 def _safe_writing_file(folder: str, filename: str | None) -> Path | None:
@@ -173,12 +254,43 @@ def refine_profile(profile_id: int, req: ProfileRefineReq, db: Session = Depends
 @router.post("/profiles/{profile_id}/imitate")
 async def imitate_with_profile(profile_id: int, req: ImitateReq, db: Session = Depends(get_db)):
     try:
-        row = await imitate(db, profile_id, req.topic, req.genre, req.length, req.brief)
+        row = await imitate(db, profile_id, req.topic, req.genre, req.length, req.brief,
+                            req.knowledge_note_ids, req.evidence_card_ids, req.report_ids)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     path = output_path(); create_word_output(row.title, row.output_text, path)
     row.output_file_path = path.name; db.commit(); db.refresh(row)
     return _output(row)
+
+
+async def _literature_review_task(record, payload: dict) -> dict:
+    from backend.app.core.database import SessionLocal
+    from backend.app.worker.tasks import update_progress
+
+    db = SessionLocal()
+    try:
+        update_progress(record, 0.08, "evidence", "正在为每篇文献建立均衡证据包...")
+        row = await generate_literature_review(
+            db, question=payload["question"], title=payload["title"], book_ids=payload["book_ids"],
+            review_type=payload["review_type"], discipline=payload["discipline"], length=payload["length"],
+            profile_id=payload.get("profile_id"), ai_tone_constraints=payload["ai_tone_constraints"],
+        )
+        update_progress(record, 0.88, "document", "正在生成可编辑 Word 与引用审计...")
+        path = output_path(); create_word_output(row.title, row.output_text, path)
+        row.output_file_path = path.name; db.commit(); db.refresh(row)
+        update_progress(record, 1.0, "done", "多文献综述已生成")
+        return {"output_id": row.id}
+    finally:
+        db.close()
+
+
+@router.post("/literature-review", status_code=202)
+def literature_review(req: LiteratureReviewReq):
+    payload = req.model_dump()
+    payload["question"] = req.question.strip(); payload["title"] = req.title.strip()
+    task = submit("literature-review", lambda record: _literature_review_task(record, payload),
+                  book_id=req.book_ids[0])
+    return {"task_id": task.id}
 
 
 @router.post("/clean-text")
@@ -255,7 +367,7 @@ def get_output(output_id: int, db: Session = Depends(get_db)):
     row = db.get(WritingOutput, output_id)
     if not row:
         raise HTTPException(404, "写作输出不存在")
-    return _output(row)
+    return {**_output(row), "source_freshness": _source_freshness(db, row)}
 
 
 @router.patch("/outputs/{output_id}")
@@ -321,6 +433,21 @@ def download_output(output_id: int, db: Session = Depends(get_db)):
     row = db.get(WritingOutput, output_id)
     if not row or not row.output_file_path:
         raise HTTPException(404, "Word 输出不存在")
+    # 旧版输出可能仍包含 [B…] 机器锚点；首次下载时就地升级为读者脚注版。
+    if row.kind == "literature_review" and "[B" in (row.output_text or ""):
+        audit = _loads(row.audit_json, {})
+        valid = {str(anchor).strip("[]") for item in audit.get("evidence_manifest", [])
+                 for anchor in (item.get("anchors") or [])}
+        from backend.app.services.writing_citations import database_source_labels, readable_citations
+        cleaned, notes = readable_citations(row.output_text, valid_anchors=valid,
+                                             labels=database_source_labels(db, valid))
+        row.output_text = cleaned
+        if notes:
+            audit["citation_notes"] = notes
+        audit["citation_display_version"] = 1
+        row.audit_json = json.dumps(audit, ensure_ascii=False)
+        _replace_word_output(row, cleaned)
+        db.commit(); db.refresh(row)
     path = (settings.writing_dir / "outputs" / Path(row.output_file_path).name).resolve()
     if path.parent != (settings.writing_dir / "outputs").resolve() or not path.exists():
         raise HTTPException(404, "Word 输出文件丢失")

@@ -84,13 +84,13 @@
           <div v-else-if="mdLoading" v-loading="true" class="artifact-loading" />
           <el-empty v-else description="尚未生成结构化阅读材料">
             <el-button type="primary" :loading="runningDeep" @click="runDeep">开始深度分析</el-button>
-            <p class="privacy-tip">将目录候选与相关正文发送至已配置的 DeepSeek，用于结构补缺与来源约束分析。</p>
+            <p class="privacy-tip">将目录候选与相关正文发送至研究功能当前使用的模型，用于结构补缺与来源约束分析。</p>
           </el-empty>
         </article>
       </section>
     </main>
 
-    <el-dialog v-model="tocEditorOpen" title="目录结构工作台" width="min(1480px, 96vw)" destroy-on-close>
+    <el-dialog v-model="tocEditorOpen" title="目录结构工作台" width="min(1480px, 96vw)" append-to-body destroy-on-close>
       <div v-loading="tocEditorLoading" class="toc-editor">
         <div class="toc-audit-bar">
           <div>
@@ -107,7 +107,7 @@
           </div>
         </div>
         <div class="toc-workspace-actions">
-          <span>选择左侧节点，在右侧修改；中间始终显示对应原页。AI 建议不会自动覆盖人工目录。</span>
+          <span>选择左侧节点，在右侧修改；中间始终显示对应原页。拖动 ⋮⋮ 可调整顺序或层级；AI 建议不会自动覆盖人工目录。</span>
           <el-checkbox v-model="tocReviewOnly">仅看待复核</el-checkbox>
           <el-button size="small" :disabled="!tocIssueItems.length" @click="selectNextTocIssue">下一处问题</el-button>
           <el-button size="small" :disabled="!tocHistory.length" @click="undoToc">撤销</el-button>
@@ -119,13 +119,30 @@
             添加 {{ missingCandidateLabel(candidate) }} · 第 {{ candidate.page_range?.join('–') }} 页
           </el-button>
         </div>
+        <div v-if="tocAudit.academic_structure?.classified" class="toc-academic-audit">
+          <div><b>{{ tocAudit.academic_structure.profile_label }}</b><span>已识别：{{ tocAudit.academic_structure.detected_role_labels?.join('、') }}</span></div>
+          <div v-if="tocAudit.academic_structure.missing_core_roles?.length"><small>尚未识别，请对照原页核对</small><el-tag v-for="role in tocAudit.academic_structure.missing_core_roles" :key="role" size="small" type="warning" effect="plain">{{ role }}</el-tag></div>
+          <el-tag v-else size="small" type="success" effect="plain">核心结构已覆盖</el-tag>
+        </div>
         <div class="toc-workspace">
           <section class="toc-tree-panel">
             <div class="toc-panel-title">目录树 <small>{{ visibleTocTreeCount }} 项</small></div>
             <el-tree-v2 :data="tocVisibleTree" :props="tocTreeProps" :height="520" :item-size="36"
               :current-node-key="selectedTocKey" highlight-current @node-click="selectTocNode">
               <template #default="{ data }">
-                <div class="toc-tree-node" :class="`status-${data.review_status}`">
+                <div class="toc-tree-node" :class="[`status-${data.review_status}`, {
+                  'is-dragging': tocDrag?.key === data.client_key,
+                  'drop-before': tocDrop?.key === data.client_key && tocDrop.position === 'before',
+                  'drop-inside': tocDrop?.key === data.client_key && tocDrop.position === 'inside',
+                  'drop-after': tocDrop?.key === data.client_key && tocDrop.position === 'after',
+                }]"
+                  :draggable="!tocReviewOnly"
+                  :aria-label="`拖拽调整目录：${data.title}`"
+                  @dragstart.stop="startTocDrag(data, $event)"
+                  @dragover.prevent.stop="overTocDrag(data, $event)"
+                  @drop.prevent.stop="dropTocDrag(data, $event)"
+                  @dragend="endTocDrag">
+                  <span class="toc-drag-handle" aria-hidden="true">⋮⋮</span>
                   <span class="toc-node-title">{{ data.title }}</span>
                   <span class="toc-node-page">{{ data.start_page }}</span>
                   <span v-if="data.edited" class="toc-node-edited">改</span>
@@ -216,6 +233,9 @@ const tocRevisions = ref([])
 const selectedTocKey = ref('')
 const tocReviewOnly = ref(false)
 const tocHistory = ref([])
+const tocDrag = ref(null)
+const tocDrop = ref(null)
+const tocLevelBefore = ref(null)
 let tocTempId = 0
 
 const fileUrl = computed(() => book.value ? bookFileUrl(book.value.id) : '')
@@ -264,21 +284,49 @@ const sendToDeck = () => {
 }
 const askKnowledgeBase = () => router.push({ path: '/chat', query: { bookId: book.value.id } })
 
+const draftItemsFromAudit = (audit) => (audit?.items || []).map(item => ({
+  client_key: `id:${item.id}`, id: item.id, title: item.title,
+  level: item.declared_level ?? item.level ?? 1, start_page: item.page ?? item.start_page ?? 1,
+  review_status: item.review_status,
+  issueText: item.issues?.map(issue => issue.message).join('；') || '', edited: false,
+}))
+const setTocDraftFromAudit = (audit, preserveSelection = true) => {
+  const previousKey = preserveSelection ? selectedTocKey.value : ''
+  tocLevelBefore.value = null
+  tocAudit.value = audit || { items: [], issues: [], summary: {} }
+  tocDraft.value = draftItemsFromAudit(tocAudit.value)
+  if (!tocDraft.value.some(item => item.client_key === previousKey)) {
+    selectedTocKey.value = tocIssueItems.value[0]?.client_key || tocDraft.value[0]?.client_key || ''
+  } else {
+    selectedTocKey.value = previousKey
+  }
+}
+const flattenChapters = (chapters) => {
+  const flat = []
+  const walk = (nodes, level) => {
+    for (const node of nodes || []) {
+      flat.push({ id: node.id, title: node.title, level: node.level || level, start_page: node.start_page })
+      if (node.children?.length) walk(node.children, level + 1)
+    }
+  }
+  walk(chapters, 1)
+  return flat
+}
+const applyTocResultInPlace = async (result) => {
+  if (result?.chapters && book.value) {
+    book.value.chapters = result.chapters
+    tocFlat.value = flattenChapters(result.chapters)
+  }
+  if (result?.audit) setTocDraftFromAudit(result.audit)
+  tocRevisions.value = await listTocRevisions(book.value.id)
+  tocHistory.value = []
+}
 const loadTocEditor = async () => {
   tocEditorLoading.value = true
   try {
     const [audit, revisions] = await Promise.all([getTocReview(book.value.id), listTocRevisions(book.value.id)])
-    tocAudit.value = audit
     tocRevisions.value = revisions
-    tocDraft.value = audit.items.map(item => ({
-      client_key: `id:${item.id}`, id: item.id, title: item.title,
-      level: item.declared_level, start_page: item.page,
-      review_status: item.review_status,
-      issueText: item.issues?.map(issue => issue.message).join('；') || '', edited: false,
-    }))
-    if (!tocDraft.value.some(item => item.client_key === selectedTocKey.value)) {
-      selectedTocKey.value = tocIssueItems.value[0]?.client_key || tocDraft.value[0]?.client_key || ''
-    }
+    setTocDraftFromAudit(audit)
     tocHistory.value = []
   } catch (e) { ElMessage.error(e.message) }
   finally { tocEditorLoading.value = false }
@@ -287,6 +335,7 @@ const openTocEditor = async () => { tocEditorOpen.value = true; await loadTocEdi
 
 const selectTocNode = (data) => { selectedTocKey.value = data.client_key }
 const checkpointToc = () => {
+  tocLevelBefore.value = selectedToc.value?.level ?? null
   const snapshot = JSON.stringify(tocDraft.value)
   if (tocHistory.value.at(-1) !== snapshot) {
     tocHistory.value.push(snapshot)
@@ -297,6 +346,7 @@ const undoToc = () => {
   const snapshot = tocHistory.value.pop()
   if (!snapshot) return
   tocDraft.value = JSON.parse(snapshot)
+  tocLevelBefore.value = null
 }
 const selectNextTocIssue = () => {
   if (!tocIssueItems.value.length) return
@@ -305,14 +355,37 @@ const selectNextTocIssue = () => {
 }
 
 const normalizeAllTocLevels = () => {
+  const stack = []
   for (let i = 0; i < tocDraft.value.length; i++) {
-    const maxLevel = i ? Math.min(4, tocDraft.value[i - 1].level + 1) : 1
-    tocDraft.value[i].level = Math.max(1, Math.min(maxLevel, tocDraft.value[i].level || 1))
+    const requested = Math.max(1, Math.min(4, Number(tocDraft.value[i].level) || 1))
+    while (stack.length >= requested) stack.pop()
+    const level = Math.min(requested, stack.length + 1)
+    tocDraft.value[i].level = level
+    stack[level - 1] = tocDraft.value[i]
+    stack.length = level
   }
 }
-const normalizeTocLevels = (index) => {
-  tocDraft.value[index].edited = true
-  normalizeAllTocLevels()
+const normalizeTocLevels = (index, requestedLevel = tocDraft.value[index]?.level, originalLevel = tocLevelBefore.value) => {
+  const item = tocDraft.value[index]
+  if (!item) return
+  const baseLevel = Number(originalLevel) || item.level
+  const maxLevel = index ? Math.min(4, tocDraft.value[index - 1].level + 1) : 1
+  const requested = Math.max(1, Math.min(maxLevel, Number(requestedLevel) || 1))
+  const delta = requested - baseLevel
+  if (!delta) {
+    item.level = baseLevel
+    tocLevelBefore.value = null
+    return
+  }
+  let end = index + 1
+  while (end < tocDraft.value.length && tocDraft.value[end].level > baseLevel) end++
+  for (let i = index; i < end; i++) {
+    tocDraft.value[i].level = i === index
+      ? requested
+      : Math.max(1, Math.min(4, tocDraft.value[i].level + delta))
+    tocDraft.value[i].edited = true
+  }
+  tocLevelBefore.value = null
 }
 const subtreeEnd = (index) => {
   const level = tocDraft.value[index].level
@@ -342,17 +415,74 @@ const moveSelectedToc = (direction) => {
   const index = selectedTocIndex(); if (index < 0) return
   checkpointToc(); moveTocGroup(index, direction)
 }
+
+const tocDropPosition = (event) => {
+  const rect = event.currentTarget?.getBoundingClientRect?.()
+  if (!rect || !rect.height) return 'inside'
+  const ratio = (event.clientY - rect.top) / rect.height
+  return ratio < 0.28 ? 'before' : ratio > 0.72 ? 'after' : 'inside'
+}
+const startTocDrag = (data, event) => {
+  if (tocReviewOnly.value) return
+  const index = tocDraft.value.findIndex(item => item.client_key === data.client_key)
+  if (index < 0) return
+  tocDrag.value = { key: data.client_key, index }
+  tocDrop.value = null
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', data.client_key)
+  }
+}
+const overTocDrag = (data, event) => {
+  if (!tocDrag.value || tocReviewOnly.value) return
+  const sourceIndex = tocDraft.value.findIndex(item => item.client_key === tocDrag.value.key)
+  const targetIndex = tocDraft.value.findIndex(item => item.client_key === data.client_key)
+  if (sourceIndex < 0 || targetIndex < 0) return
+  const sourceEnd = subtreeEnd(sourceIndex)
+  if (targetIndex >= sourceIndex && targetIndex < sourceEnd) {
+    tocDrop.value = null
+    return
+  }
+  tocDrop.value = { key: data.client_key, position: tocDropPosition(event) }
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+const endTocDrag = () => { tocDrag.value = null; tocDrop.value = null }
+const dropTocDrag = (data, event) => {
+  if (!tocDrag.value || tocReviewOnly.value) return endTocDrag()
+  const sourceIndex = tocDraft.value.findIndex(item => item.client_key === tocDrag.value.key)
+  const targetKey = data.client_key
+  const targetIndexBefore = tocDraft.value.findIndex(item => item.client_key === targetKey)
+  if (sourceIndex < 0 || targetIndexBefore < 0) return endTocDrag()
+  const sourceEnd = subtreeEnd(sourceIndex)
+  if (targetIndexBefore >= sourceIndex && targetIndexBefore < sourceEnd) return endTocDrag()
+  const position = tocDrop.value?.position || tocDropPosition(event)
+  checkpointToc()
+  const group = tocDraft.value.splice(sourceIndex, sourceEnd - sourceIndex)
+  const targetIndex = tocDraft.value.findIndex(item => item.client_key === targetKey)
+  if (targetIndex < 0) return endTocDrag()
+  const target = tocDraft.value[targetIndex]
+  const desiredLevel = position === 'inside' ? Math.min(4, target.level + 1) : target.level
+  const insertAt = position === 'after' || position === 'inside' ? subtreeEnd(targetIndex) : targetIndex
+  const delta = desiredLevel - group[0].level
+  group.forEach(item => {
+    item.level = Math.max(1, Math.min(4, item.level + delta))
+    item.edited = true
+  })
+  tocDraft.value.splice(insertAt, 0, ...group)
+  normalizeAllTocLevels()
+  selectedTocKey.value = group[0].client_key
+  endTocDrag()
+}
 const shiftSelectedToc = (delta) => {
   const index = selectedTocIndex(); if (index < 0) return
   checkpointToc()
   const item = tocDraft.value[index]
-  const maxLevel = index ? Math.min(4, tocDraft.value[index - 1].level + 1) : 1
-  item.level = Math.max(1, Math.min(maxLevel, item.level + delta)); item.edited = true
-  normalizeAllTocLevels()
+  normalizeTocLevels(index, item.level + delta)
 }
-const changeSelectedLevel = () => {
+const changeSelectedLevel = (value, oldValue) => {
   const index = selectedTocIndex(); if (index < 0) return
-  selectedToc.value.edited = true; normalizeTocLevels(index)
+  selectedToc.value.edited = true
+  normalizeTocLevels(index, value, Number(oldValue) || tocLevelBefore.value)
 }
 const addTocAfter = (index) => {
   const current = tocDraft.value[index]
@@ -423,10 +553,8 @@ const saveTocEditor = async () => {
   tocSaving.value = true
   try {
     const result = await replaceBookToc(book.value.id, buildTocPayload(), '阅读器人工校正')
-    tocAudit.value = result.audit
+    await applyTocResultInPlace(result)
     ElMessage.success('目录、分块归属与来源映射已同步')
-    await loadBook(book.value.id)
-    await loadTocEditor()
   } catch (e) { ElMessage.error(e.message) }
   finally { tocSaving.value = false }
 }
@@ -436,19 +564,17 @@ const applySafeTocRepair = async () => {
     if (!result.preview?.can_apply) return ElMessage.warning(result.preview?.blocked_reason || '当前目录不能安全自动修正')
     const changes = result.preview.changes || []
     await ElMessageBox.confirm(`将修改 ${changes.length} 项可由编号证明的层级或父级。写入前已完成未决冲突检查，并会保存可恢复快照。`, '预览安全自修正')
-    await autoRepairToc(book.value.id, true)
+    const applied = await autoRepairToc(book.value.id, true)
     ElMessage.success('安全修正已应用')
-    await loadBook(book.value.id)
-    await loadTocEditor()
+    await applyTocResultInPlace(applied)
   } catch (e) { if (e !== 'cancel') ElMessage.error(e.message || String(e)) }
 }
 const restoreRevision = async (revision) => {
   try {
     await ElMessageBox.confirm('将恢复到该次修订发生前的目录，并重新建立章节来源映射。当前版本也会保存为可恢复修订。', '恢复目录版本')
-    await restoreTocRevision(book.value.id, revision.id)
+    const restored = await restoreTocRevision(book.value.id, revision.id)
     ElMessage.success('目录已恢复，当前版本已保留在修订记录中')
-    await loadBook(book.value.id)
-    await loadTocEditor()
+    await applyTocResultInPlace(restored)
   } catch (e) { if (e !== 'cancel') ElMessage.error(e.message || String(e)) }
 }
 
@@ -528,7 +654,10 @@ const loadBook = async (bookId) => {
 }
 
 watch(() => route.params.bookId, (id) => { if (id) loadBook(Number(id)) })
-onMounted(() => loadBook(Number(route.params.bookId)))
+onMounted(async () => {
+  await loadBook(Number(route.params.bookId))
+  if (route.query.toc === 'review') await openTocEditor()
+})
 </script>
 
 <style scoped>
@@ -580,9 +709,13 @@ onMounted(() => loadBook(Number(route.params.bookId)))
 .toc-panel-title small { color:#8f806b; font-weight:400; }
 .toc-tree-panel :deep(.el-tree-node__content) { height:36px; border-bottom:1px solid rgba(229,231,235,.5); }
 .toc-tree-panel :deep(.el-tree-node__content:hover),.toc-tree-panel :deep(.el-tree-node.is-current > .el-tree-node__content) { background:#f1e8d9; }
-.toc-tree-node { display:flex; align-items:center; min-width:0; flex:1; gap:6px; padding-right:8px; border-left:2px solid transparent; }
+.toc-tree-node { display:flex; align-items:center; min-width:0; flex:1; gap:6px; padding:0 8px 0 3px; border-left:2px solid transparent; border-top:2px solid transparent; border-bottom:2px solid transparent; border-radius:4px; transition:background .12s ease, border-color .12s ease, opacity .12s ease; }
+.toc-tree-node[draggable="true"] { cursor:grab; }.toc-tree-node[draggable="true"]:active { cursor:grabbing; }
+.toc-tree-node.is-dragging { opacity:.45; }.toc-tree-node.drop-before { border-top-color:#8b5a2b; }.toc-tree-node.drop-after { border-bottom-color:#8b5a2b; }.toc-tree-node.drop-inside { background:#f1e1c9; border-color:#c58a4b; }
 .toc-tree-node.status-review { border-left-color:#d6a04d; }.toc-tree-node.status-low { border-left-color:#c96055; }
+.toc-academic-audit{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:10px 0;padding:10px 12px;border:1px solid #ded3c2;border-radius:9px;background:#f8f3e9}.toc-academic-audit>div{display:flex;align-items:center;flex-wrap:wrap;gap:6px}.toc-academic-audit b{color:#624727;font-size:13px}.toc-academic-audit span,.toc-academic-audit small{color:#80715f;font-size:11px}
 .toc-node-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#423f38; font-family:var(--study-font-ui); font-size:13px; }
+.toc-drag-handle { flex:none; width:14px; color:#ae9a7f; font-size:14px; line-height:1; letter-spacing:-3px; user-select:none; }
 .toc-node-page { flex:none; color:#988a77; font:11px Georgia,serif; }.toc-node-edited { flex:none; padding:1px 4px; border-radius:4px; background:#8b5a2b; color:#fff; font-size:9px; }
 .toc-page-panel { display:flex; flex-direction:column; }.toc-page-frame { width:100%; flex:1; border:0; background:#d8d5ce; }
 .toc-inspector-panel { overflow-y:auto; }.toc-inspector-panel > :not(.toc-panel-title) { margin-left:14px; margin-right:14px; }

@@ -34,7 +34,13 @@ export function renderMarkdown(text) {
   if (!text) return ''
   let html
   try {
-    html = marked.parse(text)
+    // 兼容旧输出：内部 B/CH/C/P 锚点只用于审计，不直接打断读者句子。
+    const numbers = new Map()
+    const readable = text.replace(/\[(B\d+(?::(?:CH|C|P|NOTE)\d+(?:-\d+)?)*|(?:NOTE|EVIDENCE|REPORT):\d+)\]/g, (_, anchor) => {
+      if (!numbers.has(anchor)) numbers.set(anchor, numbers.size + 1)
+      return `<sup class="source-note" title="来源 ${numbers.get(anchor)}">${numbers.get(anchor)}</sup>`
+    })
+    html = marked.parse(readable)
   } catch {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
   }

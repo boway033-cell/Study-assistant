@@ -1,5 +1,5 @@
 """ORM 模型：books / chapters / chunks / notes / chat_logs / quizzes / attempts / knowledge_nodes /
-settings / book_analysis / book_deep / study_reports / study_plans / check_ins / tags / import_tasks
+settings / book_analysis / book_deep / study_reports / tags / import_tasks
 对应 docs/02-database.md。卡片学习已取消，无 cards / review_logs 表。"""
 from __future__ import annotations
 
@@ -50,6 +50,7 @@ class Book(Base):
     error_msg: Mapped[str | None] = mapped_column(Text)
     category: Mapped[str | None] = mapped_column(String(50))  # AI 自动分类（数学/管理学/…）
     duplicate_of: Mapped[int | None] = mapped_column(Integer)  # 疑似重复的 book_id（0=无）
+    library_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 全库自定义顺序
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     chapters: Mapped[list["Chapter"]] = relationship(back_populates="book", cascade="all, delete-orphan")
@@ -342,30 +343,6 @@ class BookAnalysis(Base):
     header_count: Mapped[int] = mapped_column(Integer, default=0)
     footer_count: Mapped[int] = mapped_column(Integer, default=0)
     table_pages: Mapped[str | None] = mapped_column(Text)        # JSON 页码列表
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
-
-
-class StudyPlan(Base):
-    """学习计划：设定考试日期，倒推每日任务。"""
-
-    __tablename__ = "study_plans"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False, default="学习计划")
-    exam_date: Mapped[str] = mapped_column(String(20), nullable=False)  # YYYY-MM-DD
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
-
-
-class CheckIn(Base):
-    """每日打卡记录。"""
-
-    __tablename__ = "check_ins"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    plan_id: Mapped[int] = mapped_column(ForeignKey("study_plans.id"), nullable=False, index=True)
-    date: Mapped[str] = mapped_column(String(20), nullable=False)  # YYYY-MM-DD
-    content: Mapped[str | None] = mapped_column(Text)
-    done: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 

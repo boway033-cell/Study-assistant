@@ -212,6 +212,32 @@ def cancel_task(task_id: str) -> TaskRecord | None:
     return record
 
 
+def retry_task(task_id: str) -> TaskRecord:
+    """为失败/取消的导入任务创建一次显式重试；不自动重放 AI 写入任务。"""
+    from backend.app.models import Book
+    from backend.app.worker.import_task import run_import
+
+    db = SessionLocal()
+    try:
+        row = db.get(ImportTask, task_id)
+        if row is None:
+            raise ValueError("任务不存在")
+        if row.status not in ("failed", "cancelled"):
+            raise ValueError("只有失败或已取消的任务可以重试")
+        if row.name not in ("import", "reimport"):
+            raise ValueError("该 AI 生成任务不能自动重放，请回到原工作区重新提交")
+        book = db.get(Book, row.book_id)
+        if book is None:
+            raise ValueError("原资料已不存在，无法重试")
+        book.status = "pending"
+        book.error_msg = None
+        db.commit()
+        book_id = book.id
+    finally:
+        db.close()
+    return submit("reimport", lambda record: run_import(record, book_id), book_id=book_id)
+
+
 import time as _time
 
 _last_persist_time: float = 0.0

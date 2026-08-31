@@ -66,6 +66,33 @@ class StructuredDocument:
         temporary.write_text(self.to_json(), encoding="utf-8")
         temporary.replace(target)
 
+    @classmethod
+    def load_json(cls, path: str | Path) -> "StructuredDocument":
+        """恢复已落盘的版面证据，供目录重识别复用，避免重新扫描整本 PDF。"""
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        pages: list[StructuredPage] = []
+        for page_value in raw.get("pages", []):
+            blocks = []
+            for value in page_value.get("blocks", []):
+                blocks.append(DocumentBlock(
+                    page=int(value.get("page") or page_value.get("page") or 1),
+                    text=str(value.get("text") or ""), bbox=_bbox(value.get("bbox")),
+                    lines=list(value.get("lines") or []), role=str(value.get("role") or "text"),
+                    font_size=value.get("font_size"), font_weight=value.get("font_weight"),
+                    source=str(value.get("source") or "pdf-text"),
+                    confidence=float(value.get("confidence") or 0),
+                    reading_order=int(value.get("reading_order") or 0),
+                    asset_id=value.get("asset_id"), parent_id=value.get("parent_id"),
+                    metadata=dict(value.get("metadata") or {}),
+                ))
+            pages.append(StructuredPage(
+                page=int(page_value.get("page") or len(pages) + 1),
+                width=float(page_value.get("width") or 0),
+                height=float(page_value.get("height") or 0), blocks=blocks,
+            ))
+        return cls(pages=pages, backend=str(raw.get("backend") or "unknown"),
+                   version=int(raw.get("version") or 2))
+
 
 def _bbox(value: Any) -> BBox:
     try:

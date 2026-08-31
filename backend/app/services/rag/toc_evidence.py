@@ -46,6 +46,13 @@ def score_toc_candidate(row: dict) -> TocEvidence:
     if _SEMANTIC_RE.match(title):
         score += 0.42
         reasons.append("编号语义")
+    else:
+        # 无编号的学术论文标题不能获得“编号语义”分，但标准章节角色本身是可解释证据。
+        from backend.app.services.rag.toc_heuristic import academic_heading_info
+        academic = academic_heading_info(title)
+        if academic:
+            score += 0.30
+            reasons.append(f"学术章节语义：{academic['role_label']}")
     if 2 <= len(title) <= 45:
         score += 0.08
         reasons.append("标题长度合理")

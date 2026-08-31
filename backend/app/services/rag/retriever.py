@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from backend.app.core.config import settings
 from backend.app.services.rag import fts, vector
 from backend.app.services.rag.fts import fallback_search, get_chapter_neighbors, get_book_outline
@@ -16,6 +18,17 @@ from backend.app.services.rag.reranker import rerank, record_retrieval_eval
 
 MIN_PRIMARY_HITS = 3
 RRF_K = 60  # Reciprocal Rank Fusion 常数
+
+_EXPLICIT_OUT_OF_SCOPE = (
+    r"(?:未上传|未提供|未收录|未导入|不存在|不在(?:当前|本地)?(?:知识)?库中)",
+    r"(?:原始数据|附件|补充材料|源码|数据集).{0,8}(?:链接|下载地址|访问地址)",
+)
+
+
+def explicitly_out_of_scope(question: str) -> bool:
+    """Detect requests that explicitly say the required evidence is outside this personal library."""
+    text = re.sub(r"\s+", "", question or "")
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in _EXPLICIT_OUT_OF_SCOPE)
 
 
 def retrieve(question: str, book_id: int | None = None, book_ids: list[int] | None = None,
@@ -25,6 +38,9 @@ def retrieve(question: str, book_id: int | None = None, book_ids: list[int] | No
     book_ids: 多书搜索（优先于 book_id）。
     返回 items（含 page_start/page_end/context/score 等）。
     """
+    if explicitly_out_of_scope(question):
+        record_retrieval_eval(0, question)
+        return []
     k = top_k or settings.rag_top_k
     search_book_ids = book_ids if book_ids else ([book_id] if book_id else None)
 

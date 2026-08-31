@@ -85,11 +85,11 @@ with sync_playwright() as p:
     check("判分反馈", page.locator(".result-box").count() == 1)
     page.screenshot(path="backend/tests/ui_4_quiz.png", full_page=True)
 
-    print("=== 5. 统计页 ===")
-    page.click("text=学习统计")
+    print("=== 5. 知识库洞察 ===")
+    page.click("text=知识库洞察")
     page.wait_for_timeout(2000)
-    check("统计卡片", page.locator(".el-statistic").count() >= 4,
-          f"count={page.locator('.el-statistic').count()}")
+    check("知识库指标", page.locator(".metric-strip button").count() == 5,
+          f"count={page.locator('.metric-strip button').count()}")
     page.screenshot(path="backend/tests/ui_5_stats.png", full_page=True)
 
     print("=== 6. 设置页 ===")

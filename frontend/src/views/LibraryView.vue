@@ -57,8 +57,26 @@
               <el-option label="阅读中" value="reading" />
               <el-option label="已读完" value="read" />
             </el-select>
+            <el-select v-model="sortBy" aria-label="文献排序" placeholder="排序方式">
+              <el-option label="自定义顺序" value="custom" />
+              <el-option label="最近导入" value="newest" />
+              <el-option label="最早导入" value="oldest" />
+              <el-option label="题名 A–Z" value="title_asc" />
+              <el-option label="题名 Z–A" value="title_desc" />
+              <el-option label="作者 A–Z" value="author_asc" />
+              <el-option label="年份从新到旧" value="year_desc" />
+              <el-option label="年份从旧到新" value="year_asc" />
+              <el-option label="最近阅读" value="last_read" />
+              <el-option label="阅读进度" value="progress_desc" />
+            </el-select>
             <el-checkbox v-model="favoriteOnly">仅收藏</el-checkbox>
             <el-button v-if="activeFilterCount" link class="clear-filter" @click="clearLibraryFilters">清除筛选</el-button>
+          </div>
+          <div v-if="sortBy === 'custom'" class="reorder-guide" :class="{ disabled: !canDragSort }">
+            <span class="drag-dots">⠿</span>
+            <span v-if="canDragSort">拖动任意文献调整{{ typeof selectedShelf === 'number' ? '当前书架' : '资料库' }}顺序，放开后自动保存。</span>
+            <span v-else-if="activeFilterCount">清除筛选后即可拖拽排序。</span>
+            <span v-else>“自定义顺序”仅可在全部资料或自建书架中拖拽调整。</span>
           </div>
           <div v-if="selectedBookIds.length" class="shelf-batch"><span>已选择 {{ selectedBookIds.length }} 篇</span><el-select v-model="targetShelfId" placeholder="选择目标书架" size="small"><el-option v-for="s in shelves" :key="s.id" :label="s.name" :value="s.id" /></el-select><el-button type="primary" size="small" :disabled="!targetShelfId" @click="assignSelectedToShelf">加入书架</el-button></div>
 
@@ -67,8 +85,8 @@
               <el-checkbox :model-value="allFilteredSelected" @change="toggleAllFiltered" />
               <span>文献与来源</span><span>阅读进度</span><span>知识加工</span><span></span>
             </div>
-            <StudyListRow v-for="row in filteredBooks" :key="row.id" class="paper-row" :active="currentBook?.id===row.id" tabindex="0" @click="selectBook(row)" @keydown.enter="selectBook(row)">
-              <div class="paper-select" @click.stop><el-checkbox :model-value="selectedBookIds.includes(row.id)" @change="checked=>toggleBookSelection(row.id,checked)" /><button class="star" :class="{ active: row.favorite }" title="收藏" @click="toggleFavorite(row)">★</button></div>
+            <StudyListRow v-for="row in filteredBooks" :key="row.id" class="paper-row" :class="{ 'is-dragging': draggingBookId === row.id, 'drop-before': dropTargetId === row.id && dropPosition === 'before', 'drop-after': dropTargetId === row.id && dropPosition === 'after' }" :active="currentBook?.id===row.id" :draggable="canDragSort" tabindex="0" @click="selectBook(row)" @keydown.enter="selectBook(row)" @dragstart="onBookDragStart(row, $event)" @dragover="onBookDragOver(row, $event)" @drop="onBookDrop(row, $event)" @dragend="resetBookDrag">
+              <div class="paper-select" @click.stop><span class="drag-handle" :class="{ enabled: canDragSort }" :title="canDragSort ? '按住并拖动调整顺序' : '选择自定义顺序后可拖动'" aria-hidden="true">⠿</span><el-checkbox :model-value="selectedBookIds.includes(row.id)" @change="checked=>toggleBookSelection(row.id,checked)" /><button class="star" :class="{ active: row.favorite }" title="收藏" @click="toggleFavorite(row)">★</button></div>
               <div class="paper-identity">
                 <div class="paper-title">{{ row.title }}</div>
                 <div class="paper-meta">{{ [row.authors, row.journal, displayYear(row.published_year)].filter(Boolean).join(' · ') || '等待补充书目信息' }}<span class="publication-state">{{ publicationLabel(row.publication_status) }}</span></div>
@@ -243,10 +261,10 @@
 
 <script setup>
 import { ref, shallowRef, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listBooks, uploadBook, uploadBookBatch, deleteBook, getBook, searchBooks, classifyAllBooks, setBookCategory, deepAnalyze, updateArchiveProfile,
-  listShelves, createShelf, updateShelf, deleteShelf as deleteShelfApi, putShelfBooks } from '../api'
+  listShelves, createShelf, updateShelf, deleteShelf as deleteShelfApi, putShelfBooks, reorderBooks } from '../api'
 import { sanitizeHtml } from '../utils/markdown'
 import { notifyTaskSubmitted } from '../stores/taskCenter'
 import StudyCommandBar from '../components/StudyCommandBar.vue'
@@ -255,6 +273,7 @@ import StudyListRow from '../components/StudyListRow.vue'
 import StudyInspector from '../components/StudyInspector.vue'
 
 const router = useRouter()
+const route = useRoute()
 const books = ref([])
 const libraryTotal = ref(0)
 const libraryPage = ref(1)
@@ -270,6 +289,11 @@ const libraryQ = ref('')
 const libraryCategory = ref(null)
 const readingFilter = ref(null)
 const favoriteOnly = ref(false)
+const sortBy = ref(localStorage.getItem('study-library-sort') || 'custom')
+const reordering = ref(false)
+const draggingBookId = ref(null)
+const dropTargetId = ref(null)
+const dropPosition = ref('before')
 const shelves = ref([])
 const selectedShelf = ref('all')
 const selectedBookIds = ref([])
@@ -322,6 +346,12 @@ const currentShelfName = computed(() => {
   return shelves.value.find(s => s.id === selectedShelf.value)?.name || '当前书架'
 })
 const activeFilterCount = computed(() => [libraryQ.value.trim(), libraryCategory.value, readingFilter.value, favoriteOnly.value].filter(Boolean).length)
+const canDragSort = computed(() => sortBy.value === 'custom'
+  && activeFilterCount.value === 0
+  && (selectedShelf.value === 'all' || typeof selectedShelf.value === 'number')
+  && filteredBooks.value.length > 1
+  && !loading.value
+  && !reordering.value)
 const allFilteredSelected = computed(() => filteredBooks.value.length > 0 && filteredBooks.value.every(book => selectedBookIds.value.includes(book.id)))
 const readingLabel = (status) => ({ unread: '未读', reading: '阅读中', read: '已读完' }[status] || '未读')
 const readingTagType = (status) => ({ unread: 'info', reading: 'warning', read: 'success' }[status] || 'info')
@@ -361,6 +391,7 @@ const loadBooks = async (reset = true) => {
       unfiled: smart === 'unfiled' || undefined,
       statuses: smart === 'attention' ? ['failed','needs_ocr','parsing'] : undefined,
       category: libraryCategory.value || undefined,
+      sort_by: sortBy.value,
     })
     books.value = reset ? resp.items : [...books.value, ...resp.items]
     libraryPage.value = page
@@ -379,6 +410,55 @@ watch([libraryQ, libraryCategory, readingFilter, favoriteOnly], () => {
   clearTimeout(librarySearchTimer)
   librarySearchTimer = setTimeout(() => loadBooks(true), 260)
 })
+watch(sortBy, () => {
+  localStorage.setItem('study-library-sort', sortBy.value)
+  loadBooks(true)
+})
+
+const resetBookDrag = () => {
+  draggingBookId.value = null
+  dropTargetId.value = null
+  dropPosition.value = 'before'
+}
+const onBookDragStart = (row, event) => {
+  if (!canDragSort.value) return event.preventDefault()
+  draggingBookId.value = row.id
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', String(row.id))
+}
+const onBookDragOver = (row, event) => {
+  if (!canDragSort.value || draggingBookId.value === row.id) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  const rect = event.currentTarget.getBoundingClientRect()
+  dropTargetId.value = row.id
+  dropPosition.value = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+}
+const onBookDrop = async (target, event) => {
+  event.preventDefault()
+  if (!canDragSort.value || !draggingBookId.value || draggingBookId.value === target.id) return resetBookDrag()
+  const before = [...books.value]
+  const movingIndex = books.value.findIndex(book => book.id === draggingBookId.value)
+  let targetIndex = books.value.findIndex(book => book.id === target.id)
+  if (movingIndex < 0 || targetIndex < 0) return resetBookDrag()
+  const [moving] = books.value.splice(movingIndex, 1)
+  targetIndex = books.value.findIndex(book => book.id === target.id)
+  if (dropPosition.value === 'after') targetIndex += 1
+  books.value.splice(targetIndex, 0, moving)
+  const orderedIds = books.value.map(book => book.id)
+  const shelfId = typeof selectedShelf.value === 'number' ? selectedShelf.value : null
+  resetBookDrag()
+  reordering.value = true
+  try {
+    await reorderBooks(orderedIds, shelfId)
+    ElMessage.success('顺序已保存')
+  } catch (error) {
+    books.value = before
+    ElMessage.error(`顺序未能保存：${error.message}`)
+  } finally {
+    reordering.value = false
+  }
+}
 const loadShelves = async () => { shelves.value = await listShelves() }
 const createBookshelf = async (parentId) => {
   try {
@@ -601,6 +681,11 @@ onMounted(async () => {
   syncLibraryViewport(libraryMedia)
   libraryMedia.addEventListener('change', syncLibraryViewport)
   await Promise.all([loadBooks(), loadShelves()])
+  const requestedBookId = Number(route.query.bookId)
+  if (Number.isInteger(requestedBookId) && requestedBookId > 0) {
+    const row = books.value.find(book => book.id === requestedBookId) || { id: requestedBookId }
+    await openBook(row)
+  }
 })
 onBeforeUnmount(() => libraryMedia.removeEventListener('change', syncLibraryViewport))
 </script>
@@ -620,8 +705,9 @@ onBeforeUnmount(() => libraryMedia.removeEventListener('change', syncLibraryView
 .materials-card :deep(.el-card__header){padding:16px 18px;border-bottom-color:#e8dfd1}.materials-card :deep(.el-card__body){padding:14px 18px 8px}
 .card-header, .header-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 .header-title { display: flex; align-items:center;gap:10px;font-weight:700}.header-title>div{display:flex;flex-direction:column;gap:3px}.header-title span{font-size:var(--study-font-size-lg)}.header-title small { color: var(--el-text-color-secondary); font-weight: 400;font-size:var(--study-font-size-xs) }
-.library-filters { display: grid; grid-template-columns: minmax(260px, 1fr) 132px 122px auto auto; gap: 10px; align-items: center; margin-bottom: 14px; }
+.library-filters { display: grid; grid-template-columns: minmax(240px, 1fr) 126px 116px 142px auto auto; gap: 10px; align-items: center; margin-bottom: 10px; }
 .clear-filter{justify-self:end}
+.reorder-guide{display:flex;align-items:center;gap:7px;margin:-2px 0 12px;padding:7px 10px;border-radius:7px;background:#f7f2e9;color:#735333;font-size:var(--study-font-size-xs)}.reorder-guide.disabled{color:#958a7d;background:#f7f5f1}.drag-dots{font-size:16px;line-height:1}
 .paper-title { font-weight: 650; color: var(--el-text-color-primary); line-height: 1.35; }
 .paper-meta { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .publication-state:before{content:' · '}.publication-state{color:var(--study-text-muted)}
@@ -650,16 +736,16 @@ onBeforeUnmount(() => libraryMedia.removeEventListener('change', syncLibraryView
 .keyword-chip:hover { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
 .analysis-item { font-size: 13px; line-height: 1.6; margin-bottom: 4px; color: var(--el-text-color-primary); }
 .analysis-meta { font-size: 12px; color: var(--el-text-color-secondary); }
-.paper-list{min-height:160px}.paper-list-head,.paper-row{display:grid;grid-template-columns:48px minmax(220px,1fr) 100px 118px 142px;column-gap:10px;align-items:center}.paper-list-head{padding:8px 12px;color:#918678;font-size:11px;border-top:1px solid #eee6da;border-bottom:1px solid #e5dbcc;background:#f8f4ec}.paper-list-head>span:last-child{text-align:right}.paper-row{position:relative;min-height:92px;padding:12px;border-bottom:1px solid #e8dfd2;transition:background .16s ease,box-shadow .16s ease,transform .16s ease}.paper-row:hover{z-index:1;background:#fcfaf5;box-shadow:0 2px 10px rgba(85,65,42,.07);transform:translateY(-1px)}.paper-select{display:flex;align-items:center;gap:10px}.star{padding:0;border:0;background:transparent}.paper-identity{min-width:0;cursor:pointer}.paper-title{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-family:'Noto Serif SC','STSong',serif;font-size:14px}.paper-facts{display:flex;gap:10px;margin-top:7px;color:#9b8f80;font-size:10px}.paper-facts span+span:before{content:'·';margin-right:10px}.paper-reading,.paper-knowledge{display:flex;align-items:flex-start;flex-direction:column;gap:7px;font-size:11px}.muted-state{color:#8a8175}.danger-state{color:#b4473d}.warning-state{color:#a86e27}.category-link,.analysis-link{max-width:100%;padding:0;border:0;background:transparent;color:#765331;font-size:11px;cursor:pointer;text-align:left}.analysis-link{color:#8d755a}.deep-done{color:#47806b}.paper-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px}.paper-actions :deep(.el-button+.el-button){margin-left:0}
+.paper-list{min-height:160px}.paper-list-head,.paper-row{display:grid;grid-template-columns:72px minmax(220px,1fr) 100px 118px 142px;column-gap:10px;align-items:center}.paper-list-head{padding:8px 12px;color:#918678;font-size:11px;border-top:1px solid #eee6da;border-bottom:1px solid #e5dbcc;background:#f8f4ec}.paper-list-head>span:last-child{text-align:right}.paper-row{position:relative;min-height:92px;padding:12px;border-bottom:1px solid #e8dfd2;transition:background .16s ease,box-shadow .16s ease,transform .16s ease,opacity .16s ease}.paper-row:hover{z-index:1;background:#fcfaf5;box-shadow:0 2px 10px rgba(85,65,42,.07);transform:translateY(-1px)}.paper-row.is-dragging{opacity:.38}.paper-row.drop-before:before,.paper-row.drop-after:after{position:absolute;right:8px;left:8px;height:2px;border-radius:2px;background:var(--el-color-primary);content:''}.paper-row.drop-before:before{top:-1px}.paper-row.drop-after:after{bottom:-1px}.paper-select{display:flex;align-items:center;gap:9px}.drag-handle{width:15px;color:#c4bbb0;font-size:17px;line-height:1;cursor:not-allowed;user-select:none}.drag-handle.enabled{color:#82603c;cursor:grab}.paper-row:active .drag-handle.enabled{cursor:grabbing}.star{padding:0;border:0;background:transparent}.paper-identity{min-width:0;cursor:pointer}.paper-title{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-family:'Noto Serif SC','STSong',serif;font-size:14px}.paper-facts{display:flex;gap:10px;margin-top:7px;color:#9b8f80;font-size:10px}.paper-facts span+span:before{content:'·';margin-right:10px}.paper-reading,.paper-knowledge{display:flex;align-items:flex-start;flex-direction:column;gap:7px;font-size:11px}.muted-state{color:#8a8175}.danger-state{color:#b4473d}.warning-state{color:#a86e27}.category-link,.analysis-link{max-width:100%;padding:0;border:0;background:transparent;color:#765331;font-size:11px;cursor:pointer;text-align:left}.analysis-link{color:#8d755a}.deep-done{color:#47806b}.paper-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px}.paper-actions :deep(.el-button+.el-button){margin-left:0}
 @media (max-width: 900px) {
   .library-workspace{grid-template-columns:1fr}.bookshelf-panel{position:static}.shelf-tree{max-height:190px;overflow:auto}
   .library-hero { align-items: flex-start; flex-direction: column; }
   .hero-stats { width: 100%; justify-content: space-between; }
   .hero-stats div { text-align: left; }
   .library-filters { grid-template-columns: 1fr 1fr; }
-  .header-actions{width:100%;justify-content:flex-start}.paper-list-head{display:none}.paper-row{grid-template-columns:48px minmax(0,1fr) 140px}.paper-reading{grid-column:2;margin-top:10px;flex-direction:row;align-items:center}.paper-knowledge{grid-column:3;grid-row:1 / span 2}.paper-actions{grid-column:2 / -1;margin-top:10px;justify-content:flex-start}
+  .header-actions{width:100%;justify-content:flex-start}.paper-list-head{display:none}.paper-row{grid-template-columns:72px minmax(0,1fr) 140px}.paper-reading{grid-column:2;margin-top:10px;flex-direction:row;align-items:center}.paper-knowledge{grid-column:3;grid-row:1 / span 2}.paper-actions{grid-column:2 / -1;margin-top:10px;justify-content:flex-start}
 }
-@media (max-width: 620px){.library-hero{padding:16px}.library-hero h1{font-size:23px}.library-filters{grid-template-columns:1fr}.hero-stats{gap:12px}.hero-stats strong{font-size:20px}.header-actions :deep(.el-button){margin-left:0}.paper-row{grid-template-columns:38px minmax(0,1fr);padding:14px 4px}.paper-knowledge,.paper-reading,.paper-actions{grid-column:2}.paper-knowledge{grid-row:auto;margin-top:9px;flex-direction:row;align-items:center}.paper-actions{flex-wrap:wrap}.paper-meta{max-width:100%}.import-queue{align-items:flex-start;flex-wrap:wrap}.import-queue>div{flex-basis:100%}.materials-card :deep(.el-card__body){padding:12px}}
+@media (max-width: 620px){.library-hero{padding:16px}.library-hero h1{font-size:23px}.library-filters{grid-template-columns:1fr}.hero-stats{gap:12px}.hero-stats strong{font-size:20px}.header-actions :deep(.el-button){margin-left:0}.paper-row{grid-template-columns:66px minmax(0,1fr);padding:14px 4px}.paper-knowledge,.paper-reading,.paper-actions{grid-column:2}.paper-knowledge{grid-row:auto;margin-top:9px;flex-direction:row;align-items:center}.paper-actions{flex-wrap:wrap}.paper-meta{max-width:100%}.import-queue{align-items:flex-start;flex-wrap:wrap}.import-queue>div{flex-basis:100%}.materials-card :deep(.el-card__body){padding:12px}}
 
 /* 资料库迁移：紧凑命令区 + 书架/列表/检查器三层工作区 */
 .library-commandbar{margin-bottom:12px}.library-summary{display:flex;gap:18px}.library-summary>div{display:flex;min-width:50px;flex-direction:column;text-align:right}.library-summary strong{color:var(--el-color-primary);font:700 18px Georgia,serif}.library-summary span{margin-top:1px;color:var(--study-text-secondary);font-size:var(--study-font-size-xs)}
@@ -672,7 +758,7 @@ onBeforeUnmount(() => libraryMedia.removeEventListener('change', syncLibraryView
 .inspector-scroll{height:100%;overflow-y:auto;padding:15px}.inspector-type{color:#9a7958;font-size:var(--study-font-size-xs);letter-spacing:.6px}.inspector-scroll h2{margin:7px 0 5px;font-family:var(--study-font-reading);font-size:17px;line-height:1.5;color:var(--el-text-color-primary)}.inspector-meta{color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);line-height:1.6}.trust-row{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-top:9px}.trust-row>span{color:var(--study-text-secondary);font-size:var(--study-font-size-xs)}.inspector-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.inspector-actions .el-button{margin:0}.inspector-section{padding:13px 0;border-top:1px solid var(--el-border-color-lighter)}.inspector-section-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}.inspector-section-title span{color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);text-align:right}.inspector-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.inspector-facts span{display:flex;flex-direction:column;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);text-align:center}.inspector-facts b{margin-bottom:2px;color:#6f4721;font:700 17px Georgia,serif}.inspector-status{margin-top:10px;padding:8px 9px;border-radius:7px;background:#f0e9dc;color:#686155;font-size:var(--study-font-size-xs);line-height:1.55}.inspector-status.failed{background:#f9efed;color:#93483d}.inspector-status.needs_ocr,.inspector-status.parsing{background:#fff5e7;color:#8d6228}.inspector-chapters :deep(.el-tree){max-height:210px;overflow:auto;padding:5px;background:transparent}.inspector-chapters :deep(.el-tree-node__content){height:32px}.inspector-detail-button{width:100%;margin-top:2px}.inspector-empty{display:flex;height:100%;align-items:center;justify-content:center;flex-direction:column;padding:28px;color:var(--el-text-color-secondary);text-align:center}.inspector-empty span{color:#9a7958;font-size:var(--study-font-size-xs);letter-spacing:.6px}.inspector-empty b{margin:12px 0 6px;color:var(--el-text-color-primary)}.inspector-empty p{font-size:var(--study-font-size-sm);line-height:1.7}
 
 @media(max-width:1519px){.library-workspace{grid-template-columns:220px minmax(0,1fr)}.library-inspector{display:none}}
-@media(max-width:1200px){.library-workspace{grid-template-columns:190px minmax(0,1fr)}.paper-list-head{display:none}.paper-row{grid-template-columns:42px minmax(0,1fr) 130px}.paper-reading{grid-column:2;margin-top:8px;flex-direction:row;align-items:center}.paper-knowledge{grid-column:3;grid-row:1 / span 2}.paper-actions{grid-column:2 / -1;margin-top:8px;justify-content:flex-start}}
+@media(max-width:1200px){.library-workspace{grid-template-columns:190px minmax(0,1fr)}.paper-list-head{display:none}.paper-row{grid-template-columns:72px minmax(0,1fr) 130px}.paper-reading{grid-column:2;margin-top:8px;flex-direction:row;align-items:center}.paper-knowledge{grid-column:3;grid-row:1 / span 2}.paper-actions{grid-column:2 / -1;margin-top:8px;justify-content:flex-start}}
 @media(max-width:1100px){.library-primary-actions{justify-content:flex-start}}
 @media(max-width:900px){.library-workspace{grid-template-columns:1fr}.library-summary>div{text-align:left}.library-primary-actions{flex-wrap:wrap}.mobile-shelf-toggle{display:flex}.bookshelf-panel{display:none;position:static}.bookshelf-panel.mobile-open{display:block}.bookshelf-head{margin-top:10px}.shelf-tree{max-height:190px;overflow:auto}}
 @media(max-width:620px){.library-summary{width:100%;justify-content:space-between}.library-primary-actions{display:grid;grid-template-columns:1fr 1fr}.library-primary-actions>*,.library-primary-actions :deep(.el-button){width:100%}.library-primary-actions>:last-child{grid-column:1/-1}.library-import-queue{align-items:flex-start}.paper-row{padding-inline:8px}.fulltext-card :deep(.el-card__body){padding:12px}.result-meta{align-items:flex-start;flex-wrap:wrap}}

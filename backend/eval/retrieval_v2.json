@@ -1,0 +1,41 @@
+{
+  "version": "retrieval-v2",
+  "description": "114题分层固定集：社科、人文文学、自然生物、数理计算、扫描OCR、英文、跨文献与无答案问题；不接触用户数据库。",
+  "thresholds": {"recall_at_1": 0.78, "recall_at_3": 0.9, "recall_at_5": 0.95, "mrr": 0.82, "citation_correct_rate": 0.78, "no_answer_rejection_rate": 1.0},
+  "corpus": [
+    {"id":"soc-causal","text":"双重差分法通过比较处理组与对照组在政策前后的变化识别平均处理效应，关键假设是平行趋势。","strata":["social_science","digital_text"],"queries":["双重差分的关键假设是什么","政策前后处理组对照组比较方法","平行趋势用于哪种因果识别","如何识别平均处理效应的DID方法"]},
+    {"id":"soc-qualitative","text":"质性访谈研究应说明抽样策略、研究者位置、编码过程、反例处理与资料饱和度。","strata":["social_science","qualitative"],"queries":["质性访谈如何说明研究者位置","编码过程和资料饱和度需要怎样报告","质性研究为什么处理反例","访谈研究的抽样与反身性要求"]},
+    {"id":"soc-governance","text":"协同治理强调政府、社会组织与公众在相互依赖条件下通过制度化协商共同解决公共问题。","strata":["social_science","digital_text"],"queries":["协同治理有哪些参与主体","制度化协商如何解决公共问题","政府社会组织公众共同治理概念","相互依赖条件下的公共治理模式"]},
+    {"id":"soc-validity","text":"内部效度关注因果结论可信度，外部效度关注结论向其他人群与情境推广的程度。","strata":["social_science","methods"],"queries":["内部效度关注什么","外部效度与结论推广有什么关系","因果可信度和推广能力分别是什么","研究结论推广到其他情境的效度"]},
+    {"id":"hum-close-reading","text":"文本细读从措辞、意象、句法、叙述视角与修辞结构出发形成解释，并以具体文本细节约束阐释。","strata":["humanities","literature"],"queries":["文本细读依据哪些语言细节","叙述视角和修辞结构如何参与阐释","文学解释为什么要受具体文本约束","从措辞意象句法出发的研究方法"]},
+    {"id":"hum-narrator","text":"不可靠叙述者的陈述与作品呈现的事实、其他人物证词或隐含作者规范之间存在可辨认的距离。","strata":["humanities","literature"],"queries":["什么是不可靠叙述者","叙述者陈述与作品事实的距离","如何通过其他人物证词识别不可靠叙述","隐含作者规范与叙述可信度"]},
+    {"id":"hum-context","text":"历史语境研究把作品置于出版制度、读者共同体、政治语言和同时代文献网络中，避免把后来的概念直接投射到过去。","strata":["humanities","history"],"queries":["历史语境研究如何避免时代错置","出版制度和读者共同体为何重要","把后来概念投射到过去有什么问题","作品与同时代文献网络的关系"]},
+    {"id":"hum-variants","text":"版本校勘记录异文、底本与改动层次，区分作者修订、编者干预、传抄错误和排印差异。","strata":["humanities","digital_text"],"queries":["版本校勘需要区分哪些改动","作者修订与编者干预如何区分","异文底本和改动层次是什么","传抄错误与排印差异的校勘"]},
+    {"id":"bio-randomized","text":"随机对照试验通过随机分配降低已知与未知混杂，分配隐藏防止入组选择偏倚，盲法减少测量与行为偏倚。","strata":["biomedical","methods"],"queries":["随机分配如何降低混杂","分配隐藏防止什么偏倚","盲法减少哪些偏倚","随机对照试验的三个偏倚控制环节"]},
+    {"id":"bio-effect","text":"效应量描述差异大小，置信区间表达估计不确定性；统计显著不等同于临床或生物学意义。","strata":["biomedical","digital_text"],"queries":["效应量与置信区间分别说明什么","统计显著是否等于临床意义","如何表达估计不确定性","差异大小和生物学意义如何判断"]},
+    {"id":"bio-reproducibility","text":"可重复性报告应包括原始数据、分析代码、试剂与材料来源、实验批次、排除标准和预注册信息。","strata":["biomedical","methods"],"queries":["可重复性报告要提供哪些材料","实验批次和排除标准为何要公开","原始数据分析代码与预注册","试剂来源如何影响实验复现"]},
+    {"id":"bio-observational","text":"观察性研究中的混杂变量同时影响暴露和结局；倾向评分只能平衡已测量混杂，不能消除未测量混杂。","strata":["biomedical","methods"],"queries":["观察性研究的混杂变量是什么","倾向评分能否消除未测量混杂","什么变量同时影响暴露与结局","倾向评分的证据边界"]},
+    {"id":"math-lagrange","text":"拉格朗日中值定理要求函数在闭区间连续、开区间可导，并保证存在一点使函数增量等于该点导数乘以自变量增量。","strata":["quantitative","digital_text"],"queries":["拉格朗日中值定理的条件","闭区间连续开区间可导的定理","函数增量等于某点导数乘自变量增量","中值定理保证存在什么点"]},
+    {"id":"math-clt","text":"中心极限定理说明独立同分布随机变量之和在适当标准化后依分布收敛到正态分布。","strata":["quantitative","digital_text"],"queries":["中心极限定理说明什么","随机变量之和为何趋近正态分布","独立同分布变量标准化后的极限","依分布收敛到正态分布的定理"]},
+    {"id":"cs-binary","text":"二分查找要求数据已经有序，每次比较后把搜索区间缩小一半，时间复杂度为O(log n)。","strata":["computing","digital_text"],"queries":["二分查找要求什么前提","每次把搜索区间缩小一半的算法","有序数据O(log n)查找","二分查找时间复杂度"]},
+    {"id":"cs-bfs","text":"广度优先搜索使用队列逐层访问图的顶点，在无权图中可以得到按边数计算的最短路径。","strata":["computing","digital_text"],"queries":["广度优先搜索使用什么数据结构","无权图最短路径如何求","队列逐层访问图顶点的算法","BFS得到哪种最短路径"]},
+    {"id":"ocr-admin","text":"行政 监督 包括 内部 监督 和 外部 监督，其目标是约束行政权力并提升公共责任。","strata":["social_science","ocr"],"queries":["行政监督包括哪两类","内部监督和外部监督的目标","约束行政权力提升公共责任","扫描资料中的行政监督定义"]},
+    {"id":"ocr-ecology","text":"样 方 法 通过设置固定面积样方调查植物种类、个体数量和盖度，用于估计群落组成。","strata":["biology","ocr"],"queries":["样方法如何调查植物群落","固定面积样方记录哪些指标","植物种类个体数量和盖度","估计群落组成的样方调查"]},
+    {"id":"ocr-poetry","text":"意 象 并非孤立物象，而是在语境中承载情感、记忆与文化联想的审美结构。","strata":["humanities","ocr"],"queries":["诗歌意象是否只是孤立物象","意象承载情感记忆文化联想","语境中的审美结构是什么","扫描诗学资料如何定义意象"]},
+    {"id":"ocr-table","text":"表 2 显示处理组均值 18.4，对照组均值 15.1，均值差 3.3，百分之九十五置信区间为 1.2 到 5.4。","strata":["quantitative","ocr"],"queries":["处理组与对照组均值差是多少","表2的处理组均值","百分之九十五置信区间范围","对照组均值15.1对应什么结果"]},
+    {"id":"en-rag","text":"Retrieval-augmented generation grounds model responses in retrieved source passages and should preserve citation links to those passages.","strata":["english","computing"],"queries":["What grounds retrieval-augmented generation responses","RAG should preserve which links","retrieved source passages and model responses","citation links in retrieval augmented generation"]},
+    {"id":"en-bias","text":"Selection bias occurs when inclusion in the analytic sample depends on factors related to both the exposure and the outcome.","strata":["english","methods"],"queries":["What is selection bias","analytic sample inclusion exposure outcome","When inclusion depends on exposure and outcome","definition of sample selection bias"]},
+    {"id":"en-metaphor","text":"A conceptual metaphor maps structure from a source domain onto a target domain, shaping patterns of inference rather than merely decorating language.","strata":["english","humanities"],"queries":["What does a conceptual metaphor map","source domain and target domain","metaphor shapes patterns of inference","why metaphor is not merely decoration"]},
+    {"id":"en-control","text":"A negative control is an exposure or outcome expected not to be causally affected, used to detect residual confounding or systematic error.","strata":["english","biomedical"],"queries":["What is a negative control","detect residual confounding with controls","exposure expected not to be causally affected","negative control and systematic error"]},
+    {"id":"cross-triangulation","text":"证据三角互证把不同方法、数据来源或理论视角的结果并置；一致可增强可信度，不一致则暴露边界或新的解释问题。","strata":["cross_document","methods"],"queries":["证据三角互证如何处理不一致","不同方法数据来源如何并置","一致结果怎样增强可信度","三角互证暴露什么解释问题"]}
+  ],
+  "cross_cases": [
+    {"id":"cross-causal-validity","query":"因果研究既要控制混杂又要说明结论推广边界","answerable":true,"relevant_ids":["soc-validity","bio-observational"],"strata":["cross_document","methods"]},
+    {"id":"cross-interpretation","query":"文学解释如何同时依靠文本细节与历史语境","answerable":true,"relevant_ids":["hum-close-reading","hum-context"],"strata":["cross_document","humanities"]}
+  ],
+  "unanswerable_queries": [
+    "火星土壤种植马铃薯的最佳肥料配方", "量子色动力学渐近自由的三圈推导", "明代某县每年精确降雨量", "未上传小说的最终结局",
+    "特定患者下周血糖数值", "2027年某公司股票价格", "某未收录药物的最佳剂量", "海王星地下海洋的盐度",
+    "未提供档案中的作者身份证号码", "不存在实验的原始测序数据", "某城市明天逐分钟交通流量", "未上传访谈对象的真实姓名"
+  ]
+}
