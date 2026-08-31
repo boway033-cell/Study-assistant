@@ -1,6 +1,6 @@
 # 02 · 数据库设计
 
-- 版本：v0.4（卡片/复习表已移除，新增 knowledge_nodes）
+- 产品版本：v2.0.0；数据库 schema：v10
 - 数据库：SQLite（WAL 模式），ORM：SQLAlchemy 2.0
 - 配套：[01-architecture.md](01-architecture.md) / [03-api.md](03-api.md)
 
@@ -35,10 +35,16 @@ tasks（内存态，不入库）
 | file_path | TEXT | NOT NULL | 相对 data/uploads 的路径 |
 | file_type | TEXT | NOT NULL | pdf / docx / pptx |
 | file_size | INTEGER | | 字节 |
+| file_hash | TEXT | 索引 | SHA-256，用于精确查重 |
 | total_pages | INTEGER | | 解析后页数 |
-| status | TEXT | NOT NULL, DEFAULT 'pending' | pending / parsing / ready / failed |
+| status | TEXT | NOT NULL, DEFAULT 'pending' | pending / parsing / ready / failed / needs_ocr |
 | error_msg | TEXT | | 失败原因 |
+| category | TEXT | | 资料分类 |
+| duplicate_of | INTEGER | | 疑似重复资料 ID |
+| library_order | INTEGER | NOT NULL | 全库自定义拖拽顺序 |
 | created_at | DATETIME | NOT NULL | |
+
+书架顺序保存在 `shelf_books.order_index`，与 `books.library_order` 相互独立；一篇文献可以属于多个书架。
 
 ### 2.2 `chapters` — 章节
 

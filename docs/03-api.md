@@ -1,6 +1,6 @@
 # 03 · API 接口清单
 
-- 版本：v0.4（知识树 / DeepSeek 云端 / 卡片 API 已移除）
+- 产品版本：v2.0.0
 - 基础路径：`http://127.0.0.1:8000`
 - 格式：JSON（上传用 multipart）；问答用 SSE（`text/event-stream`）
 - 统一响应错误格式：`{"detail": "错误信息"}`（FastAPI 默认）
@@ -33,7 +33,7 @@ form: file=<文件>
 ### 1.2 书籍列表
 
 ```
-GET /api/books?status=ready&page=1&page_size=20
+GET /api/books?status=ready&page=1&page_size=20&sort_by=custom
 ```
 
 ```json
@@ -43,7 +43,20 @@ GET /api/books?status=ready&page=1&page_size=20
 ]}
 ```
 
-### 1.3 书籍详情 + 章节树
+`sort_by` 支持 `custom`、`newest`、`oldest`、`title_asc`、`title_desc`、`author_asc`、`year_desc`、`year_asc`、`last_read`、`progress_desc`。传入 `shelf_id` 时，`custom` 使用该书架自己的顺序。
+
+### 1.3 自定义顺序
+
+```http
+PUT /api/books/order
+Content-Type: application/json
+
+{"book_ids":[8,3,5],"shelf_id":null}
+```
+
+`shelf_id=null` 调整全库顺序；传入书架 ID 只调整该书架。接口允许提交当前已加载的子集，只替换这些文献占据的位置并归一化整个范围，不打乱未提交文献之间的相对顺序。
+
+### 1.4 书籍详情 + 章节树
 
 ```
 GET /api/books/{book_id}
@@ -57,7 +70,7 @@ GET /api/books/{book_id}
  "analysis": {"definitions": [], "theorems": [], "keywords": [], "body_size": 10.5, ...}}
 ```
 
-### 1.4 重命名 / 1.5 删除 / 1.6 重新解析
+### 1.5 重命名 / 1.6 删除 / 1.7 重新解析
 
 ```
 PATCH /api/books/{book_id}   body: {"title": "新名字"}
@@ -65,7 +78,7 @@ DELETE /api/books/{book_id}   # 204，级联清理
 POST /api/books/{book_id}/reparse   # {"task_id": "t-xyz"}
 ```
 
-### 1.7 全文搜索
+### 1.8 全文搜索
 
 ```
 GET /api/search?q=拉格朗日&book_id=1&chapter_id=&page=1&page_size=20
@@ -79,7 +92,7 @@ GET /api/search?q=拉格朗日&book_id=1&chapter_id=&page=1&page_size=20
 ]}
 ```
 
-### 1.8 原文定位
+### 1.9 原文定位
 
 ```
 GET /api/books/{book_id}/file                    # 原始文件（iframe 支持 #page=N）
@@ -87,7 +100,7 @@ GET /api/books/{book_id}/chunk/{chunk_id}        # chunk 全文 + 页码区间
 GET /api/books/{book_id}/page/{page_no}          # 指定页文本（PDF）
 ```
 
-### 1.9 任务进度查询
+### 1.10 任务进度查询
 
 ```
 GET /api/tasks/{task_id}
@@ -97,7 +110,7 @@ GET /api/tasks/{task_id}
 {"task_id": "t-abc123", "status": "running", "progress": 0.45, "stage": "indexing", "message": "索引中 180/400"}
 ```
 
-### 1.10 笔记
+### 1.11 笔记
 
 ```
 GET    /api/books/{book_id}/notes
@@ -257,53 +270,35 @@ POST   /api/quizzes/batch-import  body: {"quizzes": [{"chapter_id": 10, "q_type"
 
 ---
 
-## 5. 统计 /api/stats（基于作答数据，卡片已移除）
-
-### 5.1 总览
+## 5. 知识库洞察 /api/stats
 
 ```
-GET /api/stats/overview
+GET /api/stats/knowledge-base?days=30
 ```
+
+返回一个只读快照，覆盖：知识库健康分、解析/索引/目录/元数据覆盖、原文取证、知识对象、来源可追溯率、证据核验状态、研究报告、写作/PPTX 输出和分类型活动趋势。
 
 ```json
-{"book_count": 5, "quiz_count": 300, "attempts_total": 1840,
- "avg_mastery": 0.68, "streak_days": 12}
+{
+  "overview": {
+    "book_count": 30,
+    "ready_count": 27,
+    "health_score": 84,
+    "knowledge_object_count": 126,
+    "traceable_rate": 0.91,
+    "report_count": 8
+  },
+  "coverage": [
+    {"key": "indexed", "label": "全文可检索", "value": 26, "total": 27, "rate": 0.963}
+  ],
+  "health": {"issue_count": 7, "categories": [], "items": []},
+  "knowledge": {"annotations": 80, "notes": 24, "evidence_cards": 12, "tree_nodes": 10},
+  "outputs": {"reports": 8, "writing": 3, "decks": 5, "recent": []},
+  "activity": [{"date": "2026-08-29", "imports": 1, "evidence": 4, "knowledge": 2, "outputs": 1}]
+}
 ```
 
-### 5.2 章节掌握度
-
-```
-GET /api/stats/mastery?book_id=1
-```
-
-```json
-{"book_id": 1, "chapters": [
-  {"chapter_id": 10, "title": "第一章 函数与极限", "mastery": 0.82, "quizzes": 40, "wrong_rate": 0.12}
-]}
-```
-
-> 掌握度 = 1 - 错题率（按章节题目最近一次作答）。
-
-### 5.3 作答趋势
-
-```
-GET /api/stats/activity?days=30
-```
-
-```json
-{"daily": [{"date": "2025-06-01", "attempts": 45}, {"date": "2025-06-02", "attempts": 38}]}
-```
-
-### 5.4 薄弱章节排行
-
-```
-GET /api/stats/weakness?limit=10
-```
-
-```json
-{"items": [{"book_id": 1, "book_title": "高等数学（上）", "chapter_id": 22,
-  "chapter_title": "5.3 定积分应用", "mastery": 0.31, "suggest": "优先复习"}]}
-```
+统计不再使用在线时长、连续打卡或 AI 生成数量评价学习质量。`days` 支持 7–365 天。
 
 ---
 
@@ -341,16 +336,31 @@ GET /api/settings/probe
 {"deepseek": {"ok": true, "reason": "已连接（模型: deepseek-v4-flash）"}}
 ```
 
-### 6.2 备用兼容接口（不改变默认 DeepSeek 路由）
+### 6.2 模型连接与功能路由
 
 ```
 GET    /api/settings/providers
 POST   /api/settings/providers
 DELETE /api/settings/providers/{provider_id}
 POST   /api/settings/providers/{provider_id}/probe
+GET    /api/settings/providers/{provider_id}/models
+PUT    /api/settings/providers/routing
 ```
 
-`POST` 支持 `capability=text|vision`、`protocol=openai_chat`、`base_url`、`model` 和 `api_key`。
+`POST` 支持供应商预设标识、模型名、Base URL 与 `openai_chat`、`anthropic_messages`、`google_generate` 三种协议。远程接口必须使用 HTTPS；loopback 本机接口可使用 HTTP。
+
+路由请求示例：
+
+```json
+{
+  "default_provider_id": "kimi-main",
+  "task_routes": {
+    "research": "glm-research",
+    "writing": "anthropic-writing",
+    "presentation": "kimi-main"
+  }
+}
+```
 Key 单独加密保存，不进入接口配置 JSON；备用接口不会自动接管现有问答、总结或深度分析。
 
 ### 6.3 Office 原版渲染
@@ -394,7 +404,7 @@ GET    /api/books/{book_id}/pdf-text-layer/{page}?generate=true  # 扫描页 OCR
 
 ```
 POST /api/ai/explain     body: {"text":"选中内容","action":"explain|translate","book_title":"…","chapter_title":"…"}
-POST /api/ai/summarize   body: {"book_id":3,"chapter_id":4}        # 章节总结（本地文本 → DeepSeek）
+POST /api/ai/summarize   body: {"book_id":3,"chapter_id":4}        # 章节总结（本地文本 → 通用生成路由）
 POST /api/ai/vision      body: {"book_id":3,"page":4,"image":"data:image/jpeg;base64,…","prompt":null}  # Qwen-VL
 ```
 
@@ -439,6 +449,7 @@ GET  /api/books/{book_id}/toc-review          # 项级置信度、编号问题�
 POST /api/books/{book_id}/toc-auto-repair     body: {apply:false|true}
 PUT  /api/books/{book_id}/toc                 body: {items:[...],note?}
 GET  /api/books/{book_id}/toc-revisions       # 最近 30 次修订快照摘要
+POST /api/maintenance/toc-rebuild-all          # 后台复用结构证据重识别全库 PDF 目录
 ```
 
 `PUT /toc` 是全量事务；每项使用 `client_key`，新项可用 `new:*`，
@@ -464,7 +475,45 @@ DELETE /api/literature/resources/{resource_id}
 `max_source_chars`、`use_scope`、`include_figures` 和 `rights_acknowledged`。返回的 coverage
 同时包含内容覆盖率、结构覆盖率和各分组取样量。
 
-## 13. 状态码约定
+## 13. 写作实验室 `/api/writing`
+
+```
+GET  /api/writing/profiles
+POST /api/writing/profiles
+POST /api/writing/profiles/{profile_id}/imitate
+POST /api/writing/literature-review            # 202，返回 task_id
+POST /api/writing/clean-text
+POST /api/writing/clean-docx
+GET  /api/writing/outputs
+GET  /api/writing/outputs/{output_id}
+PATCH /api/writing/outputs/{output_id}
+POST /api/writing/outputs/{output_id}/review
+GET  /api/writing/outputs/{output_id}/download
+```
+
+`POST /api/writing/literature-review` 请求示例：
+
+```json
+{
+  "title": "地方治理研究中的参与机制",
+  "question": "不同研究为何形成冲突结论？",
+  "book_ids": [12, 18, 23],
+  "review_type": "narrative",
+  "discipline": "social_science",
+  "length": 3500,
+  "profile_id": 2,
+  "ai_tone_constraints": true
+}
+```
+
+- `review_type`：`narrative | scoping | evidence_map`。
+- `discipline`：`auto | social_science | humanities | natural_biomedical`。
+- 至少 2 篇、最多 50 篇已解析文献。内容只来自显式选择的书目，引用锚点格式为 `[B{book}:C{chunk}:P{start}-{end}]`。
+- 综述通过全局任务中心异步生成；完成结果包含 `output_id`。目标长度为 1,200–20,000 字。无效锚点或引用覆盖不足会写入审计警告并保留草稿，不再丢弃整篇输出。
+- `profile_id` 可空；选中时 Writing DNA 只校准表达，不能充当事实来源。`ai_tone_constraints` 默认开启生成期表达约束，之后仍可把输出送入逐条去 AI 味审阅。
+- 这是封闭语料综述；没有完整检索、去重、筛选和质量评价流程时，不得宣称系统综述、元分析或 PRISMA 合规。
+
+## 14. 状态码约定
 
 | 码 | 场景 |
 |---|---|

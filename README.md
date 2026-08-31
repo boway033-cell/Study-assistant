@@ -1,235 +1,155 @@
 <div align="center">
 
-# Study Assistant · 学习助手
+# Study Assistant · 个人文献知识库
 
-**从原文阅读到知识沉淀与中文汇报，把 PDF、Word、PPT 组织成真正可长期使用的个人文献知识库。**
+**把散落的 PDF、Word 与 PPT 变成可阅读、可检索、可核验、可继续写作的个人知识系统。**
 
+[![Release](https://img.shields.io/badge/release-v2.0.0-8B5A2B.svg)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
+[![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-b28b54.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v1.3.0-8B5A2B.svg)](CHANGELOG.md)
 
-本地优先 · 原文证据链 · 结构化阅读 · 知识沉淀 · 写作实验室 · 中文 PPTX
+[下载最新版](https://github.com/boway033-cell/Study-assistant/releases/latest) · [安装与更新](docs/DOWNLOAD_AND_INSTALL.md) · [产品边界](docs/产品文档.md) · [隐私说明](PRIVACY.md)
 
-[真实界面](#真实运行界面) · [核心能力](#核心体验) · [快速开始](#快速开始) · [数据边界](#数据边界) · [项目文档](#文档与参与)
+本地优先 · 原文证据链 · 跨文献综合 · 写作与 PPTX 输出
 
 </div>
 
-![Study Assistant 文献知识库真实运行界面](docs/assets/screenshots/library.jpg)
+![Study Assistant 2.0 文献知识库](docs/assets/screenshots/library.jpg)
 
-<div align="center"><sub>v1.3.0 本机真实运行页面 · 文献知识库</sub></div>
+<div align="center"><sub>v2.0.0 真实运行界面；截图全部来自隔离的虚构演示库，不含用户文献。</sub></div>
 
-Study Assistant 面向需要长期阅读教材、论文与讲义的学生、考研学习者和研究者。它不把全部资料塞进一个聊天框，而是围绕**个人知识库**组织一条连续动线：资料归档 → 原文阅读 → 高亮与证据 → 知识树/图谱 → 综合研读 → PPTX 汇报。
+## 它的核心不是“再做一个 PDF 聊天框”
 
-与普通“上传 PDF 后聊天”工具不同，它强调三件事：
+Study Assistant 服务于一条完整的个人研究链：
 
-- **先限定资料范围**：每次研读、建树、图谱和汇报都明确选择单本或多本文献，不把整个资料库无意混合。
-- **结论可以回到原文**：目录、页码、文本块、批注、证据卡片和 AI 主张保持来源回链。
-- **AI 建议不替代用户判断**：低置信度目录、AI 知识节点和待核验主张进入人工确认流程，不静默写成事实。
+> 资料入库 → 可靠阅读 → 证据沉淀 → 跨文献研读 → 写作 / PPTX → 回到原文复核
 
-> 当前项目优先支持 Windows 本地部署。没有 AI Key 时，资料管理、原文阅读、目录编辑、全文检索、批注和本地知识组织仍可使用。
+你仍然决定读哪些资料、采用哪些证据、接受哪些修改。AI 负责整理、比较和提出可审查的解释，不把模型记忆冒充你的知识库，也不会把未选文献混入写作。
 
-## 真实运行界面
+| 常见断点 | Study Assistant 2.0 |
+|---|---|
+| 文件越存越多，找不到当前项目需要的材料 | 多级虚拟书架、筛选、十种排序方式与拖拽自定义顺序；一篇文献可归入多个书架 |
+| 扫描件目录混乱，正文被误判为标题 | 原生目录、版面、编号链和 OCR 共同判断；低置信度结果进入可拖拽的目录校正台 |
+| AI 给出结论，却无法回到依据 | 文献、章节、页码、文本块和批注保持稳定来源链；机器锚点在成文界面转为紧凑引用 |
+| 多篇文献只是轮流摘要，没有真正综合 | 研究报告显式区分共识、冲突、互补证据、竞争解释、偏倚与适用边界 |
+| 笔记、报告和写作彼此断开 | 批判性审查可回存为知识笔记和证据卡；写作与 PPTX 强制从已选知识对象取材 |
+| 写作太模板化，或被引用编号打断 | 支持连贯分析文章与探索性延伸；Writing DNA 只校准写法，去 AI 味改动逐条审阅 |
+| 知识库逐渐损坏但无从发现 | 健康检查识别未解析、低质量 OCR、无目录、无元数据、重复资料与失效锚点 |
 
-以下页面均由当前版本在本机真实资料库中直接截取，不是概念图或 AI 生成界面。
+## 四个核心工作区
+
+### 01 · 资料库：让文献先变得可管理
+
+- 导入 PDF、DOCX、PPTX，自动建立元数据、目录、文本块和全文索引。
+- 用智能视图、书架、分类、阅读状态和收藏缩小范围。
+- 按自定义顺序、导入时间、题名、作者、年份、最近阅读或进度排序。
+- 在“自定义顺序”下直接拖动文献；全库顺序与每个书架顺序分别保存。
+- OCR 显示页级进度，支持取消和无进展超时；重任务统一进入任务中心。
+
+### 02 · 研读与沉淀：每个判断都能回到材料
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/assets/screenshots/reader.jpg" alt="原文阅读器"><br><b>原文阅读器</b><br><sub>目录导航、连续/单页/双页、缩放、页码定位、高亮与划线。</sub></td>
-    <td width="50%"><img src="docs/assets/screenshots/workbench.jpg" alt="文献汇报工作台"><br><b>文献工作台</b><br><sub>选择证据、设定汇报目标、审阅提纲、渲染与验收。</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/assets/screenshots/knowledge-notes.jpg" alt="笔记与证据"><br><b>笔记与证据</b><br><sub>聚合高亮、划线、批注、知识笔记和证据卡片，同时保持底层实体独立。</sub></td>
-    <td width="50%"><img src="docs/assets/screenshots/research-workspace.jpg" alt="研究报告工作区"><br><b>研究报告工作区</b><br><sub>书目/章节范围、AI 自主研读、来源与主张审计、报告流转。</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/assets/screenshots/writing-lab.jpg" alt="Writing DNA 写作实验室"><br><b>Writing DNA</b><br><sub>20 篇完整文章门槛、语料权利确认、分层写作规律和可追溯版本。</sub></td>
-    <td width="50%"><img src="docs/assets/screenshots/writing-clean.jpg" alt="白名单去 AI 味"><br><b>白名单式去 AI 味</b><br><sub>文本或 DOCX 最小改写，保护事实与格式，候选修改由用户逐条决定。</sub></td>
+    <td width="50%"><img src="docs/assets/screenshots/reader.jpg" alt="隐私安全的虚构文献阅读器截图"><br><b>原文阅读与目录校正</b><br><sub>连续、单页、双页、目录定位、高亮、批注与结构精读。</sub></td>
+    <td width="50%"><img src="docs/assets/screenshots/knowledge-notes.jpg" alt="隐私安全的知识笔记截图"><br><b>笔记与证据</b><br><sub>高亮、划线、知识笔记和证据卡分开保存，统一按来源查看。</sub></td>
   </tr>
 </table>
 
-## 它解决什么问题
+- PDF 渲染按可见页调度并限制像素预算，缩放时取消过期任务；失败页可以单独重试。
+- 目录支持改标题、页码、层级、顺序、新增、删除和拖拽；保存后原位刷新，不折叠整个工作区。
+- 先限定书目范围，再进入笔记、知识树、图谱或研究报告；不选择时不会默认混合全库。
+- 知识库问答采用 FTS5、RRF 与可选向量召回，回答携带可回跳来源。
 
-| 阅读现场的困难 | Study Assistant 的处理方式 |
+![跨文献研究报告工作区](docs/assets/screenshots/research-workspace.jpg)
+
+研究报告不是固定模板。模型可以根据材料和问题组织连贯文章、进行受控延伸，同时把事实、解释和待验证推断分开。右侧审计区逐条显示来源、置信度、反例、竞争解释及跨文献关系；人工修订后可沉淀回知识库。
+
+### 03 · 写作工作台：从知识对象到完整文章
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/screenshots/writing-lab.jpg" alt="Writing DNA 页面"><br><b>版本化 Writing DNA</b><br><sub>从 20 篇以上自有完整语料提炼结构、语言和推理习惯；每次完善保留旧版。</sub></td>
+    <td width="50%"><img src="docs/assets/screenshots/writing-clean.jpg" alt="多文献综述页面"><br><b>多文献综述</b><br><sub>显式选择 2–50 篇文献，比较共识、冲突、互补证据与最强反证。</sub></td>
+  </tr>
+</table>
+
+- Writing DNA 只约束表达方式，不提供事实，也不复制原作者的独特表达。
+- 独立新作只从已选笔记、证据卡和批判性审查报告取材，允许 AI 在证据边界内形成连贯论证。
+- 多文献综述覆盖社会科学、人文与文学、自然科学与生物医学及跨学科镜头。
+- 正文使用自然的脚注/引用呈现，内部定位符不直接打断阅读；引用审计仍可回到原页。
+- 文本与 DOCX 去 AI 味只处理明确的机械表达，候选修改由用户逐条接受或撤销。
+- 草稿可继续编辑并导出 Word，来源变化后会提示重新核对。
+
+### 04 · PPTX 汇报：证据先于排版
+
+![PPTX 文献汇报工作台](docs/assets/screenshots/workbench.jpg)
+
+- 必须先选择知识笔记、证据卡或批判性审查报告，再设定受众、用途、时长和页数。
+- 生成前审阅逐页提纲，生成后检查主张—来源、数字、权利与覆盖率。
+- PowerPoint 可用时执行真实逐页渲染与视觉验收；不可自动化时明确降级为结构审计，不伪装成已完成视觉验收。
+- 复杂多面板、矢量图和公式页仍需要人工复核，详见[产品边界](docs/产品文档.md#当前边界)。
+
+## 本地优先，但不含糊地描述联网边界
+
+| 数据 / 操作 | 默认行为 |
 |---|---|
-| 扫描 PDF 目录断层、序号不连续、正文被误判为标题 | 原生文本与 OCR 按页取证，结合编号连续性、版面和正文语义生成候选目录，并保留人工复核入口 |
-| Markdown 被 PDF 换行切碎，段落与句子次序混乱 | 按阅读顺序重建段落，修复跨行断句、页眉页脚和重复文本，再生成结构化 Markdown |
-| 问答有结论却找不到依据 | RAG 回答携带书目、章节和页码，可直接回到原文核对 |
-| 多本资料一股脑生成图谱，关系失真 | 知识树、图谱和 AI 绘图均先选择单本或多本书目，再独立生成与保存 |
-| 分析、OCR 和汇报生成耗时，不知道做到哪一步 | 全局任务中心统一展示导入、OCR、深度分析和 PPTX 进度，重任务串行调度以控制内存 |
-| 做完笔记后很难沉淀为汇报 | 可选择章节或选段生成中文、可编辑的 PPTX，并保留来源定位 |
-| 文献多后难以按项目、课程同时归档 | 多级虚拟书架支持一书多归属，不移动原文件 |
-| 有大量同源文章却难以提炼可复用写法 | 从至少 20 篇完整文章分层蒸馏 Writing DNA，保留版本并支持独立新作与 Word 输出 |
-| 文稿有明显模板腔，又不希望普通润色改动事实 | 仅按 11 条白名单执行可审计的最小改写，支持文本和 DOCX |
+| 原始文件、SQLite、FTS5、批注、笔记、报告和写作稿 | 保存在本机 `backend/data/` |
+| 解析、目录、OCR、健康检查、知识库洞察 | 本机执行 |
+| AI 问答、研读、写作、PPTX、出题 | 仅在用户触发后，把所选范围的必要内容发送给对应模型供应商 |
+| 页面视觉解读 | 仅在用户触发后发送当前页面图像 |
 
-## 从文献到知识的工作流
+设置页可分别为问答、研究、写作、PPTX 与通用生成选择连接和回退链。内置 DeepSeek、Kimi、智谱 GLM、通义、OpenAI、Anthropic、Gemini，也支持自定义供应商；没有 API Key 时，导入、阅读、目录修订、全文检索和本地知识组织仍可使用。详见 [PRIVACY.md](PRIVACY.md)。
 
-```mermaid
-flowchart LR
-    A[导入 PDF / DOCX / PPTX] --> B[结构解析与弱页 OCR]
-    B --> C[目录校核与段落重建]
-    C --> D[(本地个人知识库)]
-    D --> E[原文 / Markdown 阅读]
-    D --> F[全文检索与可追溯问答]
-    D --> G[按书目生成知识树 / 图谱]
-    E --> H[高亮、批注与文献卡片]
-    F --> I[深度研读]
-    G --> I
-    H --> I
-    I --> J[选章节 / 选段生成中文 PPTX]
-    D --> K[20+ 篇语料蒸馏 Writing DNA]
-    K --> L[独立新作 / DOCX 去 AI 味]
-```
+## 下载与启动
 
-## 核心体验
+当前 2.0 发布物是**本地 Web 应用包**，不是免安装桌面 EXE。页面在浏览器中打开，但服务、资料和数据库都运行在本机。
 
-### 1. 先把文献变成可靠的知识底座
+最短路径（Windows）：
 
-- 导入 PDF、DOCX、PPTX，自动归档并建立中文全文索引。
-- 资料库提供阅读中、收藏、待处理、未归档与自建书架视图；选中文献后按需查看阅读进度、解析状态、章节和关键词，不必离开当前列表。
-- 解析层综合原生文本、OCR、页码、字体和编号序列；低置信度结果进入复核，而不是静默写入错误目录。
-- 目录置信度会经过全书编号链校验；可安全自修正错层/错挂和同页错序，也可在阅读器中完整人工校正并回到原页核对。
-- 原文、结构化 Markdown、目录、页码和知识片段保持映射，为后续问答与汇报提供证据链。
-- OCR 与可选 PP-DocLayout 版面增强按任务唤起，不作为常驻重进程；大型任务串行执行，降低峰值内存。MinerU 目前不进入默认安装与导入链。
-
-### 2. 用适合长文献的阅读器工作
-
-- PDF 支持连续、单页、双页模式，以及目录跳转、缩放、深色阅读和位置记忆；文档导航默认展开并跟随当前章节，无目录时可直接进入结构校正。
-- 长题名使用两行自适应文献头，阅读视图、状态与研究动作分级显示；窄窗将研究工具收纳，避免工具栏遮挡正文。
-- 原文版、Markdown 精读版与文献卡片可切换；高亮与划线可不写批注直接保存，高亮使用低透明度叠层避免遮字，四色标注和笔记均保存在本地。
-- 原生 PDF 使用精确文本命中，跨页划线保存为一个多页锚点；扫描 PDF 仅为当前页按需生成可选择的 OCR 文字层，并在本地缓存坐标。
-- 批注同时保存原文、前后文和文档指纹；文件排版变化后可自动校准，无法确定时支持用户重新选择位置。
-- 选中文字可解释、翻译、追问或加入研读范围；视觉模型可按需解读图表、公式与扫描页。
-
-### 3. 明确范围，再让 AI 组织知识
-
-- 侧栏使用单一“知识沉淀”入口，进入后再切换笔记、知识树、知识图谱和综合研读；四种模式共享一个书目范围，页面切换时不必重复选书。
-- “笔记与证据”聚合展示高亮、划线、批注、知识笔记和证据卡片，但底层保持独立；每条记录携带来源回链，并支持按书目、章节、标签、颜色和时间筛选。
-- 高亮需用户确认后才提升为笔记，笔记需用户确认后才加入知识树；多条证据可组合为待核验主张，AI 内容与用户内容使用不同标识。
-- 知识树负责层级组织，拖拽变更会先显示影响范围，AI 扩展只生成待确认建议；图谱负责发现概念关系与出处，研究报告工作区负责回答具体的跨文献问题。
-- 问答从所选知识库检索证据，答案可定位到文件、章节和页码。
-- 研究报告工作区默认采用“AI 自主研读”：DeepSeek 先判断材料类型、拆分子问题并选择分析维度，再在用户限定的书目/章节/笔记内检索与综合；Nature 类能力只承担写作与来源约束，不决定报告结构。
-- 可切换观点比较、证据与方法审查、研究缺口探索，并选择快速或深度推演。报告逐条标注主张类型、置信度、反例/限制与精确来源锚点；结果可保存为笔记、证据卡片或发送至 PPTX。
-
-### 4. 从原文章节生成中文文献汇报
-
-- 选择整篇、章节或任意选段作为 PPTX 的内容边界。
-- 工作台按“选择证据—设定汇报目标—审阅提纲—渲染验收”推进；长文献按章节分层取样并报告覆盖率。
-- AI 依据论文类型重建论证主线，不机械复刻原文目录；一页一个主要主张，统一术语，并显式呈现证据意义、局限和外推边界。
-- 提纲可逐页人工编辑，来源侧栏会标出数字、定位或主张一致性问题；PPTX 演讲者备注保留主张、章节/页码和证据摘录。
-- SI/图表的许可证和权利状态进入输出门禁；本机 PowerPoint 可实际渲染逐页预览并做视觉回归。
-- 支持开放获取、arXiv、Unpaywall 与图书馆/Chrome 登录态交接等合法全文入口；页面会明确展示开放路径、登录接续和校验导入，不会绕过付费墙或访问控制。
-
-### 5. 从个人语料沉淀写作方法
-
-- **Writing DNA**：在文献工作台选择至少 20 篇已完整解析的文章并确认语料处理权利。系统逐篇累计量化基线，再分别沉淀语言 DNA、文章结构、选题与素材策略、认知框架、视觉风格和整合 Writing-DNA，不把全部全文同时送入模型。
-- **持续版本化**：补充或排除文章、写下人工反馈都会生成新版本，旧版不覆盖；可核对完整语料清单、查看质量限制并并排比较历史 DNA。
-- **独立新作**：生成时读取当前版本的全部 DNA 产物，并选取 5 篇议题相近原文校准语感。它只借鉴抽象写法，不复制独特表达、不搬用原文观点，也不冒充作者；结果可编辑并原位重建 Word。
-- **白名单式“去 AI 味”**：文本与 DOCX 只处理 11 类明确、可定位的模板痕迹。每处修改保留原文、替换文本和规则编号，数字、引语、链接、限定词、表格及未修改 Word run 格式受到本地守恒校验。
-- **人工最终决定**：系统先给出候选修改，用户逐条接受或撤销，再从原始文本/DOCX 重放所选操作；不会用纯文本重建 Word，也不会把普通润色包装成“去 AI 味”。
-- 写作任务使用当前配置的 DeepSeek 接口；原稿、版本和输出保存在本机 `backend/data/writing/`，列表只返回摘要，正文按需加载。
-
-## 快速开始
-
-### Windows 源码运行
-
-前置环境：Python 3.12+、Node.js 22+。
+1. 从 [GitHub Releases](https://github.com/boway033-cell/Study-assistant/releases/latest) 下载 `study-assistant-v2.0.0.zip` 并完整解压。
+2. 安装 64 位 Python 3.12+，在项目目录打开 PowerShell。
+3. 运行下列命令创建环境并安装依赖：
 
 ```powershell
-git clone https://github.com/boway033-cell/Study-assistant.git
-cd Study-assistant
-
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-
-# 安装并构建前端：
-cd frontend
-npm ci
-npm run build
-cd ..
-
-# 启动并自动打开浏览器
-.\start.bat
 ```
 
-启动器会在服务健康后打开实际页面（默认 `http://127.0.0.1:8000`，冲突时自动选择 8001–8010），使用 `stop.bat` 停止。固定的 `127.0.0.1` 地址只能访问已经运行的服务，不能自行唤醒已停止的本地程序。若只运行后端，也可以执行：
+4. 双击 `start.bat`；首次启动会建立 `backend/data/`。使用 `stop.bat` 停止服务。
+5. 在设置页按需添加模型连接。Key 加密保存在本机。
 
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
-```
+完整的下载选择、源码构建、更新、备份和故障排查见：[安装与更新指南](docs/DOWNLOAD_AND_INSTALL.md)。
 
-### 注册稳定网页唤醒入口（推荐）
+## 2.0 的质量基线
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\protocol\install.ps1
-```
+- 后端完整测试、前端单测和生产构建由 CI 持续执行。
+- 固定检索集覆盖跨学科问答、引用正确性和无答案拒答；容量基线覆盖 3,000 本 / 300,000 文本块合成库。
+- 截图脚本只连接临时演示数据库，并在写盘前检查禁止展示词；不会读取用户正式知识库。
+- SQLite 适合当前个人中小型资料库。数千本真实文献的迁移阈值仍需更大规模验证，不把合成基线包装为已证明的无限扩展能力。
 
-注册后，安装脚本会在桌面创建“打开学习助手”网页快捷方式；也可由网页或 Windows 运行框打开 `study-assistant://open`。协议处理器会按需启动本地服务、等待健康检查并打开实际端口，避免把“拒绝连接”页面交给用户。应用不设开机常驻，关闭服务后不占用运行内存。
-
-启动页、阅读器和资料库资源均随前端构建保存在本机，不依赖 Google Fonts、jsDelivr、unpkg 等境外 CDN；本地资料管理、解析与阅读无需 VPN。DeepSeek 与默认视觉接口使用中国大陆可访问的官方端点，开放获取或馆藏页面是否可达则取决于对应文献站点自身。
-
-### 启用 AI（可选）
-
-在应用设置页填写 DeepSeek API Key，即可使用问答、深度研读、出题、写作实验室与 PPTX 生成；视觉分析另需配置 Qwen-VL。也可在根目录 `.env` 中设置 `DEEPSEEK_API_KEY`。Key 只在本机保存并以脱敏形式显示。
-
-## 数据边界
-
-| 数据或操作 | 默认位置 / 去向 |
-|---|---|
-| 原始文献、SQLite、全文索引、批注 | 本机 `backend/data/` |
-| 解析、切块、目录编辑、FTS5 检索 | 本机完成 |
-| AI 问答 | 提问与检索到的相关片段发送至已配置的 DeepSeek |
-| 深度分析、出题、研读、PPTX | 用户触发后，将所选范围的必要内容发送至 DeepSeek |
-| Writing DNA、独立新作、去 AI 味 | 本机逐篇统计；用户触发后，将受限代表片段或待处理文本发送至 DeepSeek；原稿和输出留在本机 |
-| 页面视觉分析 | 用户触发后，将当前页面图像发送至 Qwen-VL |
-
-未配置对应 Key 时不会触发云端能力。完整说明见 [PRIVACY.md](PRIVACY.md)。备份可直接复制 `backend/data/`，或运行 `scripts\maintenance\backup.bat`。
-
-## 技术架构
-
-```mermaid
-flowchart TB
-    UI[Vue 3 · Element Plus · pdf.js · ECharts]
-    API[FastAPI 服务]
-    JOB[全局任务调度器]
-    PARSE[PyMuPDF / pdftext / RapidOCR / 可选 PP-DocLayout]
-    STORE[(SQLite WAL · FTS5 · 本地文件)]
-    AI[可选 DeepSeek / Qwen-VL]
-    UI <--> API
-    API --> JOB
-    JOB --> PARSE
-    PARSE --> STORE
-    API <--> STORE
-    API -. 用户主动触发 .-> AI
-```
-
-## 项目状态
-
-- 后端测试：124 项通过、1 项按本机 PowerPoint 环境跳过，覆盖解析、目录、写作实验室、知识沉淀、PPTX、检索评测和数据可靠性。
-- 前端单元测试：13 项；桌面与 390px 移动端共 24 个关键路由完成 Playwright 只读回归。
-- 当前版本：v1.3.0。项目处于持续迭代期，解析、写作与 AI 输出仍以“证据 + 审计 + 人工复核”作为安全边界。
+本地验证：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 cd frontend
+npm ci
 npm run test:unit
 npm run build
 ```
 
-## 文档与参与
+## 文档
 
-- [产品文档](docs/产品文档.md)：定位、功能范围与视觉交互规范
-- [项目交接](docs/PROJECT_HANDOVER.md)：开发状态、运行方式与已知边界
-- [轻量文档管线](docs/LIGHTWEIGHT_DOCUMENT_PIPELINE.md)：解析、OCR、目录证据与内存约束
-- [文献研究工作流](docs/nature-literature-workflow.md)：归档、文献卡片、PPTX 与合法全文路径
-- [研究报告方法](docs/RESEARCH_REPORT_METHOD.md)：AI 自主研读、证据审计、外部方法借鉴与资源边界
-- [容量与检索评测](docs/SCALING_AND_RETRIEVAL_EVAL.md)：SQLite 容量护栏、迁移路线和固定质量基线
-- [脚本目录](scripts/README.md)：启动、协议、维护、兼容入口与内部工具说明
+- [产品定位、功能边界与路线](docs/产品文档.md)
+- [安装、更新、备份与卸载](docs/DOWNLOAD_AND_INSTALL.md)
+- [产品功能地图](docs/PRODUCT_FUNCTION_MAP.md)
+- [项目交接](docs/PROJECT_HANDOVER.md)
+- [研究报告方法](docs/RESEARCH_REPORT_METHOD.md)
+- [容量与检索评测](docs/SCALING_AND_RETRIEVAL_EVAL.md)
+- [架构](docs/01-architecture.md) · [API](docs/03-api.md) · [脚本](scripts/README.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [变更记录](CHANGELOG.md)
-
-如果这个项目也解决了你的文献阅读问题，欢迎提交 Issue、改进解析样本或贡献代码。
 
 ---
 
-<div align="center">以原文为根，以知识为枝。</div>
+<div align="center"><b>以原文为根，以知识为枝；让每次阅读都能进入下一次思考。</b></div>

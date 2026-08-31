@@ -12,7 +12,7 @@
 │  浏览器 (http://127.0.0.1:8000)                             │
 │  Vue3 + Vite + Element Plus + ECharts                      │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────────────┐  │
-│  │ 资料库页 │ │ AI问答页 │ │ 知识树页 │ │ 刷题/统计/设置 │  │
+│  │ 资料库页 │ │ AI问答页 │ │ 知识树页 │ │ 洞察/工具/设置 │  │
 │  └──────────┘ └──────────┘ └──────────┘ └───────────────┘  │
 └────────────────────────────┬───────────────────────────────┘
                              │ HTTP REST + SSE（流式问答）
@@ -25,7 +25,7 @@
 │    parser/      文档解析：PDF / DOCX / PPTX / OCR           │
 │    analyzer/    版面分析 + 文本清洗 + 关键信息提取           │
 │    rag/         切片 + FTS5 检索 + 向量检索(可选)            │
-│    llm/         DeepSeekProvider（flash/pro 档位）           │
+│    llm/         统一供应商路由 + 多协议适配器                 │
 │  worker/        后台任务（解析 / 向量化 / 批量生成）          │
 │  models/        SQLAlchemy ORM 模型                         │
 │  core/          配置、数据库、依赖注入                       │
@@ -52,13 +52,13 @@
 | OCR（可选） | RapidOCR / Tesseract / PaddleOCR | — | 扫描版 PDF；默认优先轻量 RapidOCR，按当前页或弱页启用 |
 | 向量库（可选） | ChromaDB | ≥0.4 | 本地、纯 Python；`vector_search` 默认关 |
 | 嵌入模型（可选） | fastembed + bge-small-zh-v1.5 | fastembed≥0.4 | ONNX Runtime，内存 <500MB，全离线 |
-| **云端 LLM** | **DeepSeek API（deepseek-v4-flash / deepseek-v4-pro）** | httpx | **唯一 AI 后端（本地 Ollama 已取消）**；质量高、成本低 |
+| **LLM** | DeepSeek / Kimi / GLM / 通义 / OpenAI / Anthropic / Gemini / 自定义 | httpx | 默认连接 + 按问答、研究、写作、PPT、通用任务路由；允许 loopback 本机接口 |
 | 前端 | Vue3 + Vite + Element Plus | — | 组件全、开发快 |
 | PDF 阅读器 | **pdf.js（pdfjs-dist）** | ≥4 | Mozilla 开源（~48k★），Firefox 同内核；页面内直接渲染，无需下载 |
 | 启动器 | `start.bat` / `stop.bat` + `scripts/runtime/` | — | 自检端口/已在运行，自动开浏览器 |
 | 思维导图 | 自绘 SVG（零依赖） | — | 知识树导图视图，低内存 |
 
-| 图表 | ECharts | — | 趋势图、掌握度柱状图 |
+| 图表 | ECharts | — | 知识库导入、取证、沉淀与输出趋势 |
 | 部署 | start.bat 启动 uvicorn 并托管前端静态产物 | — | 免装 Node 即可用 |
 
 ## 3. 目录结构
@@ -81,7 +81,7 @@ study-assistant/
 │   │   │   ├── parser/       # PDF/DOCX/PPTX + ocr.py
 │   │   │   ├── analyzer/     # layout / textclean / keyinfo
 │   │   │   ├── rag/          # chunker / semantic_chunker / fts / retriever / vector / toc_*
-│   │   │   └── llm/          # DeepSeekProvider + load_llm_config
+│   │   │   └── llm/          # 供应商路由、Chat/Messages/GenerateContent 适配器
 │   │   └── worker/           # tasks.py（后台线程+事件循环）/ import_task.py
 │   └── data/                 # study.db / uploads/ / chroma/ / models/
 ├── frontend/
@@ -122,7 +122,7 @@ POST /api/chat {book_id, question, model: flash|pro}
      c. 章节级上下文：命中 chunk 拉取同章节相邻 chunk
      d. 全文兜底：仍无命中 → 返回目录结构
   3. 组装 prompt（context 完整内容，截断保护 12000 字符）
-  4. 从 DB 读配置（key/模型档位）→ DeepSeekProvider 流式返回
+  4. 从 DB 解析任务路由 → 相应协议适配器流式返回
   5. 前端 SSE 逐字渲染；完成后存 chat_logs
   6. 前端右侧原文面板自动展示首个出处的 chunk 原文（文本/PDF iframe）
 ```
@@ -142,40 +142,47 @@ GET  /api/knowledge/nodes/{id}/source  # 关联章节原文（合并该章 chunk
 
 ```
 POST /api/books/{id}/generate-quizzes
-  → 取章节切片 → DeepSeek 生成 JSON 题目 → 入库
+  → 取章节切片 → 通用生成路由中的模型生成 JSON 题目 → 入库
 答题：POST /api/quizzes/{id}/attempt
   → 选择/填空：比对答案自动判分
   → 简答：显示参考答案，用户自评对错
 ```
 
-## 5. LLM 抽象（仅 DeepSeek）
+### 4.5 跨学科目录与多文献综述
+
+```
+PDF 目录候选
+  → 编号 / 版面 / 学术章节语义合并
+  → 社科、人文文学、自然生物章节角色审计
+  → 只提示未识别环节，进入目录工作台原页核对
+
+用户显式选择 2–50 篇 ready 文献
+  → 每篇公平抽取首 / 中 / 尾 + 议题相关 chunks
+  → 生成 [B{book}:C{chunk}:P{start}-{end}] 稳定锚点
+  → 学科镜头 + 可选 Writing DNA + 去 AI 味生成约束
+  → 主题综合、引用覆盖审计、WritingOutput(literature_review) + DOCX
+```
+
+- 学术章节语义只增强候选置信度和结构覆盖提示，不在原文不存在时自动创建标题。
+- 多文献综述是封闭语料流程；Writing DNA 与其校准原文只影响表达，不能进入事实来源集合。
+- 输出中的未知锚点会被拒绝；跨文献引用不足两篇会中止生成。未覆盖的已选文献进入审计提示，交给用户复核。
+- 社科镜头检查理论/操作化、样本情境、因果边界和质性反身性；人文文学镜头检查文本细读、叙事修辞、语境和竞争阐释；自然生物镜头检查研究设计、样本对照、效应/不确定性、偏倚和重复性。
+
+## 5. LLM 连接、协议与任务路由
 
 ```python
 # services/llm/__init__.py
-DEEPSEEK_MODELS = {"flash": "deepseek-v4-flash", "pro": "deepseek-v4-pro"}
+def load_llm_config(db, task="utility") -> dict:
+    # 全局默认连接可被 chat/research/writing/presentation/utility 覆盖
+    ...
 
-def load_llm_config(db) -> dict:
-    # 配置优先级：数据库 settings 表（设置页写入）> .env / 内存默认
-    return {
-        "deepseek_api_key": ...,
-        "deepseek_base_url": ...,
-        "deepseek_model": ...,  # flash / pro
-    }
-
-class DeepSeekProvider(LLMProvider):
-    name = "deepseek"
-    async def stream_chat(self, messages): ...   # SSE 流式
-
-class LLMRouter:
-    @staticmethod
-    def get(mode, cfg) -> LLMProvider:
-        return DeepSeekProvider(api_key=cfg["deepseek_api_key"],
-                                base_url=cfg["deepseek_base_url"],
-                                model=cfg["deepseek_model"])
+class OpenAIChatProvider(LLMProvider): ...       # DeepSeek/Kimi/GLM/通义等
+class AnthropicMessagesProvider(LLMProvider): ...
+class GoogleGenerateProvider(LLMProvider): ...
 ```
 
-> 关键点：LLM 层**必须从 DB 读配置**（设置页改模型/填 Key 即时生效）。
-> 文本解析/检索始终本地；只有 chat / 题目生成 / 章节 LLM 兜底会调用云端。
+> 关键点：供应商名称与协议分离；LLM 层始终从 DB 解析连接和任务路由，设置修改即时生效。旧 DeepSeek Key 自动映射到内置 `deepseek` 连接。
+> 文本解析/检索始终本地；只有用户触发的 AI 任务会调用所选连接。
 
 ## 6. 任务与并发
 
