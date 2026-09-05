@@ -1,9 +1,21 @@
 <template>
   <div class="settings-page study-page">
     <header class="page-heading">
-      <div><h1>模型设置</h1><p>添加 API 密钥，选择一个默认模型即可开始使用。</p></div>
+      <div><h1>设置</h1></div>
       <el-button :loading="probingAll" @click="probeDefault">检测默认模型</el-button>
     </header>
+
+    <GlowBorderCard class="appearance-panel" aria-label="界面设置">
+      <template #header><div class="appearance-heading"><h2>界面</h2><el-button text @click="resetUiPreferences">恢复默认</el-button></div></template>
+      <div class="appearance-grid">
+        <div class="appearance-controls">
+          <div class="appearance-control"><span>发光边框</span><el-switch v-model="uiPreferences.glowBorders" aria-label="发光边框" /></div>
+          <div class="appearance-control"><span>机械按键</span><el-switch v-model="uiPreferences.keycapButtons" aria-label="机械按键" /></div>
+          <div class="appearance-control"><span>列表密度</span><el-radio-group v-model="uiPreferences.libraryDensity" size="small" aria-label="列表密度"><el-radio-button value="comfortable">舒适</el-radio-button><el-radio-button value="compact">紧凑</el-radio-button></el-radio-group></div>
+        </div>
+        <div class="appearance-preview"><KeycapCard aria-label="按键预览 K" /></div>
+      </div>
+    </GlowBorderCard>
 
     <el-card shadow="never" class="model-panel">
       <div class="section-heading"><div><h2>模型供应商</h2><p>密钥只加密保存在本机。</p></div></div>
@@ -127,14 +139,15 @@
           <el-select v-model="providerForm.vendor" style="width: 100%" @change="applyPreset"><el-option v-for="(preset, key) in providerPresets" :key="key" :value="key" :label="preset.label" /></el-select>
         </el-form-item>
         <el-form-item label="显示名称"><el-input v-model="providerForm.name" /></el-form-item>
-        <el-form-item label="API Key"><el-input v-model="providerForm.api_key" type="password" show-password :placeholder="providerForm.id ? '留空保持原 Key' : '输入 API Key；本机无鉴权服务可留空'" /></el-form-item>
+        <el-form-item label="API Key"><el-input v-model="providerForm.api_key" type="password" show-password :placeholder="providerForm.id ? '留空保持原 Key' : '输入 API Key；本机无鉴权服务可留空'" @blur="autoSyncModels" /></el-form-item>
         <el-form-item label="模型">
-          <div class="model-input"><el-select v-model="providerForm.model" filterable allow-create default-first-option><el-option v-for="model in discoveredModels" :key="model" :label="model" :value="model" /></el-select><el-button v-if="providerForm.id" :loading="modelsLoading" @click="syncModels">读取列表</el-button></div>
+          <div class="model-input"><el-select v-model="providerForm.model" filterable allow-create default-first-option><el-option v-for="model in discoveredModels" :key="model" :label="model" :value="model" /></el-select><el-button :disabled="!providerForm.base_url" :loading="modelsLoading" @click="syncModels">识别模型</el-button></div>
+          <div v-if="discoveredModels.length" class="model-discovery-hint">已识别 {{ discoveredModels.length }} 个模型，可在上方直接切换。</div>
         </el-form-item>
         <el-collapse class="dialog-advanced">
           <el-collapse-item name="connection" title="自定义连接设置">
             <el-form-item label="协议"><el-select v-model="providerForm.protocol" style="width:100%"><el-option v-for="(label, key) in protocolNames" :key="key" :label="label" :value="key" /></el-select></el-form-item>
-            <el-form-item label="Base URL"><el-input v-model="providerForm.base_url" /></el-form-item>
+            <el-form-item label="Base URL"><el-input v-model="providerForm.base_url" @blur="autoSyncModels" /></el-form-item>
           </el-collapse-item>
         </el-collapse>
       </el-form>
@@ -146,7 +159,10 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { cleanupStorage, deleteCompatibleProvider, getCapacityStatus, getProviderUsage, getSettings, getStorageUsage, listCompatibleProviders, listProviderModels, probeCompatibleProvider, probeSettings, saveCompatibleProvider, updateProviderRouting, updateSettings } from '../api'
+import GlowBorderCard from '../components/GlowBorderCard.vue'
+import KeycapCard from '../components/KeycapCard.vue'
+import { uiPreferences, resetUiPreferences } from '../stores/uiPreferences'
+import { cleanupStorage, deleteCompatibleProvider, discoverProviderModels, getCapacityStatus, getProviderUsage, getSettings, getStorageUsage, listCompatibleProviders, probeCompatibleProvider, probeSettings, saveCompatibleProvider, updateProviderRouting, updateSettings } from '../api'
 
 const taskLabels = { chat: 'AI 问答', research: '研究与跨文献分析', writing: '写作台', presentation: 'PPT 生成', utility: '题目与通用生成' }
 const protocolNames = { openai_chat: 'Chat Completions', anthropic_messages: 'Anthropic Messages', google_generate: 'Google GenerateContent' }
@@ -210,6 +226,7 @@ const openProvider = vendor => { providerForm.value = { id: null, vendor, capabi
 const editProvider = provider => {
   if (provider.builtin) { deepseekDialog.value = true; return }
   providerForm.value = { ...provider, api_key: '' }; discoveredModels.value = []; providerDialog.value = true
+  void syncModels(false)
 }
 
 const saveDeepseek = async () => {
@@ -253,11 +270,26 @@ const probeVision = async () => {
   finally { probingVision.value = false }
 }
 
-const syncModels = async () => {
+const syncModels = async (announce = true) => {
+  if (!providerForm.value.base_url?.trim()) return
   modelsLoading.value = true
-  try { const result = await listProviderModels(providerForm.value.id); discoveredModels.value = result.items || []; ElMessage.success(`读取到 ${discoveredModels.value.length} 个模型`) }
-  catch (error) { ElMessage.error(error.message) }
+  try {
+    const result = await discoverProviderModels({
+      provider_id: providerForm.value.id || undefined,
+      protocol: providerForm.value.protocol,
+      base_url: providerForm.value.base_url,
+      api_key: providerForm.value.api_key || undefined,
+    })
+    discoveredModels.value = result.items || []
+    if (!providerForm.value.model && discoveredModels.value.length) providerForm.value.model = discoveredModels.value[0]
+    if (announce) ElMessage.success(`识别到 ${discoveredModels.value.length} 个模型，可直接选择切换`)
+  }
+  catch (error) { if (announce) ElMessage.error(error.message) }
   finally { modelsLoading.value = false }
+}
+const autoSyncModels = () => {
+  const hasCredential = providerForm.value.id || providerForm.value.api_key || /^http:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(providerForm.value.base_url || '')
+  if (providerForm.value.base_url?.trim() && hasCredential && !modelsLoading.value) void syncModels(false)
 }
 
 const removeProvider = async provider => {
@@ -287,5 +319,15 @@ onMounted(async () => {
 <style scoped>
 .settings-page{max-width:920px;margin:0 auto;padding-bottom:32px}.page-heading{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px}.page-heading h1{font-size:24px;line-height:1.3;color:#f7f2e9;font-weight:650;text-shadow:0 1px 8px rgba(0,0,0,.22)}.page-heading>div>p{margin-top:5px;color:rgba(247,242,233,.72);font-size:14px}.section-heading p{margin-top:5px;color:var(--el-text-color-secondary);font-size:14px}.model-panel,.advanced-panel{border:1px solid var(--study-card-border);border-radius:14px}.advanced-panel{margin-top:14px}.section-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.section-heading h2{font-size:17px}.provider-list{display:grid;gap:10px}.provider-item{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:12px;min-height:68px;padding:11px 14px;border:1px solid var(--study-card-border);border-radius:12px;background:var(--el-bg-color)}.status-dot{width:9px;height:9px;border-radius:50%;background:#c8cdd4}.status-dot.ok{background:#2fbf71;box-shadow:0 0 0 3px rgba(47,191,113,.12)}.status-dot.error,.status-dot.missing{background:#e46b5d}.status-dot.configured{background:#d5a83e}.provider-main{min-width:0}.provider-name{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:650}.default-badge{padding:2px 7px;border-radius:999px;background:#eef4f1;color:#396c5c;font-size:11px;font-weight:500}.provider-meta,.probe-message{margin-top:4px;color:var(--el-text-color-secondary);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.provider-meta span{margin:0 6px}.probe-message{color:var(--study-text-strong)}.provider-actions{display:flex;align-items:center}.default-row{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-top:14px;padding:14px;border-radius:12px;background:var(--el-fill-color-lighter)}.default-row>div{display:flex;flex-direction:column;gap:3px}.default-row small{color:var(--el-text-color-secondary)}.add-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}.add-button{height:44px;border-style:dashed}.advanced-panel :deep(.el-card__body){padding:0 18px}.advanced-panel :deep(.el-collapse){border:0}.collapse-title{display:flex;align-items:center;min-width:0;gap:9px}.collapse-title span{padding:1px 6px;border-radius:5px;background:var(--el-fill-color-light);color:var(--el-text-color-secondary);font-size:11px}.collapse-title small{color:var(--el-text-color-secondary);font-weight:400}.route-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:4px 0 16px}.route-grid label{display:flex;flex-direction:column;gap:6px;color:var(--el-text-color-secondary);font-size:12px}.fallback-row{display:grid;grid-template-columns:minmax(240px,1fr) minmax(260px,1fr);align-items:center;gap:18px;padding:12px 0 16px;border-top:1px solid var(--study-card-border)}.fallback-row>div{display:flex;flex-direction:column;gap:4px}.fallback-row small,.usage-boundary{color:var(--study-text-secondary);font-size:11px}.usage-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:4px 0 10px}.usage-summary span{display:flex;flex-direction:column;padding:10px;border-radius:8px;background:var(--study-surface-muted);font-size:11px}.usage-summary b{margin-top:4px;font:600 18px var(--study-font-latin)}.compact-form{padding:4px 0 16px}.two-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.field-hint{margin-left:10px;color:var(--el-text-color-secondary);font-size:12px}.form-actions{display:flex;gap:8px}.inline-message{margin-top:8px;color:var(--el-text-color-secondary);font-size:12px}.storage-head{display:flex;justify-content:space-between;align-items:center}.storage-head>div{display:flex;flex-direction:column;gap:3px}.storage-head small{color:var(--el-text-color-secondary)}.storage-list{margin:12px 0}.storage-row{display:grid;grid-template-columns:56px minmax(120px,1fr) 90px minmax(160px,1.4fr);align-items:center;gap:8px;min-height:40px;border-top:1px solid var(--study-card-border);font-size:12px}.storage-row span,.storage-row small{color:var(--study-text-secondary)}.protected-label{font-size:11px}.model-input{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;width:100%}.dialog-advanced{margin-top:6px;border-top:1px solid var(--study-card-border)}
 .capacity-card{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:13px;border:1px solid var(--study-card-border);border-radius:10px;background:var(--study-surface-muted)}.capacity-card>div{display:flex;flex-direction:column;gap:4px}.capacity-card span,.capacity-card small{color:var(--study-text-secondary);font-size:12px}.capacity-card b{font-size:14px}.capacity-card.attention{border-color:#d8b46b}.capacity-card.migration_review{border-color:#d98474}
+.model-discovery-hint{width:100%;margin-top:6px;color:var(--el-color-success);font-size:12px}
+.appearance-panel { margin-bottom: 16px; }
+.appearance-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.appearance-heading h2 { font-size: 17px; }
+.appearance-grid { display: grid; grid-template-columns: minmax(0, 1fr) 200px; align-items: center; gap: 24px; }
+.appearance-controls { display: grid; gap: 8px; }
+.appearance-control { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
+.appearance-control > span { flex: none; font-size: 13px; }
+.appearance-preview { display: flex; align-items: center; justify-content: center; min-height: 184px; }
+@media(max-width:720px) { .appearance-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
 @media(max-width:720px){.settings-page{padding:0 2px 24px}.page-heading{align-items:center}.route-grid,.two-columns,.add-actions,.fallback-row,.usage-summary{grid-template-columns:1fr}.provider-item{grid-template-columns:10px minmax(0,1fr)}.provider-actions{grid-column:2;justify-content:flex-start}.default-row{align-items:stretch;flex-direction:column}.collapse-title small{display:none}.storage-row{grid-template-columns:48px 1fr 80px}.storage-row small{display:none}}
 </style>

@@ -1,4 +1,4 @@
-# Study Assistant 2.0 下载、安装与更新
+# Study Assistant 2.1 下载、安装与更新
 
 本文面向 Windows 10/11。当前发布形态是本机运行的 Web 应用，不是桌面 EXE：双击启动器后由本地服务打开浏览器，资料不会上传到项目作者的服务器。
 
@@ -7,7 +7,7 @@
 ### A. 下载 Release（普通用户推荐）
 
 1. 打开 [最新 Release](https://github.com/boway033-cell/Study-assistant/releases/latest)。
-2. 下载 `study-assistant-v2.0.0.zip`。
+2. 下载 `study-assistant-v2.1.0.zip`。
 3. 完整解压到一个长期保留、路径较短的目录，例如 `D:\Apps\Study-assistant`。
 
 Release 已包含构建后的前端，因此不需要 Node.js；仍需安装 Python 与 Python 依赖。不要直接在压缩包预览窗口中运行 `start.bat`。
@@ -17,7 +17,7 @@ Release 已包含构建后的前端，因此不需要 Node.js；仍需安装 Pyt
 ```powershell
 git clone https://github.com/boway033-cell/Study-assistant.git
 cd Study-assistant
-git checkout v2.0.0
+git checkout v2.1.0
 ```
 
 源码方式需要 Node.js 22+ 来构建前端。

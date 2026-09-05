@@ -1,6 +1,6 @@
 # 03 · API 接口清单
 
-- 产品版本：v2.0.0
+- 产品版本：v2.1.0
 - 基础路径：`http://127.0.0.1:8000`
 - 格式：JSON（上传用 multipart）；问答用 SSE（`text/event-stream`）
 - 统一响应错误格式：`{"detail": "错误信息"}`（FastAPI 默认）
@@ -344,10 +344,13 @@ POST   /api/settings/providers
 DELETE /api/settings/providers/{provider_id}
 POST   /api/settings/providers/{provider_id}/probe
 GET    /api/settings/providers/{provider_id}/models
+POST   /api/settings/providers/models/discover
 PUT    /api/settings/providers/routing
 ```
 
 `POST` 支持供应商预设标识、模型名、Base URL 与 `openai_chat`、`anthropic_messages`、`google_generate` 三种协议。远程接口必须使用 HTTPS；loopback 本机接口可使用 HTTP。
+
+`POST /api/settings/providers/models/discover` 可在保存连接前读取模型列表。请求包含 `base_url`、`protocol` 和可选的 `api_key`；编辑已有连接时可传 `provider_id` 并省略 Key，以复用本机加密保存的密钥。返回 `{"items":["model-a","model-b"],"endpoint":"https://gateway.example/v1/models"}`。接口支持常见模型列表格式与 API 根路径回退，失败时返回 502；不支持列表查询的网关仍可手动输入模型名。
 
 路由请求示例：
 

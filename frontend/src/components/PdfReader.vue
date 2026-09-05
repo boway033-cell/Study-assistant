@@ -154,7 +154,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { annotationSegments, clipSelectionRects } from '../utils/pdfAnnotations'
@@ -808,16 +808,25 @@ const saveQuickMark = async (markType) => {
 
 const deleteAnnFromCard = async () => {
   try {
+    await ElMessageBox.confirm('删除这条高亮或批注？', '删除标注', { type: 'warning' })
     await deleteAnnotation(annCard.value.editingId)
+    annotations.value = annotations.value.filter(item => item.id !== annCard.value.editingId)
     ElMessage.success('已删除')
     annCard.value.visible = false
-    loadAnnotations()
-  } catch (e) { ElMessage.error(e.message) }
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message || '删除失败')
+  }
 }
 
 const removeAnn = async (a) => {
-  await deleteAnnotation(a.id)
-  loadAnnotations()
+  try {
+    await ElMessageBox.confirm('删除这条高亮或批注？', '删除标注', { type: 'warning' })
+    await deleteAnnotation(a.id)
+    annotations.value = annotations.value.filter(item => item.id !== a.id)
+    ElMessage.success('已删除')
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message || '删除失败')
+  }
 }
 
 const repairOldAnnotation = async (annotation) => {

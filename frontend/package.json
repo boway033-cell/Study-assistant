@@ -1,7 +1,7 @@
 {
   "name": "study-assistant-frontend",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,6 +15,7 @@
     "echarts": "^6.1.0",
     "element-plus": "^2.8.0",
     "marked": "^18.0.9",
+    "motion-v": "^2.4.1",
     "pdfjs-dist": "^6.2.108",
     "vue": "^3.5.0",
     "vue-router": "^4.4.0"

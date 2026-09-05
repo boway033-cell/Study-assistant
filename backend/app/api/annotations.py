@@ -69,7 +69,9 @@ def _anchor_payload(req, book: Book | None = None) -> tuple[int, str, str | None
     if not segments:
         raise HTTPException(422, "PDF 标注至少需要一个页面矩形")
     for segment in segments:
-        if book and book.total_pages and segment["page"] > book.total_pages:
+        # Office 文档的 total_pages 来自结构化解析，不一定等于 Word/PowerPoint
+        # 实际导出的 PDF 页数；渲染版标注以客户端显示的真实 PDF 页为准。
+        if book and book.file_type == "pdf" and book.total_pages and segment["page"] > book.total_pages:
             raise HTTPException(422, f"批注页码 {segment['page']} 超出文档范围")
         # Pydantic 已验证单个值，这里再验证 x+w/y+h。
         for rect in segment["rects"]:
@@ -88,9 +90,17 @@ def _book_pdf_path(book: Book) -> Path:
     from backend.app.core.config import settings
     root = settings.uploads_dir.resolve()
     path = (root / book.file_path).resolve()
-    if root not in path.parents or not path.is_file() or book.file_type != "pdf":
+    if root not in path.parents or not path.is_file():
         raise HTTPException(404, "PDF 原文件不存在")
-    return path
+    if book.file_type == "pdf":
+        return path
+    if book.file_type in {"docx", "pptx"}:
+        from backend.app.services.office_render import render_office_pdf
+        try:
+            return render_office_pdf(path, book.file_type, book.file_hash)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise HTTPException(503, f"Office 渲染版 PDF 暂不可用：{exc}") from exc
+    raise HTTPException(404, "PDF 原文件不存在")
 
 
 @router.get("/books/{book_id}/annotations", response_model=list[AnnotationResp])

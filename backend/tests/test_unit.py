@@ -240,6 +240,17 @@ class TestLLMConfig:
         assert isinstance(LLMRouter.get(cfg={**base, "protocol": "google_generate"}).providers[0],
                           GoogleGenerateProvider)
 
+    def test_model_discovery_normalizes_gateway_responses_and_urls(self):
+        from backend.app.api.settings import _model_ids, _model_list_urls, _validate_api_base
+
+        assert _model_ids({"data": [{"id": "qwen-plus"}, {"id": "qwen-max"}]}) == ["qwen-max", "qwen-plus"]
+        assert _model_ids({"models": [{"name": "models/gemini-flash"}]}) == ["gemini-flash"]
+        assert _model_ids([{"model": "opencode-go"}]) == ["opencode-go"]
+        assert _validate_api_base("https://gateway.example.com/v1/chat/completions") == "https://gateway.example.com/v1"
+        assert _model_list_urls("https://gateway.example.com") == [
+            "https://gateway.example.com/models", "https://gateway.example.com/v1/models",
+        ]
+
     @pytest.mark.asyncio
     async def test_router_falls_back_only_before_first_token(self, monkeypatch):
         from backend.app.services.llm import LLMProvider, RoutedProvider

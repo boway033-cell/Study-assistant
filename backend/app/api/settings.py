@@ -38,6 +38,13 @@ class CompatibleProviderWrite(BaseModel):
     api_key: str | None = Field(default=None, max_length=1000)
 
 
+class ProviderModelDiscoveryReq(BaseModel):
+    provider_id: str | None = Field(default=None, max_length=40)
+    protocol: str = Field(default="openai_chat", pattern="^(openai_chat|anthropic_messages|google_generate)$")
+    base_url: str = Field(min_length=8, max_length=1000)
+    api_key: str | None = Field(default=None, max_length=1000)
+
+
 class StorageCleanupReq(BaseModel):
     categories: list[str] = Field(min_length=1, max_length=3)
 
@@ -91,11 +98,78 @@ def _compatible_profiles(db: Session) -> list[dict]:
 
 def _validate_api_base(value: str) -> str:
     url = value.strip().rstrip("/")
+    # 用户经常粘贴完整调用地址；连接配置统一保存到 API 根路径，后续才能
+    # 正确拼接 /models、/chat/completions 等资源。
+    for suffix in ("/chat/completions", "/responses", "/messages", "/models"):
+        if url.lower().endswith(suffix):
+            url = url[:-len(suffix)].rstrip("/")
+            break
     parsed = urlparse(url)
     local_http = parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
     if (parsed.scheme != "https" and not local_http) or not parsed.hostname or parsed.username or parsed.password:
         raise HTTPException(400, "Base URL 必须为 HTTPS；仅 localhost/127.0.0.1 可使用 HTTP")
     return url
+
+
+def _model_ids(payload) -> list[str]:
+    """兼容 OpenAI、Anthropic、Gemini 以及常见本地网关的模型列表结构。"""
+    values = payload if isinstance(payload, list) else None
+    if isinstance(payload, dict):
+        for key in ("data", "models", "items"):
+            if isinstance(payload.get(key), list):
+                values = payload[key]
+                break
+    models = []
+    for item in values or []:
+        if isinstance(item, dict):
+            model_id = item.get("id") or item.get("name") or item.get("model")
+        else:
+            model_id = str(item)
+        if model_id:
+            models.append(str(model_id).removeprefix("models/"))
+    return sorted(set(models), key=str.casefold)
+
+
+def _model_list_urls(base_url: str) -> list[str]:
+    base = _validate_api_base(base_url)
+    urls = [f"{base}/models"]
+    path = urlparse(base).path.rstrip("/").lower()
+    if not path.endswith(("/v1", "/v1beta", "/v4")):
+        urls.append(f"{base}/v1/models")
+    return list(dict.fromkeys(urls))
+
+
+async def _discover_models(cfg: dict) -> dict:
+    headers: dict[str, str] = {}
+    params: dict[str, str] = {}
+    api_key = str(cfg.get("api_key") or "")
+    if cfg.get("protocol") == "anthropic_messages":
+        headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+    elif cfg.get("protocol") == "google_generate":
+        params = {"key": api_key}
+    elif api_key:
+        headers = {"Authorization": f"Bearer {api_key}"}
+    failures = []
+    async with httpx.AsyncClient(timeout=httpx.Timeout(12, connect=5)) as client:
+        for url in _model_list_urls(str(cfg.get("base_url") or "")):
+            try:
+                response = await client.get(url, headers=headers, params=params)
+            except httpx.HTTPError as exc:
+                failures.append(f"{url}: {type(exc).__name__}")
+                continue
+            if response.status_code != 200:
+                failures.append(f"{url}: HTTP {response.status_code} {response.text[:120]}")
+                continue
+            try:
+                models = _model_ids(response.json())
+            except ValueError:
+                failures.append(f"{url}: 返回内容不是 JSON")
+                continue
+            if models:
+                return {"items": models, "endpoint": url}
+            failures.append(f"{url}: 未返回模型条目")
+    detail = "；".join(failures[-3:]) or "接口未返回可用模型"
+    raise HTTPException(502, f"模型列表读取失败：{detail}")
 
 
 @router.get("/settings", response_model=SettingsResp)
@@ -294,32 +368,23 @@ async def list_provider_models(provider_id: str, db: Session = Depends(get_db)):
             raise HTTPException(404, "模型连接不存在")
         cfg = {**profile, "provider_id": provider_id,
                "api_key": crypto.decrypt(_get_setting(db, f"compatible_provider_key:{provider_id}"))}
-    headers = {}
-    params = {}
-    if cfg.get("protocol") == "anthropic_messages":
-        headers = {"x-api-key": cfg.get("api_key", ""), "anthropic-version": "2023-06-01"}
-    elif cfg.get("protocol") == "google_generate":
-        params = {"key": cfg.get("api_key", "")}
-    elif cfg.get("api_key"):
-        headers = {"Authorization": f"Bearer {cfg['api_key']}"}
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(12, connect=5)) as client:
-            response = await client.get(f"{str(cfg.get('base_url', '')).rstrip('/')}/models",
-                                        headers=headers, params=params)
-        if response.status_code != 200:
-            raise HTTPException(response.status_code, f"模型列表读取失败：{response.text[:200]}")
-        data = response.json()
-        values = data.get("data") if isinstance(data, dict) else None
-        if values is None and isinstance(data, dict):
-            values = data.get("models", [])
-        models = []
-        for item in values or []:
-            model_id = item.get("id") or item.get("name") if isinstance(item, dict) else str(item)
-            if model_id:
-                models.append(str(model_id).removeprefix("models/"))
-        return {"items": sorted(set(models))}
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, f"模型列表读取失败：{exc}") from exc
+    return await _discover_models(cfg)
+
+
+@router.post("/settings/providers/models/discover")
+async def discover_provider_models(req: ProviderModelDiscoveryReq, db: Session = Depends(get_db)):
+    """在连接保存前发现模型；编辑连接时可复用已加密保存的密钥。"""
+    api_key = (req.api_key or "").strip()
+    if not api_key and req.provider_id:
+        if req.provider_id == "deepseek":
+            api_key = crypto.decrypt(_get_setting(db, "deepseek_api_key"))
+        else:
+            api_key = crypto.decrypt(_get_setting(db, f"compatible_provider_key:{req.provider_id}"))
+    return await _discover_models({
+        "protocol": req.protocol,
+        "base_url": req.base_url,
+        "api_key": api_key,
+    })
 
 
 def _path_size(path: Path) -> int:

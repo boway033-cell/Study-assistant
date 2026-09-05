@@ -206,6 +206,7 @@ export const probeCompatibleProvider = (id) => http.post(`/settings/providers/${
 export const updateProviderRouting = (data) => http.put('/settings/providers/routing', data)
 export const getProviderUsage = () => http.get('/settings/providers/usage')
 export const listProviderModels = (id) => http.get(`/settings/providers/${id}/models`)
+export const discoverProviderModels = (data) => http.post('/settings/providers/models/discover', data)
 export const getStorageUsage = () => http.get('/settings/storage')
 export const getCapacityStatus = () => http.get('/settings/capacity')
 export const cleanupStorage = (categories) => http.post('/settings/storage/cleanup', { categories })

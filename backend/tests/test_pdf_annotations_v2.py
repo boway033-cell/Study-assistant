@@ -73,3 +73,37 @@ def test_annotation_round_trip_with_multpage_anchor():
         assert list_annotations(book.id, None, db)[0].id == created.id
     finally:
         db.close()
+
+
+def test_office_rendered_pdf_anchor_uses_rendered_page_numbers():
+    from backend.app.api.annotations import _anchor_payload
+    from backend.app.models import Book
+    from backend.app.schemas import AnnotationCreateReq
+
+    book = Book(title="report", file_path="report.docx", file_type="docx", total_pages=1, file_hash="abc")
+    req = AnnotationCreateReq(page=4, text="第四页", anchor={
+        "quote": {"exact": "第四页"},
+        "segments": [{"page": 4, "source": "pdf-text", "rects": [
+            {"x": .1, "y": .2, "w": .3, "h": .04},
+        ]}],
+    })
+
+    page, _, _, version = _anchor_payload(req, book)
+    assert (page, version) == (4, 2)
+
+
+def test_office_rendered_pdf_is_used_for_ocr_text_layer(tmp_path, monkeypatch):
+    from backend.app.api import annotations
+    from backend.app.core.config import settings
+    from backend.app.models import Book
+    from backend.app.services import office_render
+
+    source = tmp_path / "report.docx"
+    source.write_bytes(b"office")
+    rendered = tmp_path / "report.pdf"
+    rendered.write_bytes(b"%PDF-rendered")
+    monkeypatch.setattr(settings, "uploads_dir", tmp_path)
+    monkeypatch.setattr(office_render, "render_office_pdf", lambda *args: rendered)
+
+    book = Book(title="report", file_path=source.name, file_type="docx", file_hash="a" * 64)
+    assert annotations._book_pdf_path(book) == rendered

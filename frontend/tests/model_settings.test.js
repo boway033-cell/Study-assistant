@@ -22,3 +22,11 @@ test('model routing exposes safe fallback, local usage, and capacity guardrails'
   assert.match(source, /知识库容量/)
   assert.match(source, /getCapacityStatus/)
 })
+
+test('custom providers discover models before save and allow model switching', () => {
+  assert.match(source, /discoverProviderModels/)
+  assert.match(source, /识别模型/)
+  assert.match(source, /autoSyncModels/)
+  assert.match(source, /已识别 \{\{ discoveredModels\.length \}\} 个模型/)
+  assert.doesNotMatch(source, /v-if="providerForm\.id"[^>]*>读取列表/)
+})

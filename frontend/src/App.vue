@@ -1,14 +1,14 @@
 <template>
   <el-container class="layout" :class="{ 'is-reader-layout': $route.name === 'reader' }">
-    <el-aside :width="$route.name === 'reader' || sidebarCollapsed ? '76px' : '252px'" class="aside desktop-aside">
+    <el-aside :width="sidebarCollapsed ? '76px' : '252px'" class="aside desktop-aside">
       <div class="logo">
         <span class="logo-dew">💧</span>
-        <div v-if="$route.name !== 'reader' && !sidebarCollapsed" class="logo-text">
+        <div v-if="!sidebarCollapsed" class="logo-text">
           <span class="logo-title">知识库助手</span>
           <span class="logo-sub">资料 · 研读 · 输出</span>
         </div>
       </div>
-      <AppNavigation :collapsed="$route.name === 'reader' || sidebarCollapsed" />
+      <AppNavigation :collapsed="sidebarCollapsed" />
       <div class="aside-footer">
         <div class="dew-dot" v-for="i in 3" :key="i" :style="{ left: 24 + i * 44 + 'px', animationDelay: i * 0.6 + 's' }"></div>
         <span class="aside-poem">{{ term.name }} · {{ dateStr }}</span>
@@ -111,6 +111,8 @@ onUnmounted(stopTaskPolling)
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #app { height: 100%; }
 .layout { height: 100%; }
+.layout > .el-container { min-width: 0; }
+.layout .main { min-width: 0; }
 
 /* —— 侧边栏：白露晨雾青白渐变 —— */
 .aside {

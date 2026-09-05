@@ -1,25 +1,25 @@
 <template>
-  <div class="library-page study-page">
-    <StudyCommandBar compact class="library-commandbar" :title="currentShelfName" description="筛选、归档并进入阅读；解析状态集中显示在任务中心。">
+  <div class="library-page study-page" :class="{ 'is-compact': uiPreferences.libraryDensity === 'compact' }">
+    <StudyCommandBar compact class="library-commandbar" :title="currentShelfName">
       <div class="library-summary" aria-label="知识库概况">
         <div><strong>{{ libraryTotal }}</strong><span>全部资料</span></div>
         <div><strong>{{ readingCount }}</strong><span>阅读中</span></div>
         <div><strong>{{ attentionCount }}</strong><span>待处理</span></div>
       </div>
       <template #actions><div class="library-primary-actions">
-        <el-button :type="searchPanelOpen ? 'primary' : ''" plain @click="searchPanelOpen = !searchPanelOpen">全文检索</el-button>
+        <KeycapCard compact :variant="searchPanelOpen ? 'primary' : 'warm'" :aria-expanded="searchPanelOpen" @click="searchPanelOpen = !searchPanelOpen">全文检索</KeycapCard>
         <el-upload :show-file-list="false" :auto-upload="false" :on-change="handleBatchSelect" multiple accept=".pdf,.docx,.pptx" :disabled="uploading">
-          <el-button plain :loading="uploading">批量导入</el-button>
+          <KeycapCard compact variant="warm" :loading="uploading">批量导入</KeycapCard>
         </el-upload>
         <el-upload :show-file-list="false" :before-upload="handleUpload" accept=".pdf,.docx,.pptx" :disabled="uploading">
-          <el-button type="primary" :loading="uploading">{{ uploading ? '正在导入…' : '＋ 导入文献' }}</el-button>
+          <KeycapCard compact variant="primary" :loading="uploading">{{ uploading ? '正在导入…' : '＋ 导入文献' }}</KeycapCard>
         </el-upload>
       </div></template>
     </StudyCommandBar>
     <div v-if="batchFiles.length" class="import-queue library-import-queue"><div><b>已选择 {{ batchFiles.length }} 个文件</b><small>确认后进入全局任务中心依次解析，你可以继续使用资料库。</small></div><el-button type="primary" :loading="uploading" @click="submitBatch">导入所选文件</el-button><el-button link @click="batchFiles=[]">取消选择</el-button></div>
-    <button class="mobile-shelf-toggle" type="button" @click="shelfPanelOpen=!shelfPanelOpen"><span>范围：{{ currentShelfName }}</span><b>{{ shelfPanelOpen ? '收起' : '切换' }}</b></button>
-    <div class="library-workspace">
-      <aside class="bookshelf-panel" :class="{ 'mobile-open': shelfPanelOpen }">
+    <button class="mobile-shelf-toggle" type="button" :aria-expanded="shelfPanelOpen" aria-controls="library-shelves" @click="shelfPanelOpen=!shelfPanelOpen"><span>范围：{{ currentShelfName }}</span><b>{{ shelfPanelOpen ? '收起' : '切换' }}</b></button>
+    <div ref="libraryWorkspaceEl" class="library-workspace">
+      <aside id="library-shelves" class="bookshelf-panel" :class="{ 'mobile-open': shelfPanelOpen }">
         <div class="bookshelf-section-label">智能视图</div>
         <button class="shelf-static" :class="{active:selectedShelf==='all'}" @click="chooseShelf('all')"><span>全部资料</span><b>{{ libraryTotal }}</b></button>
         <button class="shelf-static" :class="{active:selectedShelf==='reading'}" @click="chooseShelf('reading')"><span>阅读中</span><b>{{ readingCount }}</b></button>
@@ -33,26 +33,26 @@
         <div v-else class="shelf-empty"><span>还没有自建书架</span><small>按主题、课程或项目整理文献</small><el-button plain size="small" @click="createBookshelf(null)">建立第一个书架</el-button></div>
       </aside>
       <main class="library-main">
-        <el-card shadow="never" class="materials-card">
+        <GlowBorderCard class="materials-card">
           <template #header>
             <div class="card-header">
               <div class="header-title">
                 <div>
                   <span>{{ currentShelfName }}</span>
-                  <small>{{ filteredBooks.length }} 篇 · 点击条目查看结构与加工状态</small>
+                  <small>{{ filteredBooks.length }} 篇</small>
                 </div>
                 <el-tag v-if="activeFilterCount" size="small" effect="plain">{{ activeFilterCount }} 项筛选</el-tag>
               </div>
-              <div class="header-actions"><el-button plain :loading="classifying" @click="classifyAll">智能归类</el-button></div>
+              <div class="header-actions"><KeycapCard compact variant="warm" :loading="classifying" @click="classifyAll">智能归类</KeycapCard></div>
             </div>
           </template>
 
           <div class="library-filters">
-            <el-input v-model="libraryQ" clearable placeholder="搜索当前书架中的题名、作者、期刊或 DOI" />
-            <el-select v-model="libraryCategory" clearable placeholder="全部分类">
+            <el-input v-model="libraryQ" class="library-query" clearable aria-label="搜索资料" placeholder="题名、作者、期刊、DOI" />
+            <el-select v-model="libraryCategory" clearable aria-label="分类" placeholder="全部分类">
               <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
             </el-select>
-            <el-select v-model="readingFilter" clearable placeholder="阅读状态">
+            <el-select v-model="readingFilter" clearable aria-label="阅读状态" placeholder="阅读状态">
               <el-option label="未读" value="unread" />
               <el-option label="阅读中" value="reading" />
               <el-option label="已读完" value="read" />
@@ -85,7 +85,7 @@
               <el-checkbox :model-value="allFilteredSelected" @change="toggleAllFiltered" />
               <span>文献与来源</span><span>阅读进度</span><span>知识加工</span><span></span>
             </div>
-            <StudyListRow v-for="row in filteredBooks" :key="row.id" class="paper-row" :class="{ 'is-dragging': draggingBookId === row.id, 'drop-before': dropTargetId === row.id && dropPosition === 'before', 'drop-after': dropTargetId === row.id && dropPosition === 'after' }" :active="currentBook?.id===row.id" :draggable="canDragSort" tabindex="0" @click="selectBook(row)" @keydown.enter="selectBook(row)" @dragstart="onBookDragStart(row, $event)" @dragover="onBookDragOver(row, $event)" @drop="onBookDrop(row, $event)" @dragend="resetBookDrag">
+            <StudyListRow v-for="row in filteredBooks" :key="row.id" class="paper-row" :class="{ 'is-dragging': draggingBookId === row.id, 'drop-before': dropTargetId === row.id && dropPosition === 'before', 'drop-after': dropTargetId === row.id && dropPosition === 'after' }" :active="currentBook?.id===row.id" :draggable="canDragSort" tabindex="0" @click="selectBook(row)" @keydown.enter.self="selectBook(row)" @dragstart="onBookDragStart(row, $event)" @dragover="onBookDragOver(row, $event)" @drop="onBookDrop(row, $event)" @dragend="resetBookDrag">
               <div class="paper-select" @click.stop><span class="drag-handle" :class="{ enabled: canDragSort }" :title="canDragSort ? '按住并拖动调整顺序' : '选择自定义顺序后可拖动'" aria-hidden="true">⠿</span><el-checkbox :model-value="selectedBookIds.includes(row.id)" @change="checked=>toggleBookSelection(row.id,checked)" /><button class="star" :class="{ active: row.favorite }" title="收藏" @click="toggleFavorite(row)">★</button></div>
               <div class="paper-identity">
                 <div class="paper-title">{{ row.title }}</div>
@@ -106,9 +106,9 @@
                 <button v-else class="analysis-link" @click.stop="runDeep(row)">开始深度分析</button>
               </div>
               <div class="paper-actions" @click.stop>
-                <el-button type="primary" plain size="small" @click="readBook(row)">{{ row.reading_status === 'reading' ? '继续阅读' : '开始阅读' }}</el-button>
-                <el-dropdown trigger="click" @command="cmd=>paperCommand(cmd,row)">
-                  <el-button size="small">更多 ···</el-button>
+                <KeycapCard compact variant="warm" @click="readBook(row)">{{ row.reading_status === 'reading' ? '继续阅读' : '开始阅读' }}</KeycapCard>
+                <el-dropdown trigger="click" placement="bottom-end" :teleported="true" @command="cmd=>paperCommand(cmd,row)">
+                  <KeycapCard compact variant="warm" class="paper-more" :aria-label="`更多操作：${row.title}`">更多</KeycapCard>
                   <template #dropdown><el-dropdown-menu><el-dropdown-item command="detail">资料详情</el-dropdown-item><el-dropdown-item command="deck">生成文献汇报</el-dropdown-item><el-dropdown-item command="delete" divided>删除资料</el-dropdown-item></el-dropdown-menu></template>
                 </el-dropdown>
               </div>
@@ -116,9 +116,9 @@
             <StudyEmptyState v-if="!filteredBooks.length && !loading" compact :title="activeFilterCount ? '没有符合当前筛选的资料' : '当前范围还没有资料'" :description="activeFilterCount ? '清除部分筛选条件，或切换到其他书架。' : '导入 PDF、Word 或 PowerPoint 后会在这里建立可检索档案。'"><template #actions><el-button v-if="activeFilterCount" type="primary" plain @click="clearLibraryFilters">清除筛选</el-button></template></StudyEmptyState>
             <el-button v-if="books.length < libraryTotal" class="library-load-more" :loading="loading" @click="loadBooks(false)">加载更多（{{ books.length }}/{{ libraryTotal }}）</el-button>
           </div>
-        </el-card>
+        </GlowBorderCard>
 
-        <el-card v-show="searchPanelOpen" shadow="never" class="fulltext-card">
+        <GlowBorderCard v-show="searchPanelOpen" class="fulltext-card">
           <template #header>全文搜索（跨资料混合检索）</template>
           <div class="search-filters">
             <el-select v-model="searchCategory" placeholder="全部分类" clearable size="small" style="width: 120px">
@@ -153,7 +153,7 @@
               <div class="result-snippet" v-html="sanitizeHtml(r.snippet)" />
             </el-card>
           </div>
-        </el-card>
+        </GlowBorderCard>
       </main>
 
       <StudyInspector class="library-inspector" title="资料检查器" :closable="!!currentBook" @close="currentBook=null">
@@ -271,6 +271,9 @@ import StudyCommandBar from '../components/StudyCommandBar.vue'
 import StudyEmptyState from '../components/StudyEmptyState.vue'
 import StudyListRow from '../components/StudyListRow.vue'
 import StudyInspector from '../components/StudyInspector.vue'
+import GlowBorderCard from '../components/GlowBorderCard.vue'
+import KeycapCard from '../components/KeycapCard.vue'
+import { uiPreferences } from '../stores/uiPreferences'
 
 const router = useRouter()
 const route = useRoute()
@@ -302,6 +305,7 @@ const currentBook = ref(null)
 const detailVisible = ref(false)
 const searchPanelOpen = ref(false)
 const compactLibrary = ref(false)
+const libraryWorkspaceEl = ref(null)
 const shelfPanelOpen = ref(false)
 const currentYear = new Date().getFullYear()
 const chapterTree = ref([])
@@ -675,11 +679,15 @@ const viewOriginal = async (item) => {
   })
 }
 
-const libraryMedia = window.matchMedia('(max-width: 1519px)')
-const syncLibraryViewport = (event) => { compactLibrary.value = event.matches }
+let libraryResizeObserver
+const syncLibraryViewport = () => {
+  if (!libraryWorkspaceEl.value) return
+  compactLibrary.value = getComputedStyle(libraryWorkspaceEl.value).getPropertyValue('--library-inspector-visible').trim() !== '1'
+}
 onMounted(async () => {
-  syncLibraryViewport(libraryMedia)
-  libraryMedia.addEventListener('change', syncLibraryViewport)
+  libraryResizeObserver = new ResizeObserver(syncLibraryViewport)
+  libraryResizeObserver.observe(libraryWorkspaceEl.value)
+  syncLibraryViewport()
   await Promise.all([loadBooks(), loadShelves()])
   const requestedBookId = Number(route.query.bookId)
   if (Number.isInteger(requestedBookId) && requestedBookId > 0) {
@@ -687,79 +695,208 @@ onMounted(async () => {
     await openBook(row)
   }
 })
-onBeforeUnmount(() => libraryMedia.removeEventListener('change', syncLibraryViewport))
+onBeforeUnmount(() => {
+  libraryResizeObserver?.disconnect()
+  clearTimeout(librarySearchTimer)
+})
 </script>
 
 <style scoped>
-.library-page { max-width: 1680px; }
-.library-workspace{display:grid;grid-template-columns:228px minmax(0,1fr);align-items:start;gap:16px;min-width:0}.bookshelf-panel{position:sticky;top:76px;padding:14px;border:1px solid #e5e7eb;border-radius:14px;background:#f7f2e9;box-shadow:0 1px 2px rgba(15,23,42,.06)}.bookshelf-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}.bookshelf-head>div{display:flex;flex-direction:column}.bookshelf-head small{margin-top:3px;color:#8b8174;font-size:10px}.create-shelf-head{padding-inline:9px}.shelf-static{display:flex;width:100%;align-items:center;justify-content:space-between;padding:9px 10px;border:0;border-radius:8px;color:#57534b;background:transparent;cursor:pointer;transition:background .16s ease,color .16s ease,transform .16s ease}.shelf-static:hover{color:#6f4721;background:#f0e7d9;transform:translateX(2px)}.shelf-static.active{color:#6f4721;background:#ebe1d1}.shelf-tree{margin-top:5px;background:transparent}.shelf-tree :deep(.el-tree-node__content){height:36px;background:transparent}.shelf-node{display:flex;flex:1;min-width:0;align-items:center;justify-content:space-between;padding:4px 5px;border-radius:7px}.shelf-node.active{color:#6f4721;background:#ebe1d1}.shelf-node>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.shelf-node i{display:inline-block;width:7px;height:7px;margin-right:7px;border-radius:50%}.shelf-node>div{display:flex;align-items:center}.shelf-node small{color:#978a78}.shelf-empty{display:flex;align-items:center;flex-direction:column;margin-top:12px;padding:16px 10px;border:1px dashed #d8c9b5;border-radius:10px;color:#776b5d;background:rgba(255,255,255,.28);text-align:center}.shelf-empty small{margin:4px 0 11px;color:#9a8e7f;font-size:10px}.shelf-batch,.import-queue{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:9px 12px;margin-bottom:10px;border:1px solid #e5e7eb;border-radius:9px;background:#faf7f0;box-shadow:0 1px 2px rgba(15,23,42,.04)}.shelf-batch :deep(.el-select){width:180px}.import-queue{justify-content:flex-start;border-color:#dfc9a9;background:#fbf4e7}.import-queue>div{display:flex;flex:1;flex-direction:column}.import-queue small{margin-top:2px;color:#8b8174}.drawer-eyebrow{margin-bottom:5px;font-size:9px;letter-spacing:2px;color:#9a7a58}.paper-detail{padding-bottom:28px}.detail-actions{position:sticky;top:0;z-index:2;display:flex;padding:2px 0 14px;background:#fff}.paper-detail :deep(.el-tree){padding:8px 4px 16px;border-radius:10px;background:#f7f3ea}
-.library-hero { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding: 20px 24px; margin-bottom: 14px; color: #f5f0e8; background: linear-gradient(120deg, rgba(28,52,54,.96), rgba(67,85,72,.9)); border: 1px solid rgba(245,240,232,.16); border-radius: 16px; box-shadow: 0 12px 32px rgba(10,24,25,.2); }
-.library-hero h1 { margin: 4px 0 6px; font-family: var(--study-font-reading); font-size: 28px; letter-spacing: 2px; }
-.library-hero p { color: rgba(245,240,232,.72); }
-.eyebrow { color: #d3b58f; font-size: var(--study-font-size-xs); letter-spacing: 2px; }
-.hero-stats { display: flex; gap: 28px; }
-.hero-stats div { display: flex; flex-direction: column; text-align: right; }
-.hero-stats strong { font: 700 24px Georgia, serif; color: #f5f0e8; }
-.hero-stats span { font-size: var(--study-font-size-xs); color: rgba(245,240,232,.72); }
-.materials-card{border-color:#e5e7eb;box-shadow:0 1px 2px rgba(15,23,42,.06)}
-.materials-card :deep(.el-card__header){padding:16px 18px;border-bottom-color:#e8dfd1}.materials-card :deep(.el-card__body){padding:14px 18px 8px}
+.library-page {
+  container: library-page / inline-size;
+  max-width: 1680px;
+  --library-row-padding: 12px;
+  --library-row-height: 100px;
+}
+.library-page.is-compact { --library-row-padding: 8px; --library-row-height: 84px; }
+.library-commandbar { margin-bottom: 12px; grid-template-columns: minmax(0, 1fr) auto auto; }
+.library-commandbar :deep(.study-commandbar__titleline) { overflow-wrap: anywhere; }
+.library-summary { display: flex; gap: 18px; }
+.library-summary > div { display: flex; min-width: 50px; flex-direction: column; text-align: right; }
+.library-summary strong { color: var(--el-color-primary); font: 700 18px Georgia, serif; }
+.library-summary span { margin-top: 1px; color: var(--study-text-secondary); font-size: var(--study-font-size-xs); }
+.library-primary-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.library-primary-actions > * { flex: none; }
+.library-import-queue { margin: -2px 0 12px; }
+
+.library-workspace {
+  --library-inspector-visible: 1;
+  display: grid;
+  grid-template-columns: 204px minmax(0, 1fr) 280px;
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
+}
+.library-main { min-width: 0; container: library-main / inline-size; }
+.bookshelf-panel { position: sticky; top: 12px; min-width: 0; padding: 12px; border: 1px solid var(--study-card-border); border-radius: var(--study-radius-md); background: #f7f2e9; }
+.bookshelf-section-label { padding: 2px 10px 7px; color: #8f806e; font-size: var(--study-font-size-xs); font-weight: 700; letter-spacing: 1px; }
+.bookshelf-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 16px 0 12px; padding-top: 14px; border-top: 1px solid #dfd4c4; }
+.bookshelf-head > div { display: flex; min-width: 0; flex-direction: column; }
+.bookshelf-head small { margin-top: 3px; color: #8b8174; font-size: 10px; }
+.create-shelf-head { padding-inline: 9px; flex: none; }
+.shelf-static { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border: 0; border-radius: 8px; color: #57534b; background: transparent; cursor: pointer; }
+.shelf-static:hover { color: #6f4721; background: #f0e7d9; }
+.shelf-static.active { color: #6f4721; background: #ebe1d1; }
+.shelf-tree { margin-top: 5px; background: transparent; }
+.shelf-tree :deep(.el-tree-node__content) { height: 36px; background: transparent; }
+.shelf-node { display: flex; flex: 1; min-width: 0; align-items: center; justify-content: space-between; padding: 4px 5px; border-radius: 7px; }
+.shelf-node.active { color: #6f4721; background: #ebe1d1; }
+.shelf-node > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shelf-node i { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; }
+.shelf-node > div { display: flex; align-items: center; flex: none; }
+.shelf-node small { color: #978a78; }
+.shelf-empty { display: flex; align-items: center; flex-direction: column; margin-top: 12px; padding: 16px 8px; border: 1px dashed #d8c9b5; border-radius: 10px; color: #776b5d; background: rgba(255,255,255,.28); text-align: center; }
+.shelf-empty small { margin: 4px 0 11px; color: #9a8e7f; font-size: 10px; }
+.mobile-shelf-toggle { display: none; width: 100%; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; padding: 9px 11px; border: 1px solid var(--study-card-border); background: var(--study-surface-paper); color: var(--study-text-primary); font-size: var(--study-font-size-sm); }
+.mobile-shelf-toggle span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-shelf-toggle b { flex: none; color: var(--el-color-primary); font-size: var(--study-font-size-xs); }
+
+.materials-card :deep(.el-card__header) { padding: 12px 16px; border-bottom-color: #e8dfd1; }
+.materials-card :deep(.el-card__body) { min-width: 0; padding: 12px 16px 8px; }
 .card-header, .header-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
-.header-title { display: flex; align-items:center;gap:10px;font-weight:700}.header-title>div{display:flex;flex-direction:column;gap:3px}.header-title span{font-size:var(--study-font-size-lg)}.header-title small { color: var(--el-text-color-secondary); font-weight: 400;font-size:var(--study-font-size-xs) }
-.library-filters { display: grid; grid-template-columns: minmax(240px, 1fr) 126px 116px 142px auto auto; gap: 10px; align-items: center; margin-bottom: 10px; }
-.clear-filter{justify-self:end}
-.reorder-guide{display:flex;align-items:center;gap:7px;margin:-2px 0 12px;padding:7px 10px;border-radius:7px;background:#f7f2e9;color:#735333;font-size:var(--study-font-size-xs)}.reorder-guide.disabled{color:#958a7d;background:#f7f5f1}.drag-dots{font-size:16px;line-height:1}
-.paper-title { font-weight: 650; color: var(--el-text-color-primary); line-height: 1.35; }
-.paper-meta { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.publication-state:before{content:' · '}.publication-state{color:var(--study-text-muted)}
-.star { cursor: pointer; color: #c8c2b7; font-size: 18px; transition: .2s; }
+.header-title { display: flex; min-width: 0; align-items: center; gap: 10px; font-weight: 700; }
+.header-title > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.header-title span { font-size: var(--study-font-size-lg); overflow-wrap: anywhere; }
+.header-title small { color: var(--el-text-color-secondary); font-weight: 400; font-size: var(--study-font-size-xs); }
+.library-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.library-filters > .library-query { flex: 1 1 230px; min-width: 0; }
+.library-filters > .el-select { flex: 1 1 120px; min-width: 0; max-width: 160px; }
+.library-filters > .el-checkbox { margin: 0; flex: none; }
+.clear-filter { margin-left: 0; flex: none; }
+.reorder-guide { display: flex; align-items: center; gap: 7px; margin: -2px 0 10px; padding: 7px 10px; border-radius: 7px; background: #f7f2e9; color: #735333; font-size: var(--study-font-size-xs); }
+.reorder-guide.disabled { color: #958a7d; background: #f7f5f1; }
+.drag-dots { font-size: 16px; line-height: 1; flex: none; }
+.shelf-batch, .import-queue { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding: 9px 12px; margin-bottom: 10px; border: 1px solid var(--study-card-border); border-radius: 9px; background: #faf7f0; }
+.shelf-batch :deep(.el-select) { width: 180px; max-width: 100%; }
+.import-queue { justify-content: flex-start; border-color: #dfc9a9; background: #fbf4e7; }
+.import-queue > div { display: flex; min-width: 0; flex: 1 1 220px; flex-direction: column; }
+.import-queue small { margin-top: 2px; color: #8b8174; }
+
+.paper-list { min-height: 160px; }
+.paper-list-head, .paper-row { display: grid; grid-template-columns: 66px minmax(0, 1fr) 94px 114px max-content; column-gap: 10px; align-items: center; }
+.paper-list-head { grid-template-columns: 66px minmax(0, 1fr) 94px 114px 154px; padding: 8px 12px; color: #918678; font-size: 11px; border-top: 1px solid #eee6da; border-bottom: 1px solid #e5dbcc; background: #f8f4ec; }
+.paper-row { position: relative; min-height: var(--library-row-height); padding: var(--library-row-padding) 12px; border-bottom: 1px solid #e8dfd2; cursor: pointer; outline: none; transition: background .16s ease, opacity .16s ease; }
+.paper-row > * { min-width: 0; }
+.paper-row:hover { background: #fcfaf5; }
+.paper-row.active { background: #f5eddf; box-shadow: inset 3px 0 0 var(--el-color-primary); }
+.paper-row:focus-visible { box-shadow: inset 0 0 0 2px var(--el-color-primary); }
+.paper-row.is-dragging { opacity: .38; }
+.paper-row.drop-before::before, .paper-row.drop-after::after { position: absolute; right: 8px; left: 8px; height: 2px; border-radius: 2px; background: var(--el-color-primary); content: ''; }
+.paper-row.drop-before::before { top: -1px; }
+.paper-row.drop-after::after { bottom: -1px; }
+.paper-select { display: flex; align-items: center; gap: 7px; }
+.paper-select :deep(.el-checkbox) { margin: 0; flex: none; }
+.drag-handle { width: 15px; flex: none; color: #c4bbb0; font-size: 17px; line-height: 1; cursor: not-allowed; user-select: none; }
+.drag-handle.enabled { color: #82603c; cursor: grab; }
+.paper-row:active .drag-handle.enabled { cursor: grabbing; }
+.star { padding: 0; border: 0; background: transparent; cursor: pointer; color: #c8c2b7; font-size: 18px; }
 .star.active { color: #c08a3e; }
-.archive-grid { display: grid; gap: 9px; }
-.archive-grid label { display: grid; grid-template-columns: 42px 1fr; gap: 8px; align-items: center; color: var(--el-text-color-secondary); font-size: 12px; }
-.search-filters { display: flex; gap: 8px; margin-bottom: 4px; }
-.batch-bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 6px 10px; background: var(--el-fill-color-lighter); border-radius: 6px; }
-.batch-tip { font-size: 12px; color: var(--el-text-color-secondary); }
+.paper-title { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-family: var(--study-font-reading); font-size: 15px; font-weight: 600; color: var(--el-text-color-primary); line-height: 1.5; overflow-wrap: anywhere; }
+.paper-meta { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.publication-state::before { content: ' · '; }
+.publication-state { color: var(--study-text-muted); }
+.paper-facts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 5px; color: #9b8f80; font-size: var(--study-font-size-xs); }
+.paper-facts span + span::before { content: '·'; margin-right: 10px; }
+.paper-reading, .paper-knowledge { display: flex; align-items: flex-start; flex-direction: column; gap: 6px; font-size: var(--study-font-size-xs); overflow-wrap: anywhere; }
+.muted-state { color: #8a8175; }
+.danger-state { color: #b4473d; }
+.warning-state { color: #a86e27; }
+.category-link, .analysis-link { max-width: 100%; padding: 0; border: 0; background: transparent; color: #765331; font-size: var(--study-font-size-xs); cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.analysis-link { color: #8d755a; }
+.deep-done { color: #47806b; }
+.paper-actions { display: flex; min-width: 154px; align-items: center; justify-content: flex-end; gap: 8px; padding-block: 3px; white-space: nowrap; }
+.paper-actions > * { flex: none; }
+.paper-actions :deep(.keycap-card) { min-width: 56px; }
+.paper-actions :deep(.el-dropdown) { display: inline-flex; flex: none; }
+.library-load-more { width: 100%; margin-top: 10px; }
+.fulltext-card { margin-top: 12px; }
+.search-filters, .result-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .result-item { margin-top: 8px; }
-.result-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
-.result-chapter { color: var(--el-text-color-secondary); font-size: 12px; }
-.result-page { color: var(--el-text-color-secondary); font-size: 12px; }
-.result-snippet { font-size: 14px; line-height: 1.6; color: var(--el-text-color-primary); }
-.result-count { color: var(--el-text-color-secondary); font-size: 12px; margin-bottom: 8px; }
+.result-meta { margin-bottom: 4px; }
+.result-chapter, .result-page, .result-count { color: var(--el-text-color-secondary); font-size: 12px; }
+.result-snippet { overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; color: var(--el-text-color-primary); }
+
+.library-inspector { position: sticky; top: 12px; height: calc(100vh - 136px); min-height: 480px; }
+.inspector-scroll { height: 100%; overflow-y: auto; padding: 14px; }
+.inspector-type { color: #9a7958; font-size: var(--study-font-size-xs); letter-spacing: .6px; }
+.inspector-scroll h2 { margin: 7px 0 5px; font-family: var(--study-font-reading); font-size: 17px; line-height: 1.5; color: var(--el-text-color-primary); overflow-wrap: anywhere; }
+.inspector-meta { color: var(--el-text-color-secondary); font-size: var(--study-font-size-xs); line-height: 1.6; overflow-wrap: anywhere; }
+.trust-row { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.trust-row > span { color: var(--study-text-secondary); font-size: var(--study-font-size-xs); }
+.inspector-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0; }
+.inspector-actions .el-button { margin: 0; padding-inline: 8px; }
+.inspector-section { padding: 13px 0; border-top: 1px solid var(--el-border-color-lighter); }
+.inspector-section-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+.inspector-section-title span { color: var(--el-text-color-secondary); font-size: var(--study-font-size-xs); text-align: right; }
+.inspector-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.inspector-facts span { display: flex; flex-direction: column; color: var(--el-text-color-secondary); font-size: var(--study-font-size-xs); text-align: center; }
+.inspector-facts b { margin-bottom: 2px; color: #6f4721; font: 700 17px Georgia, serif; }
+.inspector-status { margin-top: 10px; padding: 8px 9px; border-radius: 7px; background: #f0e9dc; color: #686155; font-size: var(--study-font-size-xs); line-height: 1.55; }
+.inspector-status.failed { background: #f9efed; color: #93483d; }
+.inspector-status.needs_ocr, .inspector-status.parsing { background: #fff5e7; color: #8d6228; }
+.inspector-chapters :deep(.el-tree) { max-height: 210px; overflow: auto; padding: 5px; background: transparent; }
+.inspector-chapters :deep(.el-tree-node__content) { height: 32px; }
+.inspector-detail-button { width: 100%; margin-top: 2px; }
+.inspector-empty { display: flex; height: 100%; align-items: center; justify-content: center; flex-direction: column; padding: 24px; color: var(--el-text-color-secondary); text-align: center; }
+.inspector-empty span { color: #9a7958; font-size: var(--study-font-size-xs); }
+.inspector-empty b { margin: 12px 0 6px; color: var(--el-text-color-primary); }
+.inspector-empty p { font-size: var(--study-font-size-sm); line-height: 1.7; }
+.drawer-eyebrow { margin-bottom: 5px; font-size: 9px; letter-spacing: 2px; color: #9a7a58; }
+.paper-detail { padding-bottom: 28px; }
+.detail-actions { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 0 14px; background: var(--el-bg-color-overlay); }
+.paper-detail :deep(.el-tree) { padding: 8px 4px 16px; border-radius: 10px; background: #f7f3ea; }
+.archive-grid { display: grid; gap: 9px; }
+.archive-grid label { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; align-items: center; color: var(--el-text-color-secondary); font-size: 12px; }
 .analysis-section { margin-bottom: 12px; }
 .analysis-title { font-size: 13px; font-weight: 600; color: var(--el-text-color-regular); margin-bottom: 6px; }
 .analysis-tag { margin: 2px 4px 2px 0; cursor: pointer; }
-.keyword-chip {
-  display: inline-block; padding: 2px 10px; margin: 2px 4px 2px 0;
-  background: var(--el-fill-color-lighter); border-radius: 4px; font-size: 12px;
-  color: var(--el-text-color-regular); cursor: pointer; user-select: none;
-  border: 1px solid var(--el-border-color-extra-light);
-}
+.keyword-chip { display: inline-block; max-width: 100%; padding: 2px 10px; margin: 2px 4px 2px 0; background: var(--el-fill-color-lighter); border: 1px solid var(--el-border-color-extra-light); border-radius: 4px; font-size: 12px; color: var(--el-text-color-regular); cursor: pointer; overflow-wrap: anywhere; }
 .keyword-chip:hover { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
 .analysis-item { font-size: 13px; line-height: 1.6; margin-bottom: 4px; color: var(--el-text-color-primary); }
 .analysis-meta { font-size: 12px; color: var(--el-text-color-secondary); }
-.paper-list{min-height:160px}.paper-list-head,.paper-row{display:grid;grid-template-columns:72px minmax(220px,1fr) 100px 118px 142px;column-gap:10px;align-items:center}.paper-list-head{padding:8px 12px;color:#918678;font-size:11px;border-top:1px solid #eee6da;border-bottom:1px solid #e5dbcc;background:#f8f4ec}.paper-list-head>span:last-child{text-align:right}.paper-row{position:relative;min-height:92px;padding:12px;border-bottom:1px solid #e8dfd2;transition:background .16s ease,box-shadow .16s ease,transform .16s ease,opacity .16s ease}.paper-row:hover{z-index:1;background:#fcfaf5;box-shadow:0 2px 10px rgba(85,65,42,.07);transform:translateY(-1px)}.paper-row.is-dragging{opacity:.38}.paper-row.drop-before:before,.paper-row.drop-after:after{position:absolute;right:8px;left:8px;height:2px;border-radius:2px;background:var(--el-color-primary);content:''}.paper-row.drop-before:before{top:-1px}.paper-row.drop-after:after{bottom:-1px}.paper-select{display:flex;align-items:center;gap:9px}.drag-handle{width:15px;color:#c4bbb0;font-size:17px;line-height:1;cursor:not-allowed;user-select:none}.drag-handle.enabled{color:#82603c;cursor:grab}.paper-row:active .drag-handle.enabled{cursor:grabbing}.star{padding:0;border:0;background:transparent}.paper-identity{min-width:0;cursor:pointer}.paper-title{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-family:'Noto Serif SC','STSong',serif;font-size:14px}.paper-facts{display:flex;gap:10px;margin-top:7px;color:#9b8f80;font-size:10px}.paper-facts span+span:before{content:'·';margin-right:10px}.paper-reading,.paper-knowledge{display:flex;align-items:flex-start;flex-direction:column;gap:7px;font-size:11px}.muted-state{color:#8a8175}.danger-state{color:#b4473d}.warning-state{color:#a86e27}.category-link,.analysis-link{max-width:100%;padding:0;border:0;background:transparent;color:#765331;font-size:11px;cursor:pointer;text-align:left}.analysis-link{color:#8d755a}.deep-done{color:#47806b}.paper-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px}.paper-actions :deep(.el-button+.el-button){margin-left:0}
-@media (max-width: 900px) {
-  .library-workspace{grid-template-columns:1fr}.bookshelf-panel{position:static}.shelf-tree{max-height:190px;overflow:auto}
-  .library-hero { align-items: flex-start; flex-direction: column; }
-  .hero-stats { width: 100%; justify-content: space-between; }
-  .hero-stats div { text-align: left; }
-  .library-filters { grid-template-columns: 1fr 1fr; }
-  .header-actions{width:100%;justify-content:flex-start}.paper-list-head{display:none}.paper-row{grid-template-columns:72px minmax(0,1fr) 140px}.paper-reading{grid-column:2;margin-top:10px;flex-direction:row;align-items:center}.paper-knowledge{grid-column:3;grid-row:1 / span 2}.paper-actions{grid-column:2 / -1;margin-top:10px;justify-content:flex-start}
+.batch-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.batch-tip { font-size: 12px; color: var(--el-text-color-secondary); }
+
+@container library-page (max-width: 1360px) {
+  .library-workspace { --library-inspector-visible: 0; grid-template-columns: 204px minmax(0, 1fr); }
+  .library-inspector { display: none; }
 }
-@media (max-width: 620px){.library-hero{padding:16px}.library-hero h1{font-size:23px}.library-filters{grid-template-columns:1fr}.hero-stats{gap:12px}.hero-stats strong{font-size:20px}.header-actions :deep(.el-button){margin-left:0}.paper-row{grid-template-columns:66px minmax(0,1fr);padding:14px 4px}.paper-knowledge,.paper-reading,.paper-actions{grid-column:2}.paper-knowledge{grid-row:auto;margin-top:9px;flex-direction:row;align-items:center}.paper-actions{flex-wrap:wrap}.paper-meta{max-width:100%}.import-queue{align-items:flex-start;flex-wrap:wrap}.import-queue>div{flex-basis:100%}.materials-card :deep(.el-card__body){padding:12px}}
+@container library-page (max-width: 1050px) {
+  .library-commandbar { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+  .library-commandbar :deep(.study-commandbar__actions) { grid-column: 1 / -1; justify-content: flex-start; }
+}
+@container library-page (max-width: 900px) {
+  .library-workspace { grid-template-columns: minmax(0, 1fr); }
+  .mobile-shelf-toggle { display: flex; }
+  .bookshelf-panel { display: none; position: static; }
+  .bookshelf-panel.mobile-open { display: block; }
+  .shelf-tree { max-height: 190px; overflow: auto; }
+}
+@container library-page (max-width: 520px) {
+  .library-commandbar { grid-template-columns: minmax(0, 1fr); }
+  .library-commandbar :deep(.study-commandbar__content) { width: 100%; }
+  .library-summary { width: 100%; justify-content: space-between; }
+  .library-summary > div { text-align: left; }
+  .library-primary-actions { justify-content: flex-start; }
+}
 
-/* 资料库迁移：紧凑命令区 + 书架/列表/检查器三层工作区 */
-.library-commandbar{margin-bottom:12px}.library-summary{display:flex;gap:18px}.library-summary>div{display:flex;min-width:50px;flex-direction:column;text-align:right}.library-summary strong{color:var(--el-color-primary);font:700 18px Georgia,serif}.library-summary span{margin-top:1px;color:var(--study-text-secondary);font-size:var(--study-font-size-xs)}
-.library-primary-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}.library-primary-actions :deep(.el-button+.el-button){margin-left:0}.library-import-queue{margin:-2px 0 12px}
-.mobile-shelf-toggle{display:none;width:100%;align-items:center;justify-content:space-between;margin-bottom:8px;padding:9px 11px;border:1px solid var(--study-card-border);background:var(--study-surface-paper);color:var(--study-text-primary);font-size:var(--study-font-size-sm)}.mobile-shelf-toggle b{color:var(--el-color-primary);font-size:var(--study-font-size-xs)}
-.library-workspace{display:grid;grid-template-columns:220px minmax(0,1fr) 300px;align-items:start;gap:12px}.library-main{min-width:0}.bookshelf-panel{top:56px}.bookshelf-section-label{padding:2px 10px 7px;color:#8f806e;font-size:var(--study-font-size-xs);font-weight:700;letter-spacing:1px}.bookshelf-head{margin-top:16px;padding-top:14px;border-top:1px solid #dfd4c4}
-.paper-row{cursor:pointer;outline:none}.paper-row.selected{z-index:1;background:#f5eddf;box-shadow:inset 3px 0 0 var(--el-color-primary)}.paper-row:focus-visible{box-shadow:inset 0 0 0 2px var(--el-color-primary)}.paper-title{font-family:var(--study-font-reading);font-size:15px;font-weight:600}.paper-facts{font-size:var(--study-font-size-xs)}.paper-reading,.paper-knowledge,.category-link,.analysis-link{font-size:var(--study-font-size-xs)}
-.fulltext-card{margin-top:12px}
-.library-inspector{position:sticky;top:56px;height:calc(100vh - 136px);min-height:480px;overflow:hidden;border:1px solid var(--study-card-border);border-radius:var(--study-radius-md);background:var(--study-surface-paper);box-shadow:var(--study-shadow-sm)}
-.inspector-scroll{height:100%;overflow-y:auto;padding:15px}.inspector-type{color:#9a7958;font-size:var(--study-font-size-xs);letter-spacing:.6px}.inspector-scroll h2{margin:7px 0 5px;font-family:var(--study-font-reading);font-size:17px;line-height:1.5;color:var(--el-text-color-primary)}.inspector-meta{color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);line-height:1.6}.trust-row{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-top:9px}.trust-row>span{color:var(--study-text-secondary);font-size:var(--study-font-size-xs)}.inspector-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}.inspector-actions .el-button{margin:0}.inspector-section{padding:13px 0;border-top:1px solid var(--el-border-color-lighter)}.inspector-section-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}.inspector-section-title span{color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);text-align:right}.inspector-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.inspector-facts span{display:flex;flex-direction:column;color:var(--el-text-color-secondary);font-size:var(--study-font-size-xs);text-align:center}.inspector-facts b{margin-bottom:2px;color:#6f4721;font:700 17px Georgia,serif}.inspector-status{margin-top:10px;padding:8px 9px;border-radius:7px;background:#f0e9dc;color:#686155;font-size:var(--study-font-size-xs);line-height:1.55}.inspector-status.failed{background:#f9efed;color:#93483d}.inspector-status.needs_ocr,.inspector-status.parsing{background:#fff5e7;color:#8d6228}.inspector-chapters :deep(.el-tree){max-height:210px;overflow:auto;padding:5px;background:transparent}.inspector-chapters :deep(.el-tree-node__content){height:32px}.inspector-detail-button{width:100%;margin-top:2px}.inspector-empty{display:flex;height:100%;align-items:center;justify-content:center;flex-direction:column;padding:28px;color:var(--el-text-color-secondary);text-align:center}.inspector-empty span{color:#9a7958;font-size:var(--study-font-size-xs);letter-spacing:.6px}.inspector-empty b{margin:12px 0 6px;color:var(--el-text-color-primary)}.inspector-empty p{font-size:var(--study-font-size-sm);line-height:1.7}
-
-@media(max-width:1519px){.library-workspace{grid-template-columns:220px minmax(0,1fr)}.library-inspector{display:none}}
-@media(max-width:1200px){.library-workspace{grid-template-columns:190px minmax(0,1fr)}.paper-list-head{display:none}.paper-row{grid-template-columns:72px minmax(0,1fr) 130px}.paper-reading{grid-column:2;margin-top:8px;flex-direction:row;align-items:center}.paper-knowledge{grid-column:3;grid-row:1 / span 2}.paper-actions{grid-column:2 / -1;margin-top:8px;justify-content:flex-start}}
-@media(max-width:1100px){.library-primary-actions{justify-content:flex-start}}
-@media(max-width:900px){.library-workspace{grid-template-columns:1fr}.library-summary>div{text-align:left}.library-primary-actions{flex-wrap:wrap}.mobile-shelf-toggle{display:flex}.bookshelf-panel{display:none;position:static}.bookshelf-panel.mobile-open{display:block}.bookshelf-head{margin-top:10px}.shelf-tree{max-height:190px;overflow:auto}}
-@media(max-width:620px){.library-summary{width:100%;justify-content:space-between}.library-primary-actions{display:grid;grid-template-columns:1fr 1fr}.library-primary-actions>*,.library-primary-actions :deep(.el-button){width:100%}.library-primary-actions>:last-child{grid-column:1/-1}.library-import-queue{align-items:flex-start}.paper-row{padding-inline:8px}.fulltext-card :deep(.el-card__body){padding:12px}.result-meta{align-items:flex-start;flex-wrap:wrap}}
+@container library-main (max-width: 860px) {
+  .library-filters > .library-query { flex-basis: 100%; }
+  .library-filters > .el-select { max-width: none; }
+  .paper-list-head { display: none; }
+  .paper-row { grid-template-columns: 66px minmax(0, 1fr) max-content; row-gap: 6px; }
+  .paper-select { grid-column: 1; grid-row: 1 / span 3; }
+  .paper-identity { grid-column: 2; grid-row: 1; }
+  .paper-reading { grid-column: 2; grid-row: 2; flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .paper-knowledge { grid-column: 2; grid-row: 3; flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .paper-actions { grid-column: 3; grid-row: 1 / span 3; min-width: 154px; }
+}
+@container library-main (max-width: 560px) {
+  .materials-card :deep(.el-card__header), .materials-card :deep(.el-card__body) { padding-inline: 12px; }
+  .paper-row { grid-template-columns: 58px minmax(0, 1fr); column-gap: 8px; padding-inline: 4px; }
+  .paper-select { grid-row: 1; gap: 5px; }
+  .paper-reading, .paper-knowledge { grid-column: 2; }
+  .paper-actions { grid-column: 2; grid-row: 4; min-width: 0; justify-content: flex-start; flex-wrap: wrap; }
+  .library-filters > .el-select { flex-basis: calc(50% - 8px); }
+}
 </style>

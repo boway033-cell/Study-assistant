@@ -304,8 +304,14 @@ const jumpAnnotation = async (annotation) => {
 }
 
 const removeAnn = async (a) => {
-  await deleteAnnotation(a.id)
-  loadAnnotations()
+  try {
+    await ElMessageBox.confirm('删除这条高亮或批注？', '删除标注', { type: 'warning' })
+    await deleteAnnotation(a.id)
+    annotations.value = annotations.value.filter(item => item.id !== a.id)
+    ElMessage.success('已删除')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.message || '删除失败')
+  }
 }
 
 const loadAnnotations = async () => {

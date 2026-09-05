@@ -4,7 +4,7 @@
 
 **把散落的 PDF、Word 与 PPT 变成可阅读、可检索、可核验、可继续写作的个人知识系统。**
 
-[![Release](https://img.shields.io/badge/release-v2.0.0-8B5A2B.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v2.1.0-8B5A2B.svg)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions)
@@ -28,7 +28,7 @@ Study Assistant 服务于一条完整的个人研究链：
 
 你仍然决定读哪些资料、采用哪些证据、接受哪些修改。AI 负责整理、比较和提出可审查的解释，不把模型记忆冒充你的知识库，也不会把未选文献混入写作。
 
-| 常见断点 | Study Assistant 2.0 |
+| 常见断点 | Study Assistant 2.1 |
 |---|---|
 | 文件越存越多，找不到当前项目需要的材料 | 多级虚拟书架、筛选、十种排序方式与拖拽自定义顺序；一篇文献可归入多个书架 |
 | 扫描件目录混乱，正文被误判为标题 | 原生目录、版面、编号链和 OCR 共同判断；低置信度结果进入可拖拽的目录校正台 |
@@ -104,11 +104,11 @@ Study Assistant 服务于一条完整的个人研究链：
 
 ## 下载与启动
 
-当前 2.0 发布物是**本地 Web 应用包**，不是免安装桌面 EXE。页面在浏览器中打开，但服务、资料和数据库都运行在本机。
+当前 2.1 发布物是**本地 Web 应用包**，不是免安装桌面 EXE。页面在浏览器中打开，但服务、资料和数据库都运行在本机。
 
 最短路径（Windows）：
 
-1. 从 [GitHub Releases](https://github.com/boway033-cell/Study-assistant/releases/latest) 下载 `study-assistant-v2.0.0.zip` 并完整解压。
+1. 从 [GitHub Releases](https://github.com/boway033-cell/Study-assistant/releases/latest) 下载 `study-assistant-v2.1.0.zip` 并完整解压。
 2. 安装 64 位 Python 3.12+，在项目目录打开 PowerShell。
 3. 运行下列命令创建环境并安装依赖：
 
@@ -122,9 +122,10 @@ python -m venv .venv
 
 完整的下载选择、源码构建、更新、备份和故障排查见：[安装与更新指南](docs/DOWNLOAD_AND_INSTALL.md)。
 
-## 2.0 的质量基线
+## 2.1 的质量基线
 
 - 后端完整测试、前端单测和生产构建由 CI 持续执行。
+- 资料库新增 320–1920px、侧栏展开/折叠的 24 组浏览器回归；“设置 → 界面”可调整发光边框、机械按键和列表密度。
 - 固定检索集覆盖跨学科问答、引用正确性和无答案拒答；容量基线覆盖 3,000 本 / 300,000 文本块合成库。
 - 截图脚本只连接临时演示数据库，并在写盘前检查禁止展示词；不会读取用户正式知识库。
 - SQLite 适合当前个人中小型资料库。数千本真实文献的迁移阈值仍需更大规模验证，不把合成基线包装为已证明的无限扩展能力。
