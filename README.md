@@ -4,7 +4,7 @@
 
 **把散落的 PDF、Word 与 PPT 变成可阅读、可检索、可核验、可继续写作的个人知识系统。**
 
-[![Release](https://img.shields.io/badge/release-v2.1.0-8B5A2B.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v2.2.0-8B5A2B.svg)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions)
@@ -15,6 +15,14 @@
 本地优先 · 原文证据链 · 跨文献综合 · 写作与 PPTX 输出
 
 </div>
+
+### 2.2 新增：公文写作
+
+写作工作台新增“公文写作”：材料 → 提纲确认 → 起草 → 审稿 → Word 导出。
+保留旧稿和改稿版本，支持本篇排版与经确认的默认格式配置。模型调用前需明确允许发送本稿材料。
+三个技能均已接入：lieflat 结构诊断、official-document 公文起草审稿、sanmu Word 排版及结构校验。
+本功能含 **PolyForm Noncommercial 1.0.0** 许可材料，不属于纯 MIT 分发；详见 [第三方许可](THIRD_PARTY_NOTICES.md)。
+事实与签发权限须人工核对；结构校验不等于正式公文合规或页面视觉验收。
 
 ![Study Assistant 2.0 文献知识库](docs/assets/screenshots/library.jpg)
 
@@ -28,7 +36,7 @@ Study Assistant 服务于一条完整的个人研究链：
 
 你仍然决定读哪些资料、采用哪些证据、接受哪些修改。AI 负责整理、比较和提出可审查的解释，不把模型记忆冒充你的知识库，也不会把未选文献混入写作。
 
-| 常见断点 | Study Assistant 2.1 |
+| 常见断点 | Study Assistant 2.2 |
 |---|---|
 | 文件越存越多，找不到当前项目需要的材料 | 多级虚拟书架、筛选、十种排序方式与拖拽自定义顺序；一篇文献可归入多个书架 |
 | 扫描件目录混乱，正文被误判为标题 | 原生目录、版面、编号链和 OCR 共同判断；低置信度结果进入可拖拽的目录校正台 |
@@ -104,11 +112,11 @@ Study Assistant 服务于一条完整的个人研究链：
 
 ## 下载与启动
 
-当前 2.1 发布物是**本地 Web 应用包**，不是免安装桌面 EXE。页面在浏览器中打开，但服务、资料和数据库都运行在本机。
+当前 2.2 发布物是**本地 Web 应用包**，不是免安装桌面 EXE。页面在浏览器中打开，但服务、资料和数据库都运行在本机。
 
 最短路径（Windows）：
 
-1. 从 [GitHub Releases](https://github.com/boway033-cell/Study-assistant/releases/latest) 下载 `study-assistant-v2.1.0.zip` 并完整解压。
+1. 从 [GitHub Releases](https://github.com/boway033-cell/Study-assistant/releases/latest) 下载 `study-assistant-v2.2.0.zip` 并完整解压。
 2. 安装 64 位 Python 3.12+，在项目目录打开 PowerShell。
 3. 运行下列命令创建环境并安装依赖：
 
@@ -122,7 +130,7 @@ python -m venv .venv
 
 完整的下载选择、源码构建、更新、备份和故障排查见：[安装与更新指南](docs/DOWNLOAD_AND_INSTALL.md)。
 
-## 2.1 的质量基线
+## 2.2 的质量基线
 
 - 后端完整测试、前端单测和生产构建由 CI 持续执行。
 - 资料库新增 320–1920px、侧栏展开/折叠的 24 组浏览器回归；“设置 → 界面”可调整发光边框、机械按键和列表密度。

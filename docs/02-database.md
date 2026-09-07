@@ -1,6 +1,6 @@
 # 02 · 数据库设计
 
-- 产品版本：v2.1.0；数据库 schema：v10
+- 产品版本：v2.2.0；数据库 schema：v10
 - 数据库：SQLite（WAL 模式），ORM：SQLAlchemy 2.0
 - 配套：[01-architecture.md](01-architecture.md) / [03-api.md](03-api.md)
 

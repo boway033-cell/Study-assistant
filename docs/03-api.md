@@ -1,6 +1,6 @@
 # 03 · API 接口清单
 
-- 产品版本：v2.1.0
+- 产品版本：v2.2.0
 - 基础路径：`http://127.0.0.1:8000`
 - 格式：JSON（上传用 multipart）；问答用 SSE（`text/event-stream`）
 - 统一响应错误格式：`{"detail": "错误信息"}`（FastAPI 默认）

@@ -34,9 +34,11 @@ Thumbs.db
 
 # UI 测试截图
 backend/tests/ui_*.png
+.pytest_*official_*/
 
 # runtime log
 server.log
+*.log.tmp
 
 # 备份产物
 backup-*.zip

@@ -5,14 +5,14 @@
       <div><strong>{{ finishedTasks.length }}</strong><span>最近完成</span></div>
       <el-button circle :loading="taskCenter.loading" @click="refreshTasks"><el-icon><Refresh /></el-icon></el-button>
     </div>
-    <el-alert :closable="false" type="info" title="任务在后台串行执行，以控制 OCR、解析和 AI 生成的内存峰值。" />
+    <el-alert :closable="false" type="info" title="OCR 与解析会串行控内存；研读和写作使用独立队列，不必等待整本文献 OCR。" />
     <div v-if="!taskCenter.items.length && !taskCenter.loading" class="task-empty">暂无任务记录</div>
     <div v-for="task in taskCenter.items" :key="task.task_id" class="task-item" @click="openTask(task)">
       <div class="task-head">
         <span class="task-kind">{{ taskLabel(task.name) }}</span>
         <el-tag size="small" :type="statusType(task.status)">{{ statusLabel(task.status) }}</el-tag>
       </div>
-      <strong class="task-title">{{ task.book_title || '知识库任务' }}</strong>
+      <strong class="task-title">{{ task.book_title || task.result?.focus || '知识库任务' }}</strong>
       <el-progress v-if="isActive(task)" :percentage="percentage(task.progress)" :stroke-width="6" :show-text="false" />
       <p :class="{ error: task.status === 'failed', stalled: isStalled(task) }">{{ isStalled(task) ? '长时间没有新进度，可取消后重试；已完成页面缓存不会删除。' : task.error || task.message || stageLabel(task.stage) }}</p>
       <footer><time>{{ formatTime(task.updated_at || task.created_at) }}</time><div class="task-actions"><el-button v-if="canRetry(task)" link type="primary" :loading="retryingId===task.task_id" @click.stop="requestRetry(task)">重新解析</el-button><el-button v-if="isActive(task)" link type="danger" :loading="cancellingId===task.task_id" @click.stop="requestCancel(task)">取消任务</el-button></div></footer>
@@ -36,10 +36,10 @@ const isActive = (task) => ['pending', 'running', 'cancelling'].includes(task.st
 const canRetry = task => ['failed', 'cancelled'].includes(task.status) && ['import', 'reimport'].includes(task.name)
 const activeTasks = computed(() => taskCenter.items.filter(isActive))
 const finishedTasks = computed(() => taskCenter.items.filter((item) => !isActive(item)))
-const taskLabel = (name) => ({ import: '文献导入 / OCR', reimport: '重新解析', deep: '结构精读', deck: 'PPTX 汇报', deck_outline: 'PPTX 提纲', deck_render: 'PPTX 渲染' }[name] || '知识处理')
+const taskLabel = (name) => ({ import: '文献导入 / OCR', reimport: '重新解析', deep: '结构精读', study: '综合研读', 'study-overview': '综合研读', 'literature-review': '文献综述', writing_dna: '写作 DNA', deck: 'PPTX 汇报', deck_outline: 'PPTX 提纲', deck_render: 'PPTX 渲染' }[name] || '知识处理')
 const statusLabel = (status) => ({ pending: '排队中', running: '处理中', cancelling: '取消中', cancelled: '已取消', done: '已完成', failed: '失败' }[status] || status)
 const statusType = (status) => ({ done: 'success', failed: 'danger', cancelled: 'info', cancelling: 'warning', running: 'warning', pending: 'info' }[status] || 'info')
-const stageLabel = (stage) => ({ parsing: '正在解析原文', ocr: '正在识别扫描页', deep: '正在结构化精读', generate: '正在生成汇报', deck_outline: '正在生成可编辑提纲', deck_render: '正在渲染并审计 PPTX' }[stage] || stage || '等待处理')
+const stageLabel = (stage) => ({ parsing: '正在解析原文', ocr: '正在识别扫描页', deep: '正在结构化精读', overview: '正在汇总研读材料', 'research-plan': '正在规划研究路径', evidence: '正在检索和整理证据', synthesis: '正在跨文献综合写作', generate: '正在生成汇报', deck_outline: '正在生成可编辑提纲', deck_render: '正在渲染并审计 PPTX' }[stage] || stage || '等待处理')
 const percentage = (value) => Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : ''
 const isStalled = (task) => task.status === 'running' && ['ocr', 'parsing'].includes(task.stage) && Date.now() - new Date(task.updated_at || task.created_at).getTime() > 120000
@@ -64,10 +64,13 @@ const requestRetry = async task => {
   finally { retryingId.value = '' }
 }
 const openTask = (task) => {
-  if (!task.book_id) return
   visible.value = false
-  if (['deck', 'deck_outline', 'deck_render'].includes(task.name)) router.push({ path: '/literature-workbench', query: { bookId: task.book_id } })
-  else router.push(`/reader/${task.book_id}`)
+  if (['study', 'study-overview'].includes(task.name)) {
+    const reportId = Number(task.result?.report_id)
+    router.push({ path: '/study', query: reportId ? { reportId } : { taskId: task.task_id } })
+  } else if (['deck', 'deck_outline', 'deck_render'].includes(task.name)) {
+    router.push({ path: '/literature-workbench', query: { bookId: task.book_id } })
+  } else if (task.book_id) router.push(`/reader/${task.book_id}`)
 }
 </script>
 

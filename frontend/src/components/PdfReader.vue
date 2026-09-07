@@ -67,6 +67,7 @@
           :style="{ width: pageWidthPx(p) + 'px', height: pageH(p) + 'px' }">
           <canvas :ref="(el) => setCanvasRef(p, el)" class="pr-canvas" />
           <div :ref="(el) => setTextRef(p, el)" class="text-layer"></div>
+          <span v-if="pageRendering[p]" class="pr-render-state">正在显示第 {{ p }} 页…</span>
           <span v-if="ocrStates[p] === 'loading'" class="pr-ocr-state">正在生成本页可选文字层…</span>
           <span v-else-if="ocrStates[p] === 'ready'" class="pr-ocr-state ready">OCR 文字层</span>
           <button v-if="pageErrors[p]" class="pr-page-retry" type="button" @click="retryPage(p)">
@@ -214,7 +215,9 @@ const baseHeights = {}   // scale=1 时的页高缓存（缩放不重算）
 const baseWidths = {}
 const pageHeights = ref({})
 const pageMetricsVersion = ref(0)
+const PAGE_GAP = 10
 const rendered = ref({})
+const pageRendering = ref({})
 const pageErrors = ref({})
 const annotations = ref([])
 const ocrStates = ref({})
@@ -249,7 +252,9 @@ const annCard = ref({ visible: false, mode: 'create', page: 1, anchor: null, tex
 
 let pdfDoc = null
 let renderTasks = {}
-const pendingRenders = new Set()
+const pendingRenders = new Map()
+const pageRenderTokens = {}
+let wantedPages = new Set()
 let loadingTask = null
 let renderQueue = Promise.resolve()
 let bookTitle = ''
@@ -292,7 +297,7 @@ const pageOffset = (p) => {
     }
     return acc
   }
-  for (let i = 1; i < p; i++) acc += pageH(i)
+  for (let i = 1; i < p; i++) acc += pageH(i) + PAGE_GAP
   return acc
 }
 
@@ -346,7 +351,11 @@ const loadPdf = async () => {
     } else {
       scroller.value.scrollTop = mode.value === 'scroll' ? pageOffset(page.value) + 2 : 0
     }
-    await renderVisible()
+    // 首屏只等待当前页图像；相邻页、文字层和 OCR 均在后台补齐。
+    wantedPages = new Set([page.value])
+    await renderPage(page.value, renderGeneration)
+    loading.value = false
+    void renderVisible()
     await loadAnnotations()
     loadNodeOptions()
   } catch (e) {
@@ -372,7 +381,7 @@ const pairEndOf = (p) => {
 const currentPageAt = (st) => {
   let acc = 0
   for (let p = 1; p <= numPages.value; p++) {
-    acc += pageH(p)
+    acc += pageH(p) + PAGE_GAP
     if (acc > st) return p
   }
   return numPages.value
@@ -384,15 +393,15 @@ const visibleRange = () => {
   const ch = scroller.value.clientHeight
   if (mode.value === 'scroll') {
     let acc = 0
-    let start = 1, end = 1
+    let start = null, end = 1
     for (let p = 1; p <= numPages.value; p++) {
-      const h = pageH(p)
-      if (acc + h > st && start === 1) start = p
+      const h = pageH(p) + PAGE_GAP
+      if (acc + h > st && start === null) start = p
       if (acc + h > st + ch) { end = p; break }
       acc += h
       end = p
     }
-    return { start: Math.max(1, start - 1), end: Math.min(numPages.value, end + 1) }
+    return { start: Math.max(1, (start || 1) - 1), end: Math.min(numPages.value, end + 1) }
   }
   // 单页/双页没有虚拟长列表，当前页就是唯一渲染范围。
   if (mode.value === 'double') {
@@ -406,12 +415,14 @@ const renderVisible = async () => {
   const r = visibleRange()
   const want = new Set()
   for (let p = r.start; p <= r.end; p++) want.add(p)
+  wantedPages = want
   for (const p of Object.keys(rendered.value)) {
     if (!want.has(Number(p))) clearPage(Number(p))
   }
   const generation = renderGeneration
   // 单队列逐页渲染，避免复杂扫描页同时占用数个 20–30MB canvas 并卡死主线程。
-  for (const p of want) {
+  const prioritized = [...want].sort((a, b) => Math.abs(a - page.value) - Math.abs(b - page.value))
+  for (const p of prioritized) {
     if (rendered.value[p]) continue
     renderQueue = renderQueue.catch(() => {}).then(() => renderPage(Number(p), generation))
     await renderQueue
@@ -420,11 +431,16 @@ const renderVisible = async () => {
 
 const renderPage = async (p, generation = renderGeneration) => {
   if (!pdfDoc || rendered.value[p] || pendingRenders.has(p)) return
-  pendingRenders.add(p)
+  if (mode.value === 'scroll' && !wantedPages.has(p)) return
+  const token = Symbol(`page-${p}`)
+  pendingRenders.set(p, token)
+  pageRenderTokens[p] = token
+  pageRendering.value[p] = true
   try {
     if (renderTasks[p]) { try { renderTasks[p].cancel() } catch {} delete renderTasks[p] }
     const pdfPage = await withTimeout(pdfDoc.getPage(p), 12000, `第 ${p} 页解析超时`)
-    if (generation !== renderGeneration) return
+    if (generation !== renderGeneration || pageRenderTokens[p] !== token) return
+    if (mode.value === 'scroll' && !wantedPages.has(p)) return
     const vp1 = pdfPage.getViewport({ scale: 1 })
     if (baseWidths[p] !== vp1.width || baseHeights[p] !== vp1.height) {
       baseWidths[p] = vp1.width
@@ -446,47 +462,53 @@ const renderPage = async (p, generation = renderGeneration) => {
     const task = pdfPage.render({ canvasContext: ctx, viewport: vp })
     renderTasks[p] = task
     await withTimeout(task.promise, 20000, `第 ${p} 页渲染超时`, () => task.cancel())
-    if (generation !== renderGeneration) return
+    if (generation !== renderGeneration || pageRenderTokens[p] !== token) return
     delete renderTasks[p]
-    const tl = textRefs[p]
-    if (tl) {
-      tl.style.setProperty('--total-scale-factor', String(scale.value))
-      tl.style.width = Math.floor(vp.width) + 'px'
-      tl.style.height = Math.floor(vp.height) + 'px'
-      tl.innerHTML = ''
-      try {
-        const textContent = await withTimeout(pdfPage.getTextContent(), 8000, `第 ${p} 页文字层解析超时`)
-        if (generation !== renderGeneration) return
-        const tlInstance = new pdfjsLib.TextLayer({ textContentSource: textContent, container: tl, viewport: vp })
-        await withTimeout(tlInstance.render(), 8000, `第 ${p} 页文字层渲染超时`)
-      } catch (textError) {
-        // 图像页已经可读；文字层异常只降级选择/检索能力，不把整页判为失败。
-        console.warn('text layer degraded', p, textError)
-        tl.innerHTML = ''
-      }
-      // 扫描页没有 PDF 文本层：仅为当前渲染页按需取得 OCR 坐标，不加载整本文档。
-      if (!tl.querySelector('span') && props.bookId && p === page.value && generation === renderGeneration) {
-        await renderOcrTextLayer(p, tl, generation)
-      }
-    }
     rendered.value[p] = true
     delete pageErrors.value[p]
+    pageRendering.value[p] = false
+    // 页面图像优先呈现；文字层与按需 OCR 在后台补齐，不再阻塞首屏或下一页。
+    void renderTextLayer(p, pdfPage, vp, generation, token)
   } catch (e) {
     if (e?.name !== 'RenderingCancelledException') {
       console.error('render err', p, e)
       pageErrors.value[p] = e?.message || '页面渲染失败'
     }
   } finally {
-    pendingRenders.delete(p)
+    if (pendingRenders.get(p) === token) pendingRenders.delete(p)
+    if (pageRenderTokens[p] === token) pageRendering.value[p] = false
   }
 }
 
-const renderOcrTextLayer = async (p, tl, generation) => {
+const renderTextLayer = async (p, pdfPage, vp, generation, token) => {
+  const tl = textRefs[p]
+  if (!tl || pageRenderTokens[p] !== token) return
+  tl.style.setProperty('--total-scale-factor', String(scale.value))
+  tl.style.width = Math.floor(vp.width) + 'px'
+  tl.style.height = Math.floor(vp.height) + 'px'
+  tl.innerHTML = ''
+  try {
+    const textContent = await withTimeout(pdfPage.getTextContent(), 8000, `第 ${p} 页文字层解析超时`)
+    if (generation !== renderGeneration || pageRenderTokens[p] !== token || textRefs[p] !== tl) return
+    const tlInstance = new pdfjsLib.TextLayer({ textContentSource: textContent, container: tl, viewport: vp })
+    await withTimeout(tlInstance.render(), 8000, `第 ${p} 页文字层渲染超时`, () => tlInstance.cancel?.())
+  } catch (textError) {
+    // 图像页已经可读；文字层异常只降级选择/检索能力，不把整页判为失败。
+    console.warn('text layer degraded', p, textError)
+  }
+  if (generation !== renderGeneration || pageRenderTokens[p] !== token || textRefs[p] !== tl) return
+  // 扫描页没有 PDF 文本层：仅为当前页异步取得 OCR 坐标，不加载整本文档。
+  if (!tl.querySelector('span') && props.bookId && p === page.value) {
+    void renderOcrTextLayer(p, tl, generation, token)
+  }
+}
+
+const renderOcrTextLayer = async (p, tl, generation, token = pageRenderTokens[p]) => {
   if (ocrStates.value[p] === 'loading' || tl.querySelector('span')) return
   ocrStates.value[p] = 'loading'
   try {
     const layer = await getPdfTextLayer(props.bookId, p, true)
-    if (generation !== renderGeneration || !textRefs[p] || textRefs[p] !== tl) return
+    if (generation !== renderGeneration || pageRenderTokens[p] !== token || textRefs[p] !== tl) return
     const fragment = document.createDocumentFragment()
     for (const item of layer.items || []) {
       if (!item.text || item.w <= 0 || item.h <= 0) continue
@@ -517,19 +539,21 @@ const ensureCurrentOcrLayer = () => {
   const p = page.value
   const tl = textRefs[p]
   if (props.bookId && rendered.value[p] && tl && !tl.querySelector('span') && !ocrStates.value[p]) {
-    renderOcrTextLayer(p, tl, renderGeneration)
+    renderOcrTextLayer(p, tl, renderGeneration, pageRenderTokens[p])
   }
 }
 
 const clearPage = (p) => {
   if (renderTasks[p]) { try { renderTasks[p].cancel() } catch {} delete renderTasks[p] }
   pendingRenders.delete(p)
+  delete pageRenderTokens[p]
+  delete pageRendering.value[p]
   const cv = canvasRefs[p]
   if (cv) { cv.width = 1; cv.height = 1 }
   const tl = textRefs[p]
   if (tl) tl.innerHTML = ''
   delete ocrStates.value[p]
-  rendered.value[p] = false
+  delete rendered.value[p]
 }
 
 const retryPage = async (p) => {
@@ -1013,6 +1037,7 @@ onBeforeUnmount(() => {
 .pdf-reader { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 360px; }
 .pr-page-retry { position:absolute; inset:50% auto auto 50%; transform:translate(-50%,-50%); z-index:4; padding:8px 12px; border:1px solid #e5e7eb; border-radius:8px; background:rgba(255,255,255,.94); color:#8b5a2b; box-shadow:0 1px 2px rgba(15,23,42,.08); cursor:pointer; }
 .pr-page-retry:hover { transform:translate(-50%,-52%); box-shadow:0 4px 12px rgba(15,23,42,.12); }
+.pr-render-state { position:absolute; inset:50% auto auto 50%; transform:translate(-50%,-50%); z-index:3; padding:6px 10px; border-radius:14px; background:rgba(255,255,255,.9); color:#7b5a35; font-size:11px; box-shadow:0 1px 5px rgba(15,23,42,.12); pointer-events:none; }
 .pr-toolbar {
   display: flex; align-items: center; gap: 10px; padding: 6px 8px; flex-wrap: nowrap; overflow-x:auto;
   background: var(--el-fill-color-lighter); border-radius: 8px 8px 0 0;

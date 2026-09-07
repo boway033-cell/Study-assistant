@@ -2,7 +2,7 @@
 
 设计：独立后台线程运行事件循环（与 FastAPI 主 loop 解耦）。
 - submit 可从任意线程（sync 端点线程池）安全提交
-- 长任务串行执行（FIFO 队列），避免并发解析耗尽内存
+- OCR/解析等重型本地任务串行执行；AI 研读使用独立串行队列，避免被数百页 OCR 阻塞
 - 任务状态持久化到 import_tasks 表，重启后自动恢复 pending 任务
 """
 from __future__ import annotations
@@ -21,6 +21,7 @@ from backend.app.models import ImportTask
 
 _task_registry: dict[str, "TaskRecord"] = {}
 _queue: asyncio.Queue | None = None
+_interactive_queue: asyncio.Queue | None = None
 _backend_loop: asyncio.AbstractEventLoop | None = None
 _worker_started = False
 _lock = threading.Lock()
@@ -30,6 +31,7 @@ _MAX_COMPLETED_IN_MEMORY = 128
 @dataclass
 class TaskRecord:
     id: str
+    name: str = ""
     book_id: int = 0
     status: str = "pending"  # pending/running/done/failed
     progress: float = 0.0
@@ -61,7 +63,8 @@ def _persist(record: TaskRecord) -> None:
             row = db.get(ImportTask, record.id)
             if row is None:
                 row = ImportTask(
-                    id=record.id, book_id=record.book_id, name=record.id.split("-")[0],
+                    id=record.id, book_id=record.book_id,
+                    name=record.name or record.id.split("-")[0],
                     status=record.status, progress=record.progress, stage=record.stage,
                     message=record.message, error=record.error,
                     result_json=json.dumps(record.result, ensure_ascii=False) if record.result else None,
@@ -84,18 +87,20 @@ def _persist(record: TaskRecord) -> None:
 
 def _ensure_backend() -> asyncio.AbstractEventLoop:
     """确保后台线程 + 其事件循环已启动并运行。"""
-    global _backend_loop, _queue, _worker_started
+    global _backend_loop, _queue, _interactive_queue, _worker_started
     with _lock:
         if _backend_loop is not None and not _backend_loop.is_closed():
             return _backend_loop
 
         _backend_loop = asyncio.new_event_loop()
         _queue = asyncio.Queue()
+        _interactive_queue = asyncio.Queue()
         _ready = threading.Event()
 
         def _run():
             asyncio.set_event_loop(_backend_loop)
-            _backend_loop.create_task(_worker())
+            _backend_loop.create_task(_worker(_queue))
+            _backend_loop.create_task(_worker(_interactive_queue))
             _ready.set()
             _backend_loop.run_forever()
 
@@ -106,13 +111,13 @@ def _ensure_backend() -> asyncio.AbstractEventLoop:
         return _backend_loop
 
 
-async def _worker() -> None:
-    """单协程 FIFO：一次只执行一个任务，await 完成后再取下一个（真正串行）。
+async def _worker(queue: asyncio.Queue) -> None:
+    """单队列 FIFO：每条资源通道一次只执行一个任务。
     
     失败自动重试：网络抖动/限流场景下重试 max_retries 次，每次间隔递增。
     """
     while True:
-        record: TaskRecord = await _queue.get()
+        record: TaskRecord = await queue.get()
         try:
             if record.cancel_requested or record.status == "cancelled":
                 raise TaskCancelled("任务已由用户取消")
@@ -130,7 +135,7 @@ async def _worker() -> None:
             record.error = None
             _persist(record)
         except Exception as e:  # noqa: BLE001
-            if record.retry_count < record.max_retries:
+            if record.retry_count < record.max_retries and _should_retry(e):
                 # 自动重试：间隔递增（3s, 6s, 9s...）
                 record.retry_count += 1
                 record.status = "pending"
@@ -139,7 +144,7 @@ async def _worker() -> None:
                 import asyncio as _aio
                 await _aio.sleep(3 * record.retry_count)
                 # 重新入队
-                await _queue.put(record)
+                await queue.put(record)
             else:
                 record.status = "failed"
                 record.error = str(e)
@@ -148,18 +153,42 @@ async def _worker() -> None:
             if record.status in ("done", "failed", "cancelled"):
                 record._coro = None
                 _release_completed_tasks()
-            _queue.task_done()
+            queue.task_done()
+
+
+_RESOURCE_HEAVY_TASKS = {"import", "reimport", "toc-rebuild", "deck_render"}
+
+
+def _queue_for(name: str) -> asyncio.Queue:
+    """隔离本地重型解析与交互式 AI，避免超长 OCR 阻塞研究和写作。"""
+    queue = _queue if name in _RESOURCE_HEAVY_TASKS else _interactive_queue
+    if queue is None:  # pragma: no cover - _ensure_backend 总会先初始化
+        raise RuntimeError("任务队列尚未初始化")
+    return queue
+
+
+def _should_retry(exc: Exception) -> bool:
+    """仅重试短暂的远程调用故障；解析错误和 OCR 看门狗不能在后台盲目重放。"""
+    if exc.__class__.__name__ in {"OCRPageTimeout", "TaskCancelled", "ParseError", "ValueError"}:
+        return False
+    text = str(exc).lower()
+    return any(token in text for token in (
+        "timeout", "temporarily", "connection", "429", "rate limit", "503", "502",
+    ))
 
 
 def submit(name: str, coro_factory: Callable[[TaskRecord], Awaitable[Any]],
            book_id: int = 0) -> TaskRecord:
-    """提交任务（线程安全）。任务入队后由后台 worker 串行执行（FIFO），不并发。"""
+    """提交任务（线程安全）；同一资源通道内串行，不同通道可并行。"""
     loop = _ensure_backend()
-    record = TaskRecord(id=f"{name}-{uuid.uuid4().hex[:8]}", book_id=book_id, _coro=coro_factory)
+    record = TaskRecord(
+        id=f"{name}-{uuid.uuid4().hex[:8]}", name=name,
+        book_id=book_id, _coro=coro_factory,
+    )
     _task_registry[record.id] = record
     _persist(record)
     # 入队后由 _worker 串行 await，避免多任务并发解析/并发 AI 请求
-    asyncio.run_coroutine_threadsafe(_queue.put(record), loop)
+    asyncio.run_coroutine_threadsafe(_queue_for(name).put(record), loop)
     return record
 
 
@@ -176,7 +205,8 @@ def get_task(task_id: str) -> TaskRecord | None:
             if row is None:
                 return None
             return TaskRecord(
-                id=row.id, book_id=row.book_id, status=row.status,
+                id=row.id, name=row.name or row.id.split("-")[0],
+                book_id=row.book_id, status=row.status,
                 progress=row.progress, stage=row.stage, message=row.message,
                 error=row.error, result=json.loads(row.result_json) if row.result_json else None,
             )
@@ -244,7 +274,14 @@ _last_persist_time: float = 0.0
 _PERSIST_INTERVAL = 5.0  # 每 5 秒最多持久化一次进度（避免频繁 DB 写入）
 
 
-def update_progress(record: TaskRecord, progress: float, stage: str = "", message: str = "") -> None:
+def update_progress(
+    record: TaskRecord,
+    progress: float,
+    stage: str = "",
+    message: str = "",
+    *,
+    force: bool = False,
+) -> None:
     if record.cancel_requested:
         raise TaskCancelled("任务已取消；已完成的页面缓存会在下次解析时复用")
     record.progress = progress
@@ -255,7 +292,7 @@ def update_progress(record: TaskRecord, progress: float, stage: str = "", messag
     # 定期持久化进度到 DB（避免中断后丢失进度信息）
     global _last_persist_time
     now = _time.time()
-    if now - _last_persist_time >= _PERSIST_INTERVAL:
+    if force or now - _last_persist_time >= _PERSIST_INTERVAL:
         _last_persist_time = now
         _persist(record)
 
@@ -289,12 +326,12 @@ def recover_pending_tasks() -> list[str]:
                 # 重新入队
                 from backend.app.worker.import_task import run_import
                 record = TaskRecord(
-                    id=row.id, book_id=row.book_id, status="pending",
+                    id=row.id, name=row.name or "import", book_id=row.book_id, status="pending",
                     _coro=lambda rec, bid=row.book_id: run_import(rec, bid),
                 )
                 _task_registry[row.id] = record
                 loop = _ensure_backend()
-                asyncio.run_coroutine_threadsafe(_queue.put(record), loop)
+                asyncio.run_coroutine_threadsafe(_queue_for(record.name).put(record), loop)
                 recovered.append(row.id)
             db.commit()
         finally:

@@ -67,6 +67,11 @@ class Settings:
         self.layout_backend: str = _env("LAYOUT_BACKEND", "font").lower()
         self.ocr_page_threshold: int = int(_env("OCR_PAGE_THRESHOLD", "30"))
         self.ocr_page_timeout_seconds: int = max(15, int(_env("OCR_PAGE_TIMEOUT_SECONDS", "180")))
+        self.ocr_render_dpi: int = max(96, min(220, int(_env("OCR_RENDER_DPI", "144"))))
+        self.ocr_large_document_dpi: int = max(
+            96, min(self.ocr_render_dpi, int(_env("OCR_LARGE_DOCUMENT_DPI", "120")))
+        )
+        self.ocr_use_angle_cls: bool = _env("OCR_USE_ANGLE_CLS", "false").lower() == "true"
 
         self._ensure_dirs()
 

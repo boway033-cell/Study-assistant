@@ -9,7 +9,9 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from pathlib import Path
 
 from sqlalchemy import select
@@ -86,14 +88,24 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                 # OCR 逐页回调：页级进度细化（0.15 → 0.30），支持断点续跑。
                 completed = 0
                 weak_total = len(weak_pages)
+                fresh_completed = 0
+                ocr_started_at = time.monotonic()
 
                 def _ocr_progress(page_no: int, total: int, cached: bool) -> None:
-                    nonlocal completed
+                    nonlocal completed, fresh_completed
                     completed += 1
+                    if not cached:
+                        fresh_completed += 1
                     frac = 0.15 + 0.15 * (completed / max(weak_total, 1))
                     tag = "（命中缓存）" if cached else ""
+                    eta = ""
+                    if fresh_completed:
+                        per_page = (time.monotonic() - ocr_started_at) / fresh_completed
+                        remaining_seconds = int(per_page * max(0, weak_total - completed))
+                        if remaining_seconds >= 60:
+                            eta = f" · 预计剩余约 {max(1, round(remaining_seconds / 60))} 分钟"
                     update_progress(record, min(frac, 0.30), "ocr",
-                                    f"OCR 识别页 {completed}/{weak_total}（PDF 第 {page_no} 页）{tag}")
+                                    f"OCR {completed}/{weak_total} · PDF 第 {page_no} 页{tag}{eta}")
 
                 def _ocr_checkpoint(page_no: int, phase: str) -> None:
                     # update_progress is also the cooperative cancellation checkpoint.
@@ -102,7 +114,8 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                                     f"OCR 第 {page_no} 页：{label}（单页 {settings.ocr_page_timeout_seconds} 秒无结果将停止）")
 
                 try:
-                    result.pages = ocr_pdf(
+                    result.pages = await asyncio.to_thread(
+                        ocr_pdf,
                         file_path,
                         on_progress=_ocr_progress,
                         page_numbers=weak_pages,

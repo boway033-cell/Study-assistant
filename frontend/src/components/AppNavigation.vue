@@ -27,7 +27,7 @@
       </el-menu-item>
       <el-menu-item index="/writing" class="journey-item">
         <el-icon><EditPen /></el-icon>
-        <template #title><span class="journey-copy"><b><i>03</i> 写作工作台</b><small>从已选知识对象取材</small></span></template>
+        <template #title><span class="journey-copy"><b><i>03</i> 写作工作台</b><small>研究写作 · 公文写作</small></span></template>
       </el-menu-item>
       <el-menu-item index="/literature-workbench" class="journey-item">
         <el-icon><Tickets /></el-icon>

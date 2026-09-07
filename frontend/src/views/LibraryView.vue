@@ -2,12 +2,12 @@
   <div class="library-page study-page" :class="{ 'is-compact': uiPreferences.libraryDensity === 'compact' }">
     <StudyCommandBar compact class="library-commandbar" :title="currentShelfName">
       <div class="library-summary" aria-label="知识库概况">
-        <div><strong>{{ libraryTotal }}</strong><span>全部资料</span></div>
-        <div><strong>{{ readingCount }}</strong><span>阅读中</span></div>
-        <div><strong>{{ attentionCount }}</strong><span>待处理</span></div>
+        <div><strong>{{ libraryStats.total }}</strong><span>全部资料</span></div>
+        <div><strong>{{ libraryStats.reading }}</strong><span>阅读中</span></div>
+        <div><strong>{{ libraryStats.attention }}</strong><span>待处理</span></div>
       </div>
       <template #actions><div class="library-primary-actions">
-        <KeycapCard compact :variant="searchPanelOpen ? 'primary' : 'warm'" :aria-expanded="searchPanelOpen" @click="searchPanelOpen = !searchPanelOpen">全文检索</KeycapCard>
+        <KeycapCard compact :variant="searchPanelOpen ? 'primary' : 'warm'" aria-haspopup="dialog" :aria-expanded="searchPanelOpen" @click="searchPanelOpen = true">全文检索</KeycapCard>
         <el-upload :show-file-list="false" :auto-upload="false" :on-change="handleBatchSelect" multiple accept=".pdf,.docx,.pptx" :disabled="uploading">
           <KeycapCard compact variant="warm" :loading="uploading">批量导入</KeycapCard>
         </el-upload>
@@ -21,14 +21,14 @@
     <div ref="libraryWorkspaceEl" class="library-workspace">
       <aside id="library-shelves" class="bookshelf-panel" :class="{ 'mobile-open': shelfPanelOpen }">
         <div class="bookshelf-section-label">智能视图</div>
-        <button class="shelf-static" :class="{active:selectedShelf==='all'}" @click="chooseShelf('all')"><span>全部资料</span><b>{{ libraryTotal }}</b></button>
-        <button class="shelf-static" :class="{active:selectedShelf==='reading'}" @click="chooseShelf('reading')"><span>阅读中</span><b>{{ readingCount }}</b></button>
-        <button class="shelf-static" :class="{active:selectedShelf==='favorite'}" @click="chooseShelf('favorite')"><span>我的收藏</span><b>{{ favoriteCount }}</b></button>
-        <button class="shelf-static" :class="{active:selectedShelf==='attention'}" @click="chooseShelf('attention')"><span>待处理</span><b>{{ attentionCount }}</b></button>
-        <button class="shelf-static" :class="{active:selectedShelf==='unfiled'}" @click="chooseShelf('unfiled')"><span>未归档</span><b>{{ unfiledCount }}</b></button>
+        <button class="shelf-static" :class="{active:selectedShelf==='all'}" @click="chooseShelf('all')"><span>全部资料</span><b>{{ libraryStats.total }}</b></button>
+        <button class="shelf-static" :class="{active:selectedShelf==='reading'}" @click="chooseShelf('reading')"><span>阅读中</span><b>{{ libraryStats.reading }}</b></button>
+        <button class="shelf-static" :class="{active:selectedShelf==='favorite'}" @click="chooseShelf('favorite')"><span>我的收藏</span><b>{{ libraryStats.favorite }}</b></button>
+        <button class="shelf-static" :class="{active:selectedShelf==='attention'}" @click="chooseShelf('attention')"><span>待处理</span><b>{{ libraryStats.attention }}</b></button>
+        <button class="shelf-static" :class="{active:selectedShelf==='unfiled'}" @click="chooseShelf('unfiled')"><span>未归档</span><b>{{ libraryStats.unfiled }}</b></button>
         <div class="bookshelf-head"><div><b>我的书架</b><small>按课程、主题或项目归档</small></div><el-button class="create-shelf-head" plain size="small" @click="createBookshelf(null)">＋ 新建</el-button></div>
         <el-tree v-if="shelves.length" :data="shelfTree" node-key="id" default-expand-all :expand-on-click-node="false" class="shelf-tree">
-          <template #default="{data}"><div class="shelf-node" :class="{active:selectedShelf===data.id}" @click.stop="chooseShelf(data.id)"><span><i :style="{background:data.color}"></i>{{ data.name }}</span><div><small>{{ data.book_count }}</small><el-dropdown trigger="click" @command="cmd=>shelfCommand(cmd,data)"><el-button text size="small">···</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="child">新建子书架</el-dropdown-item><el-dropdown-item command="rename">重命名</el-dropdown-item><el-dropdown-item command="delete" divided>删除书架</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div></div></template>
+          <template #default="{data}"><div class="shelf-node" :class="{active:selectedShelf===data.id}" @click.stop="chooseShelf(data.id)"><span><i :style="{background:data.color}"></i>{{ data.name }}</span><div><small>{{ data.book_count }}</small><el-dropdown trigger="click" @command="cmd=>shelfCommand(cmd,data)"><el-button class="shelf-menu-button" text circle size="small" :aria-label="`${data.name}的书架操作`" title="书架操作"><el-icon><MoreFilled /></el-icon></el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="child">新建子书架</el-dropdown-item><el-dropdown-item command="rename">重命名</el-dropdown-item><el-dropdown-item command="delete" divided>删除书架</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div></div></template>
         </el-tree>
         <div v-else class="shelf-empty"><span>还没有自建书架</span><small>按主题、课程或项目整理文献</small><el-button plain size="small" @click="createBookshelf(null)">建立第一个书架</el-button></div>
       </aside>
@@ -114,19 +114,21 @@
               </div>
             </StudyListRow>
             <StudyEmptyState v-if="!filteredBooks.length && !loading" compact :title="activeFilterCount ? '没有符合当前筛选的资料' : '当前范围还没有资料'" :description="activeFilterCount ? '清除部分筛选条件，或切换到其他书架。' : '导入 PDF、Word 或 PowerPoint 后会在这里建立可检索档案。'"><template #actions><el-button v-if="activeFilterCount" type="primary" plain @click="clearLibraryFilters">清除筛选</el-button></template></StudyEmptyState>
-            <el-button v-if="books.length < libraryTotal" class="library-load-more" :loading="loading" @click="loadBooks(false)">加载更多（{{ books.length }}/{{ libraryTotal }}）</el-button>
+            <el-button v-if="books.length < filteredTotal" class="library-load-more" :loading="loading" @click="loadBooks(false)">加载更多（{{ books.length }}/{{ filteredTotal }}）</el-button>
           </div>
         </GlowBorderCard>
 
-        <GlowBorderCard v-show="searchPanelOpen" class="fulltext-card">
-          <template #header>全文搜索（跨资料混合检索）</template>
+        <el-dialog v-model="searchPanelOpen" title="全文检索" class="fulltext-dialog" width="min(860px, calc(100vw - 24px))" top="6vh" append-to-body :close-on-click-modal="false" @opened="searchInput?.focus()">
+          <div class="fulltext-content">
           <div class="search-filters">
             <el-select v-model="searchCategory" placeholder="全部分类" clearable size="small" style="width: 120px">
               <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
             </el-select>
           </div>
           <el-input
+            ref="searchInput"
             v-model="searchQ"
+            aria-label="全文检索关键词"
             placeholder="输入关键词，跨全部资料搜索（向量+全文+子串三路融合）"
             clearable
             @keyup.enter="doSearch()"
@@ -134,7 +136,7 @@
             style="margin-top: 8px"
           >
             <template #append>
-              <el-button @click="doSearch()">搜索</el-button>
+              <el-button :loading="searching" @click="doSearch()">搜索</el-button>
             </template>
           </el-input>
 
@@ -153,7 +155,8 @@
               <div class="result-snippet" v-html="sanitizeHtml(r.snippet)" />
             </el-card>
           </div>
-        </GlowBorderCard>
+          </div>
+        </el-dialog>
       </main>
 
       <StudyInspector class="library-inspector" title="资料检查器" :closable="!!currentBook" @close="currentBook=null">
@@ -263,6 +266,7 @@
 import { ref, shallowRef, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { MoreFilled } from '@element-plus/icons-vue'
 import { listBooks, uploadBook, uploadBookBatch, deleteBook, getBook, searchBooks, classifyAllBooks, setBookCategory, deepAnalyze, updateArchiveProfile,
   listShelves, createShelf, updateShelf, deleteShelf as deleteShelfApi, putShelfBooks, reorderBooks } from '../api'
 import { sanitizeHtml } from '../utils/markdown'
@@ -278,7 +282,8 @@ import { uiPreferences } from '../stores/uiPreferences'
 const router = useRouter()
 const route = useRoute()
 const books = ref([])
-const libraryTotal = ref(0)
+const filteredTotal = ref(0)
+const libraryStats = ref({ total: 0, reading: 0, favorite: 0, attention: 0, unfiled: 0 })
 const libraryPage = ref(1)
 const loading = ref(false)
 const uploading = ref(false)
@@ -304,6 +309,7 @@ const targetShelfId = ref(null)
 const currentBook = ref(null)
 const detailVisible = ref(false)
 const searchPanelOpen = ref(false)
+const searchInput = ref(null)
 const compactLibrary = ref(false)
 const libraryWorkspaceEl = ref(null)
 const shelfPanelOpen = ref(false)
@@ -320,10 +326,6 @@ const shelfTree = computed(() => {
   }
   return roots
 })
-const readingCount = computed(() => books.value.filter(book => book.reading_status === 'reading').length)
-const favoriteCount = computed(() => books.value.filter(book => book.favorite).length)
-const attentionCount = computed(() => books.value.filter(book => ['failed', 'needs_ocr', 'parsing'].includes(book.status)).length)
-const unfiledCount = computed(() => books.value.filter(book => !book.shelf_ids?.length).length)
 const chapterPreview = computed(() => chapterTree.value.slice(0, 12).map(({ children, ...chapter }) => chapter))
 const filteredBooks = computed(() => {
   const q = libraryQ.value.trim().toLowerCase()
@@ -399,7 +401,8 @@ const loadBooks = async (reset = true) => {
     })
     books.value = reset ? resp.items : [...books.value, ...resp.items]
     libraryPage.value = page
-    libraryTotal.value = resp.total
+    filteredTotal.value = resp.total
+    if (resp.stats) libraryStats.value = resp.stats
     // 提取唯一分类列表
     const cats = [...new Set(resp.items.map((b) => b.category).filter(Boolean))]
     categories.value = cats
@@ -745,6 +748,8 @@ onBeforeUnmount(() => {
 .shelf-node i { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; }
 .shelf-node > div { display: flex; align-items: center; flex: none; }
 .shelf-node small { color: #978a78; }
+.shelf-menu-button { margin-left: 2px; color: #756a5d; }
+.shelf-menu-button:hover, .shelf-menu-button:focus-visible { color: #6f4721; background: #e4d8c7; }
 .shelf-empty { display: flex; align-items: center; flex-direction: column; margin-top: 12px; padding: 16px 8px; border: 1px dashed #d8c9b5; border-radius: 10px; color: #776b5d; background: rgba(255,255,255,.28); text-align: center; }
 .shelf-empty small { margin: 4px 0 11px; color: #9a8e7f; font-size: 10px; }
 .mobile-shelf-toggle { display: none; width: 100%; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; padding: 9px 11px; border: 1px solid var(--study-card-border); background: var(--study-surface-paper); color: var(--study-text-primary); font-size: var(--study-font-size-sm); }
@@ -809,7 +814,8 @@ onBeforeUnmount(() => {
 .paper-actions :deep(.keycap-card) { min-width: 56px; }
 .paper-actions :deep(.el-dropdown) { display: inline-flex; flex: none; }
 .library-load-more { width: 100%; margin-top: 10px; }
-.fulltext-card { margin-top: 12px; }
+.fulltext-content { max-height: 72vh; overflow-y: auto; overflow-x: hidden; padding: 2px; }
+.fulltext-content .result-meta .el-tag { max-width: 100%; height: auto; white-space: normal; overflow-wrap: anywhere; }
 .search-filters, .result-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .result-item { margin-top: 8px; }
 .result-meta { margin-bottom: 4px; }

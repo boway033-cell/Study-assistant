@@ -63,8 +63,15 @@
           <label>用户补充维度（可选）
             <el-input v-model="framework" type="textarea" :rows="2" maxlength="400" placeholder="留空时由 AI 根据材料自主选择；也可补充必须比较的概念、案例或方法" />
           </label>
-          <el-button type="primary" size="large" :loading="loading" @click="generate">{{ loading ? 'AI 正在研读…' : '生成研究报告' }}</el-button>
-          <div v-if="loading" class="progress"><el-progress :percentage="progress" :indeterminate="progress===0" /><span>{{ stage }}</span></div>
+          <el-button type="primary" size="large" :disabled="loading" @click="generate">{{ loading ? '研读任务已在后台运行' : '生成研究报告' }}</el-button>
+          <section v-if="loading" class="task-monitor" aria-live="polite">
+            <header><div><b>研读进度</b><small>{{ activeTaskId }}</small></div><el-button link type="danger" @click="cancelActiveTask">停止任务</el-button></header>
+            <el-progress :percentage="progress" :indeterminate="progress===0" :stroke-width="8" />
+            <div class="task-stages">
+              <span v-for="(item,index) in taskStages" :key="item.key" :class="{active:index===currentStageIndex,done:index<currentStageIndex}">{{ index < currentStageIndex ? '✓' : index + 1 }} {{ item.label }}</span>
+            </div>
+            <p>{{ stage }}</p><small>页面关闭或连接短暂中断不会丢失任务；返回本页会自动恢复进度与结果。</small>
+          </section>
         </div>
 
         <section v-if="hasPlan" class="research-plan">
@@ -116,12 +123,12 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import KnowledgeScopeSelector from '../components/KnowledgeScopeSelector.vue'
 import { knowledgeBooks, knowledgeBookIds, loadKnowledgeBooks } from '../stores/knowledgeScope'
-import { getBook, subscribeTask, studyOverview, studyReports, getStudyReport, listKnowledgeRecords, depositStudyReport, updateStudyReportClaims } from '../api'
+import { cancelTask, getBook, subscribeTask, studyOverview, studyReports, getStudyReport, listKnowledgeRecords, depositStudyReport, updateStudyReportClaims } from '../api'
 import { renderMarkdown } from '../utils/markdown'
 import { notifyTaskSubmitted } from '../stores/taskCenter'
 
@@ -133,16 +140,32 @@ const researchModes = [
   { value: 'gap', label: '研究缺口探索', description: '梳理共识与分歧，找出材料尚未回答的问题和下一步研究方向。' },
 ]
 const router = useRouter()
+const route = useRoute()
 const materialBooks = ref([]), notes = ref([]), selectedChapterIds = ref([]), selectedNoteIds = ref([])
 const sourceQuery = ref(''), focus = ref(''), framework = ref(''), content = ref('')
 const researchMode = ref('adaptive'), reasoningDepth = ref('deep')
 const writingStyle = ref('analytical_essay'), extensionLevel = ref('exploratory'), targetLength = ref(3000)
 const loading = ref(false), progress = ref(0), stage = ref(''), reports = ref([]), activeReport = ref(null)
+const activeTaskId = ref('')
+const livePlan = ref({})
+const taskStages = [
+  { key: 'overview', label: '汇总材料' }, { key: 'research-plan', label: '规划问题' },
+  { key: 'evidence', label: '检索证据' }, { key: 'synthesis', label: '综合写作' },
+  { key: 'done', label: '保存报告' },
+]
+let taskAbortController = null
+const ACTIVE_TASK_KEY = 'sa-study-active-task'
 const depositing = ref(false)
 const editingClaims=ref(false),savingClaims=ref(false),claimDraft=ref([])
 const immersive = ref(false)
 const activeMode = computed(() => researchModes.find(item => item.value === researchMode.value) || researchModes[0])
-const activePlan = computed(() => activeReport.value?.research_plan || {})
+const activePlan = computed(() => activeReport.value?.research_plan || livePlan.value || {})
+const currentStageIndex = computed(() => {
+  if (progress.value >= 100) return taskStages.length - 1
+  const index = taskStages.findIndex(item => item.key === stageKey.value)
+  return index < 0 ? 0 : index
+})
+const stageKey = ref('overview')
 const hasPlan = computed(() => ['subquestions', 'analysis_axes', 'evidence_needs'].some(key => activePlan.value[key]?.length))
 const scopedBooks = computed(() => knowledgeBooks.value.filter(book => knowledgeBookIds.value.includes(book.id)))
 const sameScope = (ids = []) => { const a = [...ids].sort((x,y) => x-y), b = [...knowledgeBookIds.value].sort((x,y) => x-y); return a.length === b.length && a.every((id,i) => id === b[i]) }
@@ -154,7 +177,61 @@ const flatten = (nodes, depth = 0, out = []) => { for (const node of nodes) { ou
 const loadMaterials = async () => { const books = []; for (const book of scopedBooks.value) { try { const detail = await getBook(book.id); books.push({ ...book, chapters: flatten(detail.chapters || []) }) } catch { books.push({ ...book, chapters: [] }) } } materialBooks.value = books; try { const result = await listKnowledgeRecords({ book_ids: knowledgeBookIds.value, record_types: ['note'] }); notes.value = result.items || [] } catch { notes.value = [] } }
 const loadReports = async () => { try { const result=await studyReports(1,50); reports.value = result.items || [] } catch (error) { ElMessage.error(error.message) } }
 const openReport = async report => { try { const full=report.content!==undefined?report:await getStudyReport(report.id); editingClaims.value=false;claimDraft.value=[]; activeReport.value = full; content.value = full.content; focus.value = full.focus || focus.value; framework.value = full.framework || framework.value; researchMode.value = full.research_mode || full.selection?.research_mode || 'adaptive'; reasoningDepth.value = full.reasoning_depth || full.selection?.reasoning_depth || 'standard'; writingStyle.value=full.writing_style||full.selection?.writing_style||'analytical_essay';extensionLevel.value=full.extension_level||full.selection?.extension_level||'exploratory';targetLength.value=Number(full.target_length||full.selection?.target_length)||3000; selectedChapterIds.value = full.selection?.chapter_ids || []; selectedNoteIds.value = full.selection?.note_ids || [] } catch(error){ ElMessage.error(`无法打开研究报告：${error.message}`) } }
-const generate = async () => { if (!focus.value.trim()) return ElMessage.warning('请先写明研究问题'); loading.value = true; progress.value = 0; stage.value = '正在提交到全局任务中心'; try { const response = await studyOverview({ book_ids: knowledgeBookIds.value, chapter_ids: selectedChapterIds.value, note_ids: selectedNoteIds.value, focus: focus.value.trim(), framework: framework.value.trim(), research_mode: researchMode.value, reasoning_depth: reasoningDepth.value, writing_style:writingStyle.value, extension_level:extensionLevel.value, target_length:targetLength.value }); notifyTaskSubmitted(); const task=await subscribeTask(response.task_id,next=>{progress.value=Math.round((next.progress||0)*100);stage.value=next.message||next.stage||'处理中'}); if(task.status==='failed'||task.status==='cancelled')throw new Error(task.error||task.message||'任务未完成'); await loadReports(); const latest=reports.value.find(report=>report.id===task.result?.report_id)||scopedReports.value[0];if(latest)await openReport(latest);ElMessage.success('研究报告、研究路径与主张审计已完成') } catch (error) { ElMessage.error(`生成失败：${error.message}`) } finally { loading.value = false } }
+const followStudyTask = async taskId => {
+  taskAbortController?.abort()
+  const controller = new AbortController()
+  taskAbortController = controller
+  activeTaskId.value = taskId
+  localStorage.setItem(ACTIVE_TASK_KEY, taskId)
+  loading.value = true
+  try {
+    const task = await subscribeTask(taskId, next => {
+      progress.value = Math.round((next.progress || 0) * 100)
+      stage.value = next.message || next.stage || '处理中'
+      stageKey.value = next.stage || stageKey.value
+      if (next.result?.research_plan) livePlan.value = next.result.research_plan
+    }, { signal: controller.signal })
+    if (task.status === 'failed' || task.status === 'cancelled') throw new Error(task.error || task.message || '任务未完成')
+    progress.value = 100
+    stageKey.value = 'done'
+    await loadReports()
+    const latest = reports.value.find(report => report.id === task.result?.report_id) || scopedReports.value[0]
+    if (latest) await openReport(latest)
+    ElMessage.success('研究报告、研究路径与主张审计已完成')
+  } catch (error) {
+    if (error?.name === 'AbortError') return
+    ElMessage.error(`生成失败：${error.message}`)
+  } finally {
+    if (taskAbortController === controller && !controller.signal.aborted) {
+      localStorage.removeItem(ACTIVE_TASK_KEY)
+      loading.value = false
+      activeTaskId.value = ''
+    }
+  }
+}
+const generate = async () => {
+  if (!focus.value.trim()) return ElMessage.warning('请先写明研究问题')
+  loading.value = true
+  progress.value = 0
+  stageKey.value = 'overview'
+  stage.value = '正在提交到全局任务中心'
+  livePlan.value = {}
+  try {
+    const response = await studyOverview({ book_ids: knowledgeBookIds.value, chapter_ids: selectedChapterIds.value, note_ids: selectedNoteIds.value, focus: focus.value.trim(), framework: framework.value.trim(), research_mode: researchMode.value, reasoning_depth: reasoningDepth.value, writing_style:writingStyle.value, extension_level:extensionLevel.value, target_length:targetLength.value })
+    notifyTaskSubmitted()
+    followStudyTask(response.task_id)
+  } catch (error) {
+    loading.value = false
+    ElMessage.error(`无法提交研读任务：${error.message}`)
+  }
+}
+const cancelActiveTask = async () => {
+  if (!activeTaskId.value) return
+  try {
+    await cancelTask(activeTaskId.value)
+    stage.value = '正在安全停止任务…'
+  } catch (error) { ElMessage.error(`无法停止任务：${error.message}`) }
+}
 const copyReport = async () => { try { await navigator.clipboard.writeText(content.value); ElMessage.success('Markdown 已复制') } catch { ElMessage.warning('请手动复制') } }
 const depositReview = async () => { if(!activeReport.value?.id)return ElMessage.warning('请先生成或打开报告');depositing.value=true;try{const result=await depositStudyReport(activeReport.value.id,{include_report_note:true,include_claim_cards:true});await loadMaterials();ElMessage.success(`已沉淀审查笔记和 ${result.claim_count} 张证据卡；重复保存不会产生副本`)}catch(error){ElMessage.error(error.message)}finally{depositing.value=false} }
 const beginClaimReview=()=>{claimDraft.value=JSON.parse(JSON.stringify(activeReport.value?.claims||[]));editingClaims.value=true}
@@ -170,11 +247,23 @@ const qualityLabel = quality => ({ high:'高质量', moderate:'中等质量', lo
 const relationCount = relation => activeReport.value?.evidence_summary?.relations?.[relation] || 0
 const resetScope = async () => { activeReport.value = null; content.value = ''; selectedChapterIds.value = []; selectedNoteIds.value = []; await loadMaterials() }
 watch(knowledgeBookIds, resetScope, { deep: true })
-onMounted(async () => { await loadKnowledgeBooks(); await Promise.all([loadMaterials(), loadReports()]) })
+onMounted(async () => {
+  await loadKnowledgeBooks()
+  await Promise.all([loadMaterials(), loadReports()])
+  const reportId = Number(route.query.reportId)
+  if (Number.isInteger(reportId) && reportId > 0) {
+    const report = reports.value.find(item => item.id === reportId) || { id: reportId }
+    await openReport(report)
+  }
+  const taskId = String(route.query.taskId || localStorage.getItem(ACTIVE_TASK_KEY) || '')
+  if (taskId) followStudyTask(taskId)
+})
+onBeforeUnmount(() => taskAbortController?.abort())
 </script>
 
 <style scoped>
 .report-workspace{max-width:1560px}.scope-required{display:flex;flex-direction:column;gap:6px;padding:40px;border:1px dashed #d8c7b0;border-radius:12px;background:#f7f2e9;text-align:center}.workspace-grid{display:grid;grid-template-columns:280px minmax(520px,1fr) 320px;gap:10px;align-items:start}.panel{overflow:hidden;border:1px solid #e5e7eb;border-radius:11px;background:#fffdf9;box-shadow:0 1px 2px rgba(15,23,42,.06)}.panel>header{display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid #ece4d8}.panel>header>div,.source-pane header,.audit-pane header{display:flex;flex-direction:column}.panel header small{color:var(--el-text-color-secondary);font-size:11px}.source-pane>.el-input{margin:10px;width:calc(100% - 20px)}.source-pane section,.audit-pane>section{padding:0 12px 12px;border-top:1px solid #eee7dc}.panel h3{margin:12px 0 8px;color:#786b5b;font-size:12px}.source-book>b{display:block;margin:9px 0 4px;font-size:13px}.source-pane :deep(.el-checkbox-group){display:grid;gap:2px}.source-pane :deep(.el-checkbox){height:auto;margin:0;padding:4px 0;white-space:normal}.source-pane :deep(.el-checkbox__label){display:flex;min-width:0;flex-direction:column;font-size:12px}.source-pane :deep(.el-checkbox__label small){color:#988b7b}.report-pane{min-height:700px}.research-brief{display:grid;gap:10px;padding:14px;background:#f8f3ea}.method-row{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px}.research-brief label{display:grid;gap:5px;color:#675d50;font-size:12px;font-weight:700}.method-hint{margin:0;padding:8px 10px;border-left:2px solid #b98a58;background:rgba(255,255,255,.55);color:#75695c;font-size:11px;line-height:1.6}.progress span{font-size:11px;color:#7b7165}.research-plan{margin:14px;border:1px solid #e7ddcf;border-radius:9px;background:#fffcf7}.research-plan>header{display:flex;align-items:center;justify-content:space-between;padding:11px 12px;border-bottom:1px solid #eee5d9}.research-plan>header div{display:flex;flex-direction:column}.research-plan>header small{color:#8b7f71;font-size:10px}.plan-columns{display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:10px;padding:0 12px 10px}.plan-columns ol,.plan-columns ul,.open-questions ul{margin:0;padding-left:18px;color:#5e554b;font-size:11px;line-height:1.65}.report-content{max-height:calc(100vh - 430px);min-height:300px;overflow-y:auto;padding:18px 24px;line-height:1.9}.output-actions{display:flex;justify-content:flex-end;gap:7px;padding:12px;border-top:1px solid #ece4d8}.source-summary{display:grid;gap:5px}.source-summary button,.history button{padding:7px;border:0;border-radius:7px;background:#f7f1e7;color:#82582e;cursor:pointer;text-align:left;transition:transform .15s ease,background-color .15s ease}.source-summary button:hover,.history button:hover,.source-links button:hover{transform:translateY(-1px);background:#f0e5d5}.claim-card{margin-bottom:8px;padding:9px;border:1px solid #ece3d7;border-radius:8px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.claim-meta{display:flex;align-items:center;gap:7px}.claim-meta span,.claim-meta small{font-size:10px}.claim-meta span:first-child{font-weight:700}.claim-meta span.supported{color:#327052}.claim-meta span.partial{color:#8b6a20}.claim-meta span.needs_review{color:#b5661f}.claim-meta span.unsupported{color:#ad4242}.claim-meta small{margin-left:auto;color:#948779}.claim-card p{margin:7px 0;font-size:12px;line-height:1.55}.claim-card em{display:block;color:#817569;font-size:11px;font-style:normal;line-height:1.5}.claim-card .counterpoint{margin-top:4px;color:#8b5f46}.source-links{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}.source-links button{padding:2px 5px;border:0;border-radius:4px;background:#f5eee3;color:#8a5d31;cursor:pointer;font-size:9px;transition:transform .15s ease,background-color .15s ease}.source-links small{color:#a39688;font-size:10px}.history{display:grid;gap:5px}.history button{display:flex;flex-direction:column}.history button.active{outline:1px solid #b98a58}.history small{overflow:hidden;color:#82776a;text-overflow:ellipsis;white-space:nowrap}.open-questions li+li{margin-top:4px}@media(max-width:1240px){.workspace-grid{grid-template-columns:250px minmax(480px,1fr)}.audit-pane{grid-column:1/-1}}@media(max-width:780px){.workspace-grid{grid-template-columns:1fr}.audit-pane{grid-column:auto}.method-row,.plan-columns{grid-template-columns:1fr}.output-actions{flex-wrap:wrap;justify-content:flex-start}}
 .evidence-summary>div{display:grid;grid-template-columns:1fr 1fr;gap:5px}.evidence-summary span{display:flex;justify-content:space-between;padding:6px 7px;border-radius:6px;background:#f7f1e7;color:#786b5b;font-size:11px}.claim-review-actions{display:flex!important;align-items:center;flex-direction:row!important}.claim-card.editing{display:grid;gap:7px}.claim-edit-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}.open-questions li{display:flex;flex-direction:column}.open-questions li small{margin-top:3px;color:#8b7460}
 .report-head-actions{display:flex;gap:7px}.immersive-report{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:48px;width:min(100%,1280px);margin:0 auto;padding:10px 8px 72px}.immersive-report>main{min-width:0}.immersive-kicker{margin-bottom:20px;color:#8d7358;font-size:10px;letter-spacing:1.5px}.immersive-report>main>.markdown-body{width:min(100%,76ch);font-family:var(--study-font-reading);font-size:17px;line-height:1.95}.immersive-report>aside{position:sticky;top:0;align-self:start;padding-left:22px;border-left:1px solid var(--study-card-border)}.immersive-report>aside h2{margin-bottom:12px;font-size:16px}.immersive-counts{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:14px}.immersive-counts span{display:flex;justify-content:space-between;padding:7px;background:var(--study-surface-muted);font-size:11px}.immersive-report>aside article{display:flex;flex-direction:column;padding:10px 0;border-top:1px solid var(--study-card-border)}.immersive-report>aside article b{font-family:var(--study-font-reading);font-size:12px;line-height:1.55}.immersive-report>aside article small{margin-top:5px;color:var(--study-text-secondary)}.note-reader-actions{display:flex;justify-content:flex-end;gap:8px}@media(max-width:840px){.immersive-report{grid-template-columns:1fr}.immersive-report>aside{position:static;padding-left:0;border-top:1px solid var(--study-card-border);border-left:0}.immersive-report>main>.markdown-body{font-size:16px}}
+.task-monitor{display:grid;gap:9px;padding:12px;border:1px solid #dfcfb9;border-radius:9px;background:#fffaf1}.task-monitor header{display:flex;align-items:center;justify-content:space-between}.task-monitor header div{display:flex;min-width:0;flex-direction:column}.task-monitor header small{overflow:hidden;max-width:240px;color:#8c7e6d;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.task-monitor p,.task-monitor>small{margin:0;color:#75695c;font-size:11px}.task-stages{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}.task-stages span{padding:5px 3px;border-radius:5px;background:#eee7dc;color:#9a8f81;font-size:9px;text-align:center}.task-stages span.active{background:#ead8bd;color:#815627;font-weight:700}.task-stages span.done{background:#e5efe7;color:#39704e}@media(max-width:680px){.task-stages{grid-template-columns:1fr 1fr}.task-stages span:last-child{grid-column:1/-1}}
 </style>

@@ -3,16 +3,20 @@ from uuid import uuid4
 
 def test_library_sorting_and_subset_reorder_are_persistent():
     from fastapi.testclient import TestClient
-    from sqlalchemy import delete
+    from sqlalchemy import delete, func, select
 
     from backend.app.core.database import SessionLocal
     from backend.app.main import app
-    from backend.app.models import Book, PaperProfile
+    from backend.app.models import Book, PaperProfile, shelf_books
 
     marker = uuid4().hex
     db = SessionLocal()
     created_ids: list[int] = []
     try:
+        baseline_total = db.scalar(select(func.count(Book.id))) or 0
+        baseline_reading = db.scalar(select(func.count(PaperProfile.book_id)).where(PaperProfile.reading_status == "reading")) or 0
+        baseline_favorite = db.scalar(select(func.count(PaperProfile.book_id)).where(PaperProfile.favorite == 1)) or 0
+        baseline_unfiled = db.scalar(select(func.count(Book.id)).where(Book.id.not_in(select(shelf_books.c.book_id)))) or 0
         alpha = Book(
             title=f"Alpha {marker}", file_path=f"alpha-{marker}.pdf", file_type="pdf",
             status="ready", library_order=900_001,
@@ -29,8 +33,8 @@ def test_library_sorting_and_subset_reorder_are_persistent():
         db.flush()
         created_ids = [alpha.id, beta.id, gamma.id]
         db.add_all([
-            PaperProfile(book_id=alpha.id, authors="Chen", published_year=2020),
-            PaperProfile(book_id=beta.id, authors="Bao", published_year=2024),
+            PaperProfile(book_id=alpha.id, authors="Chen", published_year=2020, reading_status="reading"),
+            PaperProfile(book_id=beta.id, authors="Bao", published_year=2024, favorite=True),
             PaperProfile(book_id=gamma.id, authors="Deng", published_year=2022),
         ])
         db.commit()
@@ -42,6 +46,16 @@ def test_library_sorting_and_subset_reorder_are_persistent():
         ])
         assert by_year.status_code == 200
         assert [item["id"] for item in by_year.json()["items"]] == [beta.id, gamma.id, alpha.id]
+
+        filtered = client.get("/api/books", params={"ids": alpha.id, "page_size": 10})
+        assert filtered.status_code == 200
+        assert filtered.json()["total"] == 1
+        # 左侧智能视图必须始终是全库统计，不能被当前 ids / 书架 / 状态筛选覆盖。
+        stats = filtered.json()["stats"]
+        assert stats["total"] == baseline_total + 3
+        assert stats["reading"] == baseline_reading + 1
+        assert stats["favorite"] == baseline_favorite + 1
+        assert stats["unfiled"] == baseline_unfiled + 3
 
         reordered = client.put("/api/books/order", json={
             "book_ids": [gamma.id, alpha.id, beta.id], "shelf_id": None,

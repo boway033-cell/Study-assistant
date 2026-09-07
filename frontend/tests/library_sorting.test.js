@@ -21,3 +21,10 @@ test('drag sorting is limited to an unfiltered library or explicit shelf', () =>
   assert.match(library, /selectedShelf\.value === 'all' \|\| typeof selectedShelf\.value === 'number'/)
   assert.match(library, /清除筛选后即可拖拽排序/)
 })
+
+test('smart shelf counts come from the global backend summary', () => {
+  assert.match(library, /libraryStats\.total/)
+  assert.match(library, /if \(resp\.stats\) libraryStats\.value = resp\.stats/)
+  assert.match(library, /books\.length < filteredTotal/)
+  assert.doesNotMatch(library, /const readingCount = computed/)
+})

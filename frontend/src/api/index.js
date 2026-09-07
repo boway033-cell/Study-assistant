@@ -19,17 +19,63 @@ http.interceptors.response.use(
 
 export default http
 
-export const subscribeTask = (taskId, onUpdate) => new Promise((resolve, reject) => {
-  const source = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/events`)
-  source.onmessage = event => {
-    try {
-      const task = JSON.parse(event.data)
-      onUpdate?.(task)
-      if (['done','failed','cancelled'].includes(task.status)) { source.close(); resolve(task) }
-    } catch (error) { source.close(); reject(error) }
+export const subscribeTask = (taskId, onUpdate, options = {}) => new Promise((resolve, reject) => {
+  let source = null
+  let pollTimer = null
+  let settled = false
+  let polling = false
+  const startedAt = Date.now()
+  const maxWaitMs = options.maxWaitMs ?? 12 * 60 * 60 * 1000
+  const terminal = task => ['done', 'failed', 'cancelled'].includes(task?.status)
+  const cleanup = () => {
+    source?.close()
+    source = null
+    clearTimeout(pollTimer)
+    options.signal?.removeEventListener('abort', abort)
   }
-  source.addEventListener('timeout', event => { source.close(); reject(new Error(JSON.parse(event.data).detail)) })
-  source.onerror = () => { source.close(); reject(new Error('任务状态连接中断，可在全局任务中心继续查看')) }
+  const finish = (task) => {
+    if (settled) return
+    settled = true
+    cleanup()
+    resolve(task)
+  }
+  const fail = (error) => {
+    if (settled) return
+    settled = true
+    cleanup()
+    reject(error)
+  }
+  const publish = (task) => {
+    onUpdate?.(task)
+    if (terminal(task)) finish(task)
+  }
+  const poll = async () => {
+    if (settled || options.signal?.aborted) return
+    if (Date.now() - startedAt > maxWaitMs) return fail(new Error('任务运行时间过长，请在任务中心检查状态'))
+    try {
+      publish(await http.get(`/tasks/${encodeURIComponent(taskId)}`))
+    } catch {
+      // 本地服务重启或短暂繁忙时继续重连；任务状态已持久化，不立刻判失败。
+    }
+    if (!settled) pollTimer = setTimeout(poll, 1800)
+  }
+  const startPolling = () => {
+    if (settled || polling) return
+    polling = true
+    source?.close()
+    source = null
+    poll()
+  }
+  const abort = () => fail(new DOMException('已停止跟踪任务', 'AbortError'))
+  options.signal?.addEventListener('abort', abort, { once: true })
+  if (options.signal?.aborted) return abort()
+
+  source = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/events`)
+  source.onmessage = event => {
+    try { publish(JSON.parse(event.data)) } catch { startPolling() }
+  }
+  source.addEventListener('timeout', startPolling)
+  source.onerror = startPolling
 })
 
 // ===== 书籍 =====

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from typing import Literal
 
@@ -54,20 +55,33 @@ _MODE_GUIDANCE = {
 }
 
 
-async def _stream_answer(provider, messages: list[dict], error_prefix: str) -> str:
+async def _stream_answer(provider, messages: list[dict], error_prefix: str, on_progress=None) -> str:
     """统一流式调用与短暂故障重试；不在内存保留模型隐性推理过程。"""
     import asyncio
 
     last_err = ""
     for attempt in range(3):
         answer = ""
+        last_notified_at = time.monotonic()
+        last_notified_size = 0
         try:
             async for delta in provider.stream_chat(messages):
                 answer += delta
+                now = time.monotonic()
+                if on_progress and (
+                    now - last_notified_at >= 1.5 or len(answer) - last_notified_size >= 800
+                ):
+                    on_progress(len(answer))
+                    last_notified_at = now
+                    last_notified_size = len(answer)
             if answer.strip():
+                if on_progress:
+                    on_progress(len(answer))
                 return answer
             last_err = "AI 返回为空"
         except Exception as exc:  # noqa: BLE001
+            if exc.__class__.__name__ == "TaskCancelled":
+                raise
             last_err = str(exc)
         await asyncio.sleep(2 * (attempt + 1))
     raise RuntimeError(f"{error_prefix}：{last_err}")
@@ -293,8 +307,25 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                 )},
             ]
             from backend.app.services.llm import parse_json_response
-            raw_plan = await _stream_answer(provider, plan_messages, "研究路径规划失败")
+            raw_plan = await _stream_answer(
+                provider,
+                plan_messages,
+                "研究路径规划失败",
+                lambda chars: update_progress(
+                    record,
+                    min(0.45, 0.32 + 0.13 * min(chars / 1800, 1)),
+                    "research-plan",
+                    f"正在形成研究路径（已接收 {chars} 字）...",
+                ),
+            )
             plan = _normalize_plan(parse_json_response(raw_plan), research_mode)
+        record.result = {
+            "kind": "study-report",
+            "book_ids": book_ids,
+            "focus": focus[:200],
+            "research_plan": plan,
+        }
+        update_progress(record, 0.46, "research-plan", "研究路径已形成，准备检索证据", force=True)
 
         # 用户没有点选具体材料时，按研究问题和 AI 子问题在所选书目内迭代检索。
         # 已点选章节/笔记时严格遵守选择边界，不从其他章节补料。
@@ -322,6 +353,10 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
             if not evidence_context:
                 evidence_context = overview_context[:22000]
 
+        from backend.app.services.writing_citations import database_source_labels, readable_citations
+        citation_labels = database_source_labels(db, allowed_refs)
+        # 不在数分钟的模型生成期间持有 SQLite 读事务，避免阻塞导入与任务状态写入。
+        db.rollback()
         update_progress(record, 0.7, "synthesis", "AI 正在跨文献综合并形成连贯文章...")
         prompt = [
             {"role": "system", "content": (
@@ -363,7 +398,17 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                 f"可引用材料：\n{evidence_context[:48000]}"
             )},
         ]
-        answer = await _stream_answer(provider, prompt, "综合研读失败")
+        answer = await _stream_answer(
+            provider,
+            prompt,
+            "综合研读失败",
+            lambda chars: update_progress(
+                record,
+                min(0.94, 0.7 + 0.24 * min(chars / max(target_length * 1.35, 1600), 1)),
+                "synthesis",
+                f"AI 正在组织论证与写作（已接收 {chars} 字）...",
+            ),
+        )
 
         from backend.app.services.llm import parse_json_response
         try:
@@ -383,8 +428,6 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
             report_content = answer
         claims = _normalize_claims(raw_claims, allowed_refs)
         hypotheses = _normalize_hypotheses(raw_hypotheses, allowed_refs)
-        from backend.app.services.writing_citations import database_source_labels, readable_citations
-        citation_labels = database_source_labels(db, allowed_refs)
         report_content, citation_notes = readable_citations(
             report_content, valid_anchors=allowed_refs, labels=citation_labels,
         )
@@ -410,7 +453,7 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
         )
         db.add(report)
         db.commit()
-        update_progress(record, 1.0, "overview", "完成")
+        update_progress(record, 1.0, "overview", "完成", force=True)
         return {"report_id": report.id, "chars": len(report_content), "claims": len(claims),
                 "hypotheses": len(hypotheses), "plan_steps": len(plan.get("subquestions", []))}
     except Exception as e:  # noqa: BLE001
@@ -430,7 +473,7 @@ def study_overview(req: StudyOverviewReq, db: Session = Depends(get_db)):
         rec, req.book_ids, req.focus, req.framework, req.chapter_ids, req.note_ids,
         req.research_mode, req.reasoning_depth, req.writing_style, req.extension_level,
         req.target_length,
-    ))
+    ), book_id=req.book_ids[0])
     return {"task_id": record.id}
 
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from backend.app.services.parser.ocr import (
     _file_hash,
     _get_rapid_engine,
+    _OCR_ENGINE_LOCK,
     _ocr_cache_dir,
     release_ocr_engine,
 )
@@ -73,8 +74,8 @@ def get_ocr_text_layer(pdf_path: str | Path, page_no: int, *, generate: bool = T
             if page_no < 1 or page_no > doc.page_count:
                 raise ValueError("页码超出范围")
             page = doc.load_page(page_no - 1)
-            # 180 DPI 在中文识别精度和单页内存之间取折中。
-            pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
+            from backend.app.core.config import settings
+            pix = page.get_pixmap(dpi=settings.ocr_render_dpi, alpha=False)
             width, height = pix.width, pix.height
             channels = pix.n
             array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(height, width, channels)
@@ -83,7 +84,8 @@ def get_ocr_text_layer(pdf_path: str | Path, page_no: int, *, generate: bool = T
 
         try:
             engine = _get_rapid_engine()
-            response = engine(bgr)
+            with _OCR_ENGINE_LOCK:
+                response = engine(bgr)
             rows = response[0] if isinstance(response, tuple) else getattr(response, "boxes", None)
             texts = getattr(response, "txts", None)
             scores = getattr(response, "scores", None)

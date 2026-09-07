@@ -16,6 +16,7 @@ from backend.app.core.database import get_db
 from backend.app.models import Book, Chapter, Chunk, Note, PaperProfile, Quiz, TocRevision, shelf_books
 from backend.app.schemas import (
     BookDetailResp,
+    BookLibraryStats,
     BookListItem,
     BookListResp,
     BookRenameReq,
@@ -100,6 +101,26 @@ def list_books(
     ),
     db: Session = Depends(get_db),
 ):
+    global_total = db.scalar(select(func.count(Book.id))) or 0
+    reading_total = db.scalar(select(func.count(PaperProfile.book_id)).where(
+        PaperProfile.reading_status == "reading"
+    )) or 0
+    favorite_total = db.scalar(select(func.count(PaperProfile.book_id)).where(
+        PaperProfile.favorite == 1
+    )) or 0
+    attention_total = db.scalar(select(func.count(Book.id)).where(
+        Book.status.in_({"failed", "needs_ocr", "parsing"})
+    )) or 0
+    unfiled_total = db.scalar(select(func.count(Book.id)).where(
+        Book.id.not_in(select(shelf_books.c.book_id))
+    )) or 0
+    library_stats = BookLibraryStats(
+        total=global_total,
+        reading=reading_total,
+        favorite=favorite_total,
+        attention=attention_total,
+        unfiled=unfiled_total,
+    )
     stmt = select(Book)
     if status:
         stmt = stmt.where(Book.status == status)
@@ -201,7 +222,7 @@ def list_books(
         )
         for b in books
     ]
-    return BookListResp(total=total, items=items)
+    return BookListResp(total=total, items=items, stats=library_stats)
 
 
 @router.put("/books/order")
@@ -967,7 +988,7 @@ async def task_status_events(task_id: str):
 
     async def stream():
         previous = None
-        for _ in range(1440):  # 最长保持约 12 分钟，避免遗留连接常驻。
+        for tick in range(43200):  # 最长保持约 6 小时，覆盖超长 OCR 与研究任务。
             record = get_task(task_id)
             if not record:
                 yield 'event: error\ndata: {"detail":"任务不存在"}\n\n'
@@ -979,6 +1000,9 @@ async def task_status_events(task_id: str):
             if encoded != previous:
                 yield f"data: {encoded}\n\n"
                 previous = encoded
+            elif tick and tick % 30 == 0:
+                # 注释型 SSE 心跳不会触发前端业务事件，但能避免本地代理误判空闲连接。
+                yield ": keep-alive\n\n"
             if record.status in {"done", "failed", "cancelled"}:
                 return
             await asyncio.sleep(0.5)
@@ -1044,6 +1068,7 @@ def list_task_statuses(
                 "stage": task.stage or "",
                 "message": task.message or "",
                 "error": task.error,
+                "result": json.loads(task.result_json) if task.result_json else None,
                 "retry_count": task.retry_count or 0,
                 "created_at": task.created_at,
                 "updated_at": task.updated_at,

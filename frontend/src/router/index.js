@@ -14,7 +14,8 @@ const routes = [
   { path: '/graph', redirect: to => ({ path: '/knowledge-hub', query: { ...to.query, view: 'graph' } }) },
   { path: '/draw', name: 'draw', component: () => import('../views/DrawView.vue'), meta: { title: 'AI 绘图', context: '更多学习工具' } },
   { path: '/literature-workbench', name: 'literature-workbench', component: () => import('../views/LiteratureWorkbenchView.vue'), meta: { title: '文献工作台', context: '获取 · 选证 · 输出' } },
-  { path: '/writing', name: 'writing', component: () => import('../views/WritingView.vue'), meta: { title: '写作工作台', context: '取材 · 写作 · 审阅 · Word' } },
+  { path: '/writing', name: 'writing', component: () => import('../views/WritingView.vue'), meta: { title: '写作工作台', context: '研究 · 公文 · 审阅 · Word' } },
+  { path: '/writing/official', redirect: to => ({ path: '/writing', query: { ...to.query, mode: 'official' } }) },
   { path: '/settings', name: 'settings', component: () => import('../views/SettingsView.vue'), meta: { title: '设置', context: '模型与数据边界' } },
   { path: '/reader/:bookId', name: 'reader', component: () => import('../views/ReaderView.vue'), meta: { title: '文献阅读', context: '原文 · 精读 · 证据' } },
 ]

@@ -34,9 +34,20 @@ class BookListItem(BaseModel):
     created_at: datetime
 
 
+class BookLibraryStats(BaseModel):
+    """不受当前分页与筛选影响的知识库全局计数。"""
+
+    total: int = 0
+    reading: int = 0
+    favorite: int = 0
+    attention: int = 0
+    unfiled: int = 0
+
+
 class BookListResp(BaseModel):
     total: int
     items: list[BookListItem]
+    stats: BookLibraryStats = Field(default_factory=BookLibraryStats)
 
 
 class ChapterNode(BaseModel):

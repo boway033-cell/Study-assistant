@@ -353,10 +353,11 @@ async def clean_docx(file: UploadFile = File(...), profile_id: int | None = Form
 
 
 @router.get("/outputs")
-def list_outputs(page: int = 1, page_size: int = 20, db: Session = Depends(get_db)):
+def list_outputs(page: int = 1, page_size: int = 20, exclude_official: bool = False, db: Session = Depends(get_db)):
     safe_page = max(1, page); safe_size = min(max(page_size, 1), 100)
-    total = db.scalar(select(func.count()).select_from(WritingOutput)) or 0
-    rows = db.scalars(select(WritingOutput).order_by(WritingOutput.created_at.desc())
+    condition = WritingOutput.kind != "official_document" if exclude_official else True
+    total = db.scalar(select(func.count()).select_from(WritingOutput).where(condition)) or 0
+    rows = db.scalars(select(WritingOutput).where(condition).order_by(WritingOutput.created_at.desc())
                       .offset((safe_page - 1) * safe_size).limit(safe_size)).all()
     return {"items": [_output(row, detail=False) for row in rows], "total": total,
             "page": safe_page, "page_size": safe_size}
@@ -375,6 +376,8 @@ def update_output(output_id: int, req: OutputUpdateReq, db: Session = Depends(ge
     row = db.get(WritingOutput, output_id)
     if not row:
         raise HTTPException(404, "写作输出不存在")
+    if row.kind == "official_document":
+        raise HTTPException(409, "请在公文写作中保存新版本，以保留提纲确认和排版审计")
     if row.kind == "ai_tone" and row.input_type == "docx":
         raise HTTPException(409, "Word 原稿请使用逐条审阅，以免丢失原有段落和表格格式")
     row.title = req.title.strip(); row.output_text = req.output_text

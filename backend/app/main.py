@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, literature, presentations, quizzes, settings, shelves, stats, study, tags, writing
+from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, literature, official_writing, presentations, quizzes, settings, shelves, stats, study, tags, writing
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import Base, engine
 from backend.app.services.rag import fts
@@ -236,7 +236,7 @@ async def lifespan(_app: FastAPI):
         pass
 
 
-app = FastAPI(title="Study assistant", version="2.1.0", lifespan=lifespan)
+app = FastAPI(title="Study assistant", version="2.2.0", lifespan=lifespan)
 
 
 class SPAStaticFiles(StaticFiles):
@@ -297,6 +297,7 @@ app.include_router(shelves.router)
 app.include_router(draw.router)
 app.include_router(presentations.router)
 app.include_router(literature.router)
+app.include_router(official_writing.router)
 app.include_router(writing.router)
 
 
