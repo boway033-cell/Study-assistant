@@ -90,11 +90,13 @@ def _fill_number_gaps(path: Path, rows: list[dict], document: StructuredDocument
         used_titles = {re.sub(r"\s+", "", str(row.get("title") or "")) for row in rows}
         candidates = [(page, _heading_from_ocr(path, page)) for page in pages]
         candidates = [(page, title) for page, title in candidates if title and title not in used_titles]
-        for number, candidate in zip(missing, candidates):
-            page, title = candidate
-            additions.append({"title": f"{_CN[number - 1]}、{title}", "level": rows[left_index].get("level", 1),
+        for page, title in candidates:
+            match = _NUMBERED.match(title)
+            if not match or _CN.index(match.group(1)) + 1 not in missing:
+                continue
+            additions.append({"title": title, "level": rows[left_index].get("level", 1),
                               "page": page, "source": "ocr-gap", "confidence": .68,
-                              "evidence": ["OCR 大字号居中标题", "编号连续性推断"]})
+                              "evidence": ["OCR 大字号标题", "原文中存在的编号"]})
     return sorted([*rows, *additions], key=lambda row: (int(row.get("page") or 1),
                                                          0 if row.get("source") != "ocr-gap" else 1))
 
@@ -128,22 +130,44 @@ def _replacement_items(db, book: Book, rows: list[dict]) -> list[dict]:
     return items
 
 
-def rebuild_book_toc(db, book: Book, record=None) -> dict:
+def rebuild_book_toc(db, book: Book, record=None, *, allow_ocr: bool = True) -> dict:
     structured_path = settings.structured_dir / f"{book.file_hash or book.id}.json"
     source_path = settings.uploads_dir / book.file_path
     if book.file_type != "pdf" or not structured_path.exists() or not source_path.exists():
         return {"book_id": book.id, "status": "skipped", "reason": "缺少 PDF 或结构化证据"}
     document = StructuredDocument.load_json(structured_path)
+    from backend.app.services.parser.structured import hydrate_ocr_geometry
+    from backend.app.services.parser.ocr import _file_hash, _ocr_cache_dir
+    hydrate_ocr_geometry(document, _ocr_cache_dir(_file_hash(source_path)))
     layout = analyze_structured(document)
     cleaned = [layout.clean_page_text(index) for index in range(len(layout.pages))]
     rows = select_import_toc("pdf", _native_toc(source_path), cleaned, layout)
-    rows = _fill_number_gaps(source_path, rows, document, record)
+    if allow_ocr:
+        rows = _fill_number_gaps(source_path, rows, document, record)
     if not rows:
         return {"book_id": book.id, "status": "skipped", "reason": "未发现可信目录"}
+    if record:
+        from backend.app.worker.tasks import update_progress
+        update_progress(record, .9, 'toc-rebuild', '正在保存目录修订与来源映射')
     result = replace_book_toc(db, book, _replacement_items(db, book, rows), "rebuild",
                               "版面清洗与编号缺口 OCR 重识别")
     return {"book_id": book.id, "status": "rebuilt", "chapters": len(result["chapters"]),
             "revision_id": result["revision_id"]}
+
+
+async def rebuild_one_toc(record, book_id: int) -> dict:
+    import asyncio
+    from backend.app.worker.tasks import update_progress
+    def rebuild():
+        with SessionLocal() as db:
+            book = db.get(Book, book_id)
+            if book is None:
+                raise ValueError('书籍不存在')
+            update_progress(record, .1, 'toc-rebuild', '正在复用本书版面和 OCR 坐标缓存')
+            result = rebuild_book_toc(db, book, record, allow_ocr=False)
+            update_progress(record, 1, 'toc-rebuild', '目录重识别完成' if result['status'] == 'rebuilt' else result['reason'])
+            return result
+    return await asyncio.to_thread(rebuild)
 
 
 async def rebuild_all_tocs(record) -> dict:

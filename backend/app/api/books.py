@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
@@ -32,9 +33,50 @@ from backend.app.schemas import (
 )
 from backend.app.services.rag import fts
 from backend.app.worker.import_task import run_import
-from backend.app.worker.tasks import cancel_task, get_task, retry_task, submit
+from backend.app.worker.tasks import cancel_task, get_task, has_active_task, retry_task, submit
 
 router = APIRouter(prefix="/api", tags=["books"])
+
+# 原版按页原文：每次请求都会全量重解析整本 PDF，数百页文档单次翻页可达数十秒。
+# 这里按 (文件大小, 修改时间) 做进程内缓存，只追加缓存层，不改变解析逻辑与返回值。
+_PAGE_TEXT_CACHE: dict[str, tuple[tuple[int, int], list[str]]] = {}
+_PAGE_TEXT_CACHE_LOCK = threading.Lock()
+_PAGE_TEXT_CACHE_MAX = 8
+
+
+def _book_page_texts(book: Book, path: Path) -> list[str]:
+    """带缓存地读取 PDF 每页文本；文件变更后自动失效。"""
+    from backend.app.services.parser import parse_document
+
+    try:
+        stat = path.stat()
+        stamp = (stat.st_size, int(stat.st_mtime))
+    except OSError:
+        # 文件不可达时退化为主线原有的无缓存行为
+        return list(parse_document(path).pages)
+
+    cache_key = str(path)
+    with _PAGE_TEXT_CACHE_LOCK:
+        hit = _PAGE_TEXT_CACHE.get(cache_key)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+
+    pages = list(parse_document(path).pages)
+    with _PAGE_TEXT_CACHE_LOCK:
+        if len(_PAGE_TEXT_CACHE) >= _PAGE_TEXT_CACHE_MAX:
+            for stale in list(_PAGE_TEXT_CACHE)[: max(1, _PAGE_TEXT_CACHE_MAX // 2)]:
+                _PAGE_TEXT_CACHE.pop(stale, None)
+        _PAGE_TEXT_CACHE[cache_key] = (stamp, pages)
+    return pages
+
+
+def invalidate_page_text_cache(file_path: str | Path | None = None) -> None:
+    """删除/替换书籍后清理原版按页缓存。不传则清空全部。"""
+    with _PAGE_TEXT_CACHE_LOCK:
+        if file_path is None:
+            _PAGE_TEXT_CACHE.clear()
+            return
+        _PAGE_TEXT_CACHE.pop(str(file_path), None)
 
 
 class TocEditItem(BaseModel):
@@ -820,16 +862,15 @@ def get_chunk_original(chunk_id: int, book_id: int, db: Session = Depends(get_db
 def get_page_original(book_id: int, page_no: int, db: Session = Depends(get_db)):
     """返回指定页原文文本（PDF 页文本；docx/pptx 无页码概念则返回空）。"""
     from backend.app.core.config import settings as _settings
-    from backend.app.services.parser import parse_document
 
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
     if book.file_type != "pdf":
         return {"page": page_no, "text": "", "note": "该格式不支持按页查看"}
-    result = parse_document(_settings.uploads_dir / book.file_path)
-    if 1 <= page_no <= len(result.pages):
-        return {"page": page_no, "text": result.pages[page_no - 1]}
+    pages = _book_page_texts(book, _settings.uploads_dir / book.file_path)
+    if 1 <= page_no <= len(pages):
+        return {"page": page_no, "text": pages[page_no - 1]}
     raise HTTPException(404, "页码超出范围")
 
 
@@ -861,6 +902,7 @@ def delete_book(book_id: int, db: Session = Depends(get_db)):
             f.unlink()
     except OSError:
         pass
+    invalidate_page_text_cache(f)
     try:
         fts.delete_book_index(book_id)
     except Exception:  # noqa: BLE001
@@ -878,6 +920,9 @@ def reparse_book(book_id: int, db: Session = Depends(get_db)):
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
+    # 重解析要清掉 chunks 并重跑可能长达数小时的 OCR，重复提交会浪费大量计算。
+    if has_active_task("reimport", book_id):
+        raise HTTPException(409, "该书已有重解析任务在排队或运行中；请在任务中心等待完成或停止后再提交")
     # 清空可再生解析产物；笔记/题目/知识节点保留，仅解除旧章节关联。
     from backend.app.services.book_lifecycle import prepare_book_for_reparse
     prepare_book_for_reparse(db, book_id)
@@ -889,6 +934,12 @@ def reparse_book(book_id: int, db: Session = Depends(get_db)):
     book.status = "pending"
     book.error_msg = None
     db.commit()
+    # 旧 chunks 已删除，若不同步清掉 FTS 行，重解析期间（扫描件可能数小时）
+    # 检索会持续返回指向已删 chunk 的幽灵结果。放在提交之后，保证两者一致。
+    try:
+        fts.delete_book_index(book_id)
+    except Exception:  # noqa: BLE001 — 索引清理失败不影响重解析本身
+        pass
     record = submit("reimport", lambda rec: run_import(rec, book.id), book_id=book.id)
     return {"task_id": record.id}
 
@@ -942,7 +993,10 @@ def search(
 
     # 走混合检索（RRF 融合：向量 + FTS + LIKE）
     from backend.app.services.rag import retriever
-    items = retriever.retrieve(q, book_ids=final_ids, top_k=page_size)
+    # 注意：top_k 必须覆盖到第 page 页末尾，否则第 2 页起切片永远为空。
+    # 上限用于防止深翻页时一次性检索过多结果拖垮响应。
+    want = min(page * page_size, 200)
+    items = retriever.retrieve(q, book_ids=final_ids, top_k=want)
 
     # 分页（混合检索结果已在内存中，手动切片）
     total = len(items)
@@ -1172,6 +1226,18 @@ def rebuild_all_book_tocs():
     from backend.app.services.rag.toc_rebuild import rebuild_all_tocs
     record = submit("toc-rebuild", rebuild_all_tocs)
     return {"task_id": record.id}
+
+
+@router.post('/books/{book_id}/toc-rebuild', status_code=202)
+def rebuild_one_book_toc(book_id: int, db: Session = Depends(get_db)):
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(404, '书籍不存在')
+    if book.file_type != 'pdf':
+        raise HTTPException(422, '此入口仅用于 PDF 目录重识别')
+    from backend.app.services.rag.toc_rebuild import rebuild_one_toc
+    record = submit('toc-rebuild', lambda rec: rebuild_one_toc(rec, book_id), book_id=book_id)
+    return {'task_id': record.id}
 
 
 @router.post("/books/{book_id}/toc-auto-repair")

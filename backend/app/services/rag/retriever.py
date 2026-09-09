@@ -13,7 +13,8 @@ import re
 
 from backend.app.core.config import settings
 from backend.app.services.rag import fts, vector
-from backend.app.services.rag.fts import fallback_search, get_chapter_neighbors, get_book_outline
+from backend.app.services.rag.fts import fallback_search, get_book_outline
+from backend.app.services.rag.fts import get_chapter_neighbors, get_chapter_neighbors_batch
 from backend.app.services.rag.reranker import rerank, record_retrieval_eval
 
 MIN_PRIMARY_HITS = 3
@@ -73,11 +74,16 @@ def retrieve(question: str, book_id: int | None = None, book_ids: list[int] | No
     if items:
         items = rerank(question, items, top_k=k)
 
-    # 5. 章节级上下文
+    # 5. 章节级上下文（批量取，避免每条结果两次查库的 N+1）
+    top_items = [dict(it) for it in items[:k]]
+    try:
+        contexts = get_chapter_neighbors_batch([it.get("chunk_id", 0) for it in top_items], radius=1)
+    except Exception:  # noqa: BLE001 — 批量取失败时退回逐条取，不改变结果语义
+        contexts = {}
     enriched = []
-    for it in items[:k]:
-        it = dict(it)
-        it["context"] = get_chapter_neighbors(it["chunk_id"], radius=1)
+    for it in top_items:
+        cid = it.get("chunk_id", 0)
+        it["context"] = contexts[cid] if cid in contexts else get_chapter_neighbors(cid, radius=1)
         enriched.append(it)
 
     # 6. 目录兜底

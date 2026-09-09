@@ -481,17 +481,20 @@ DELETE /api/literature/resources/{resource_id}
 ## 13. 写作实验室 `/api/writing`
 
 ```
-GET  /api/writing/profiles
-POST /api/writing/profiles
-POST /api/writing/profiles/{profile_id}/imitate
-POST /api/writing/literature-review            # 202，返回 task_id
-POST /api/writing/clean-text
-POST /api/writing/clean-docx
-GET  /api/writing/outputs
-GET  /api/writing/outputs/{output_id}
-PATCH /api/writing/outputs/{output_id}
-POST /api/writing/outputs/{output_id}/review
-GET  /api/writing/outputs/{output_id}/download
+GET    /api/writing/profiles
+POST   /api/writing/profiles
+GET    /api/writing/profiles/{profile_id}
+POST   /api/writing/profiles/{profile_id}/refine   # 202，返回 task_id；自动剔除已删除书目（pruned_book_ids）
+DELETE /api/writing/profiles/{profile_id}          # 删除项目，输出保留并解除关联
+POST   /api/writing/profiles/{profile_id}/imitate
+POST   /api/writing/literature-review            # 202，返回 task_id
+POST   /api/writing/clean-text
+POST   /api/writing/clean-docx
+GET    /api/writing/outputs
+GET    /api/writing/outputs/{output_id}
+PATCH  /api/writing/outputs/{output_id}
+POST   /api/writing/outputs/{output_id}/review
+GET    /api/writing/outputs/{output_id}/download
 ```
 
 `POST /api/writing/literature-review` 请求示例：

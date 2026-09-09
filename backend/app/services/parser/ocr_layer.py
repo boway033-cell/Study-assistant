@@ -14,7 +14,7 @@ from backend.app.services.parser.ocr import (
     _get_rapid_engine,
     _OCR_ENGINE_LOCK,
     _ocr_cache_dir,
-    release_ocr_engine,
+    rapid_result_rows,
 )
 
 _OCR_LAYER_LOCK = threading.Lock()
@@ -86,11 +86,7 @@ def get_ocr_text_layer(pdf_path: str | Path, page_no: int, *, generate: bool = T
             engine = _get_rapid_engine()
             with _OCR_ENGINE_LOCK:
                 response = engine(bgr)
-            rows = response[0] if isinstance(response, tuple) else getattr(response, "boxes", None)
-            texts = getattr(response, "txts", None)
-            scores = getattr(response, "scores", None)
-            if rows is None and texts is not None:
-                rows = [[box, text, score] for box, text, score in zip(response.boxes, texts, scores)]
+            rows = rapid_result_rows(response)
             items = []
             for row in rows or []:
                 if not row or len(row) < 2:
@@ -111,7 +107,7 @@ def get_ocr_text_layer(pdf_path: str | Path, page_no: int, *, generate: bool = T
             return result
         finally:
             del bgr
-            release_ocr_engine()
+            # 连续阅读复用同一模型，避免每翻一页都重新载入 ONNX 权重。
 
 
 def find_quote_in_cached_layer(pdf_path: str | Path, page_no: int, quote: str) -> list[dict]:

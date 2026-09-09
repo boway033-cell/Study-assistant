@@ -38,6 +38,12 @@
       </div>
     </header>
 
+    <section v-if="deepTaskMessage" class="deep-task-monitor" aria-live="polite">
+      <span>{{ deepTaskMessage }}</span>
+      <el-progress v-if="runningDeep" :percentage="deepTaskProgress" :stroke-width="6" />
+      <el-button v-if="runningDeep && deepTaskId" size="small" @click="stopDeep">取消研读</el-button>
+      <el-button v-else size="small" @click="runDeep">重新研读</el-button>
+    </section>
     <main class="reader-body" v-loading="!book">
       <template v-if="book && mode === 'source'">
         <DocReader v-if="book.file_type !== 'pdf'" :book-id="book.id" />
@@ -91,13 +97,14 @@
     </main>
 
     <el-dialog v-model="tocEditorOpen" title="目录结构工作台" width="min(1480px, 96vw)" append-to-body destroy-on-close>
-      <div v-loading="tocEditorLoading" class="toc-editor">
+      <div v-loading="tocEditorLoading || tocRebuilding" :element-loading-text="tocRebuildMessage" class="toc-editor">
         <div class="toc-audit-bar">
           <div>
             <strong>{{ tocAudit.summary?.total || 0 }} 项目录</strong>
             <span>高置信 {{ tocAudit.summary?.high || 0 }} · 需复核 {{ tocAudit.summary?.review || 0 }} · 低置信 {{ tocAudit.summary?.low || 0 }}</span>
           </div>
           <div class="toc-audit-actions">
+            <el-button v-if="book?.file_type === 'pdf'" :disabled="tocSaving" @click="rebuildCurrentToc">从已解析数据重识别</el-button>
             <el-tag :type="tocAudit.ok ? 'success' : 'warning'">
               {{ tocAudit.ok ? '编号链通过' : `${tocAudit.summary?.unresolved || 0} 项需人工判断` }}
             </el-tag>
@@ -193,7 +200,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PdfReader from '../components/PdfReader.vue'
@@ -202,6 +209,7 @@ import {
   getBook, bookFileUrl, renderedBookFileUrl, getBookDeep, deepAnalyze,
   getSourceMap, updateArchiveProfile,
   getTocReview, autoRepairToc, replaceBookToc, listTocRevisions, restoreTocRevision,
+  rebuildBookToc, subscribeTask, cancelTask,
 } from '../api'
 import { renderMarkdown } from '../utils/markdown'
 import { notifyTaskSubmitted } from '../stores/taskCenter'
@@ -213,20 +221,30 @@ const tocFlat = ref([])
 const sourceMap = ref({ locator_mode: 'unavailable', blocks: [] })
 const hasQueryPage = ref(route.query.page != null)
 const initialPage = ref(parseInt(route.query.page) || 1)
-const pdfReaderKey = ref(0)
+// key 必须绑定 book.id：切换书籍时强制重建 PdfReader。
+// 只靠 ref 递增时，切书不会重建，画布会停留在上一本，标注与阅读进度也会写到错误的 bookId。
+const pdfReloadSeq = ref(0)
+const pdfReaderKey = computed(() => `${book.value?.id ?? 'none'}-${pdfReloadSeq.value}`)
 const mode = ref(route.query.mode === 'card' ? 'card' : route.query.mode === 'deep' ? 'deep' : 'source')
 const readingStatus = ref('unread')
 const deepData = ref({ toc: [], markdown: '', paper_card: '' })
 const mdLoading = ref(false)
 const runningDeep = ref(false)
+const deepTaskMessage = ref('')
+const deepTaskProgress = ref(0)
+const deepTaskId = ref('')
+let deepAbort = null
 const artifactContent = ref(null)
 const focusMode = ref(false)
 const fontSize = ref(Number(localStorage.getItem('readerFontSize')) || 16)
 const wideText = ref(localStorage.getItem('readerWideText') === 'true')
 let progressTimer = null
+// 离开页面后必须停止 SSE/轮询，否则会占满浏览器每域 6 条连接上限。
+const rebuildAbort = new AbortController()
 const tocEditorOpen = ref(false)
 const tocEditorLoading = ref(false)
 const tocSaving = ref(false)
+const tocRebuilding = ref(false), tocRebuildMessage = ref('正在读取目录数据…')
 const tocAudit = ref({ items: [], issues: [], summary: {} })
 const tocDraft = ref([])
 const tocRevisions = ref([])
@@ -518,7 +536,7 @@ const inspectTocPage = async (item) => {
   mode.value = 'source'
   initialPage.value = item.start_page || 1
   hasQueryPage.value = true
-  pdfReaderKey.value++
+  pdfReloadSeq.value++
   await router.replace({ path: `/reader/${book.value.id}`, query: { page: initialPage.value } })
 }
 const removeTocItem = (index) => {
@@ -569,6 +587,23 @@ const applySafeTocRepair = async () => {
     await applyTocResultInPlace(applied)
   } catch (e) { if (e !== 'cancel') ElMessage.error(e.message || String(e)) }
 }
+const rebuildCurrentToc = async () => {
+  const bookId = book.value.id
+  try {
+    await ElMessageBox.confirm('将根据本书已保存的正文与 OCR 坐标重新生成目录，保留可恢复的旧目录修订。本窗口未保存的修改会被替换。', '重新识别本书目录', { confirmButtonText: '重新识别', cancelButtonText: '取消' })
+    tocRebuilding.value = true
+    const response = await rebuildBookToc(bookId)
+    notifyTaskSubmitted()
+    const task = await subscribeTask(response.task_id, next => { tocRebuildMessage.value = next.message || '正在重识别目录…' }, { signal: rebuildAbort.signal })
+    if (task.status !== 'done') throw new Error(task.error || task.message || '重识别未完成')
+    if (task.result?.status !== 'rebuilt') return ElMessage.warning(task.result?.reason || '缺少可用目录证据')
+    if (book.value?.id !== bookId) return
+    const [detail, audit] = await Promise.all([getBook(bookId), getTocReview(bookId)])
+    await applyTocResultInPlace({ chapters: detail.chapters, audit })
+    ElMessage.success('目录已原位更新，可在修订记录中恢复旧版本')
+  } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message || String(e)) }
+  finally { tocRebuilding.value = false }
+}
 const restoreRevision = async (revision) => {
   try {
     await ElMessageBox.confirm('将恢复到该次修订发生前的目录，并重新建立章节来源映射。当前版本也会保存为可恢复修订。', '恢复目录版本')
@@ -582,10 +617,50 @@ const formatDate = (value) => value ? new Date(value).toLocaleString('zh-CN') : 
 
 const loadDeep = async () => {
   if (!book.value) return
+  const id = book.value.id
   mdLoading.value = true
-  try { deepData.value = await getBookDeep(book.value.id) }
+  try { const data = await getBookDeep(id); if (book.value?.id === id) deepData.value = data }
   catch (e) { ElMessage.error(e.message) }
-  finally { mdLoading.value = false }
+  finally { if (book.value?.id === id) mdLoading.value = false }
+}
+
+const followDeep = async (id, taskId) => {
+  deepAbort?.abort()
+  const controller = new AbortController()
+  deepAbort = controller
+  deepTaskId.value = taskId
+  runningDeep.value = true
+  let refreshedAt = 0
+  let refreshing = false
+  const current = () => !controller.signal.aborted && book.value?.id === id
+  const refresh = async () => {
+    if (refreshing || !current()) return
+    refreshing = true
+    try { const data = await getBookDeep(id); if (current()) deepData.value = data }
+    catch { /* A transient read error must not interrupt the persisted task. */ }
+    finally { refreshing = false }
+  }
+  try {
+    const task = await subscribeTask(taskId, next => {
+      if (!current()) return
+      deepTaskMessage.value = next.message || '正在研读，完成章节会自动保存'
+      deepTaskProgress.value = Math.round(Math.max(0, Math.min(1, next.progress || 0)) * 100)
+      if (Date.now() - refreshedAt >= 5000) { refreshedAt = Date.now(); void refresh() }
+    }, { signal: controller.signal })
+    if (!current()) return
+    localStorage.removeItem(`reader-deep-task:${id}`)
+    const data = await getBookDeep(id)
+    if (!current()) return
+    deepData.value = data
+    deepTaskMessage.value = task.status === 'done' ? (task.message || '研读完成')
+      : `${task.status === 'cancelled' ? '已取消' : '研读中断'}，已完成章节已保留。${task.error || ''}`
+  } catch (e) { if (current()) deepTaskMessage.value = `进度连接中断，可返回页面重连：${e.message}` }
+  finally { if (current()) { runningDeep.value = false; deepTaskId.value = '' } }
+}
+
+const stopDeep = async () => {
+  try { await cancelTask(deepTaskId.value); deepTaskMessage.value = '正在取消，保留已完成章节…' }
+  catch (e) { ElMessage.error(e.message) }
 }
 
 const onModeChange = async (next) => {
@@ -595,12 +670,13 @@ const onModeChange = async (next) => {
 const runDeep = async () => {
   if (!book.value || runningDeep.value) return
   runningDeep.value = true
+  const id = book.value.id
   try {
-    await deepAnalyze(book.value.id)
+    const response = await deepAnalyze(id)
+    localStorage.setItem(`reader-deep-task:${id}`, response.task_id)
     notifyTaskSubmitted()
-    ElMessage.success('结构复核与精读已进入任务中心，可继续阅读原文')
-  } catch (e) { ElMessage.error(e.message) }
-  finally { runningDeep.value = false }
+    if (book.value?.id === id) void followDeep(id, response.task_id)
+  } catch (e) { if (book.value?.id === id) { runningDeep.value = false; ElMessage.error(e.message) } }
 }
 
 const jumpArtifact = async (index) => {
@@ -631,11 +707,19 @@ const onPageChange = ({ page }) => {
   }, 800)
 }
 
+// 快速切换书籍时，先发的慢响应可能后到并覆盖新书详情；用序号丢弃过期结果。
+let bookRequestSeq = 0
 const loadBook = async (bookId) => {
+  const seq = ++bookRequestSeq
+  deepAbort?.abort()
+  runningDeep.value = false
+  deepTaskMessage.value = ''
+  deepTaskId.value = ''
   book.value = null
   deepData.value = { toc: [], markdown: '', paper_card: '' }
   try {
     const [detail, map] = await Promise.all([getBook(bookId), getSourceMap(bookId)])
+    if (seq !== bookRequestSeq) return
     book.value = detail
     sourceMap.value = map
     readingStatus.value = detail.archive?.reading_status || 'unread'
@@ -650,6 +734,10 @@ const loadBook = async (bookId) => {
     tocFlat.value = flat
     if (detail.archive?.progress_page > 1 && !hasQueryPage.value) initialPage.value = detail.archive.progress_page
     if (mode.value !== 'source') await loadDeep()
+    if (seq === bookRequestSeq) {
+      const taskId = localStorage.getItem(`reader-deep-task:${bookId}`)
+      if (taskId) void followDeep(Number(bookId), taskId)
+    }
   } catch (e) { ElMessage.error(e.message) }
 }
 
@@ -658,9 +746,18 @@ onMounted(async () => {
   await loadBook(Number(route.params.bookId))
   if (route.query.toc === 'review') await openTocEditor()
 })
+onUnmounted(() => {
+  // 未清理的定时器会在 book.value 置空后解引用报错，并丢失最后一次阅读进度。
+  clearTimeout(progressTimer)
+  rebuildAbort.abort()
+  deepAbort?.abort()
+})
 </script>
 
 <style scoped>
+.deep-task-monitor { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:8px 12px; margin-bottom:6px; border-radius:var(--study-radius-md); background:var(--study-surface-paper); color:var(--study-text-secondary); font-size:13px; }
+.deep-task-monitor > span { flex:1; min-width:180px; }
+.deep-task-monitor :deep(.el-progress) { width:160px; }
 .reader-page { display: flex; flex-direction: column; height: calc(100vh - 64px); max-width: 1800px; margin: 0 auto; }
 .reader-top { display:flex; flex-direction:column; gap:6px; padding:7px 10px; margin-bottom:6px; background:var(--study-surface-paper); border:1px solid var(--study-card-border); border-radius:var(--study-radius-md); box-shadow:var(--study-shadow-sm); }
 .reader-primary-row,.reader-secondary-row { display:flex; align-items:center; justify-content:space-between; gap:16px; min-width:0; }

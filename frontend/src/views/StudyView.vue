@@ -45,7 +45,7 @@
               </el-radio-group>
             </label>
           </div>
-          <p class="method-hint">{{ activeMode.description }} <span v-if="reasoningDepth==='deep'">深度模式先规划子问题，再按路径检索和综合。</span><span v-else>快速模式一次综合，适合先形成草稿。</span></p>
+          <p class="method-hint">{{ activeMode.description }} <span v-if="reasoningDepth==='deep'">深度模式分批阅读所选全文，再规划与综合；长书耗时和模型用量会随文本量增加。</span><span v-else>快速模式按问题检索证据，适合先形成草稿。</span></p>
           <div class="method-row writing-options">
             <label>成文方式
               <el-select v-model="writingStyle"><el-option label="连贯分析文章" value="analytical_essay"/><el-option label="结构化研究报告" value="structured_report"/></el-select>
@@ -83,6 +83,10 @@
           </div>
         </section>
 
+        <section v-if="liveDraft && !activeReport" class="research-plan">
+          <header><b>{{ loading ? '正在成文' : '已保留的未完成草稿' }}</b><el-button @click="copyDraft">复制草稿</el-button></header>
+          <article class="markdown-body report-content" v-html="renderMarkdown(liveDraft)" />
+        </section>
         <article v-if="content" class="markdown-body report-content" v-html="renderMarkdown(content)" />
         <el-empty v-else description="选择材料并提出研究问题；不勾选章节时，AI 会在所选书目范围内检索证据" />
         <footer v-if="content" class="output-actions">
@@ -148,8 +152,10 @@ const writingStyle = ref('analytical_essay'), extensionLevel = ref('exploratory'
 const loading = ref(false), progress = ref(0), stage = ref(''), reports = ref([]), activeReport = ref(null)
 const activeTaskId = ref('')
 const livePlan = ref({})
+const liveDraft = ref('')
+const copyDraft = async () => { await navigator.clipboard.writeText(liveDraft.value); ElMessage.success('已复制草稿') }
 const taskStages = [
-  { key: 'overview', label: '汇总材料' }, { key: 'research-plan', label: '规划问题' },
+  { key: 'overview', label: '汇总材料' }, { key: 'evidence-reading', label: '分批研读' }, { key: 'research-plan', label: '规划问题' },
   { key: 'evidence', label: '检索证据' }, { key: 'synthesis', label: '综合写作' },
   { key: 'done', label: '保存报告' },
 ]
@@ -190,8 +196,14 @@ const followStudyTask = async taskId => {
       stage.value = next.message || next.stage || '处理中'
       stageKey.value = next.stage || stageKey.value
       if (next.result?.research_plan) livePlan.value = next.result.research_plan
+      if (next.result?.draft_markdown) liveDraft.value = next.result.draft_markdown
     }, { signal: controller.signal })
-    if (task.status === 'failed' || task.status === 'cancelled') throw new Error(task.error || task.message || '任务未完成')
+    if (task.status === 'failed') throw new Error(task.error || task.message || '任务未完成')
+    // 用户主动停止不是失败：草稿已由后端逐段写入任务结果，这里不做红色错误提示。
+    if (task.status === 'cancelled') {
+      ElMessage.info(liveDraft.value ? '已停止任务，已完成的草稿已保留' : '已停止任务')
+      return
+    }
     progress.value = 100
     stageKey.value = 'done'
     await loadReports()
@@ -216,6 +228,9 @@ const generate = async () => {
   stageKey.value = 'overview'
   stage.value = '正在提交到全局任务中心'
   livePlan.value = {}
+  liveDraft.value = ''
+  activeReport.value = null
+  content.value = ''
   try {
     const response = await studyOverview({ book_ids: knowledgeBookIds.value, chapter_ids: selectedChapterIds.value, note_ids: selectedNoteIds.value, focus: focus.value.trim(), framework: framework.value.trim(), research_mode: researchMode.value, reasoning_depth: reasoningDepth.value, writing_style:writingStyle.value, extension_level:extensionLevel.value, target_length:targetLength.value })
     notifyTaskSubmitted()
@@ -240,13 +255,15 @@ const saveClaimReview=async()=>{if(claimDraft.value.some(claim=>!claim.claim?.tr
 const sendToPptx = () => { sessionStorage.setItem('deckSelectedText', content.value); sessionStorage.setItem('deckSourceBookIds', JSON.stringify(knowledgeBookIds.value)); sessionStorage.setItem('deckSourceReportId', String(activeReport.value?.id || '')); sessionStorage.setItem('deckSourceChapterIds', JSON.stringify(selectedChapterIds.value)); router.push({ path: '/literature-workbench', query: { from: 'research-report', bookId: knowledgeBookIds.value[0] } }) }
 const openSourceRef = refText => { const match = String(refText).match(/^B(\d+)(?::CH\d+)?(?::P(\d+)(?:-\d+)?)?/); if (!match) return ElMessage.warning('来源锚点无法定位'); router.push({ path: `/reader/${match[1]}`, query: match[2] ? { page: match[2] } : {} }) }
 const statusLabel = status => ({ supported: '支持', partial: '部分支持', needs_review: '待核验', unsupported: '不支持' }[status] || '待核验')
-const typeLabel = type => ({ descriptive: '事实描述', associational: '关联判断', causal: '因果判断', interpretive: '解释判断' }[type] || '解释判断')
 const confidenceLabel = confidence => ({ high: '高置信', medium: '中置信', low: '低置信' }[confidence] || '低置信')
 const relationLabel = relation => ({ consensus:'共识', complementary:'互补', conflict:'冲突', single_source:'单一来源', unresolved:'待定' }[relation] || '待定')
 const qualityLabel = quality => ({ high:'高质量', moderate:'中等质量', low:'低质量', very_low:'极低质量', not_assessed:'未评估' }[quality] || '未评估')
 const relationCount = relation => activeReport.value?.evidence_summary?.relations?.[relation] || 0
 const resetScope = async () => { activeReport.value = null; content.value = ''; selectedChapterIds.value = []; selectedNoteIds.value = []; await loadMaterials() }
-watch(knowledgeBookIds, resetScope, { deep: true })
+// 挂载阶段 loadKnowledgeBooks() 填充书目也会触发这个 watcher，而紧接着
+// onMounted 自己会加载一次材料；不加这个开关，每本书的详情会请求两遍。
+let initialised = false
+watch(knowledgeBookIds, () => { if (initialised) resetScope() }, { deep: true })
 onMounted(async () => {
   await loadKnowledgeBooks()
   await Promise.all([loadMaterials(), loadReports()])
@@ -257,6 +274,7 @@ onMounted(async () => {
   }
   const taskId = String(route.query.taskId || localStorage.getItem(ACTIVE_TASK_KEY) || '')
   if (taskId) followStudyTask(taskId)
+  initialised = true
 })
 onBeforeUnmount(() => taskAbortController?.abort())
 </script>
@@ -265,5 +283,5 @@ onBeforeUnmount(() => taskAbortController?.abort())
 .report-workspace{max-width:1560px}.scope-required{display:flex;flex-direction:column;gap:6px;padding:40px;border:1px dashed #d8c7b0;border-radius:12px;background:#f7f2e9;text-align:center}.workspace-grid{display:grid;grid-template-columns:280px minmax(520px,1fr) 320px;gap:10px;align-items:start}.panel{overflow:hidden;border:1px solid #e5e7eb;border-radius:11px;background:#fffdf9;box-shadow:0 1px 2px rgba(15,23,42,.06)}.panel>header{display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid #ece4d8}.panel>header>div,.source-pane header,.audit-pane header{display:flex;flex-direction:column}.panel header small{color:var(--el-text-color-secondary);font-size:11px}.source-pane>.el-input{margin:10px;width:calc(100% - 20px)}.source-pane section,.audit-pane>section{padding:0 12px 12px;border-top:1px solid #eee7dc}.panel h3{margin:12px 0 8px;color:#786b5b;font-size:12px}.source-book>b{display:block;margin:9px 0 4px;font-size:13px}.source-pane :deep(.el-checkbox-group){display:grid;gap:2px}.source-pane :deep(.el-checkbox){height:auto;margin:0;padding:4px 0;white-space:normal}.source-pane :deep(.el-checkbox__label){display:flex;min-width:0;flex-direction:column;font-size:12px}.source-pane :deep(.el-checkbox__label small){color:#988b7b}.report-pane{min-height:700px}.research-brief{display:grid;gap:10px;padding:14px;background:#f8f3ea}.method-row{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px}.research-brief label{display:grid;gap:5px;color:#675d50;font-size:12px;font-weight:700}.method-hint{margin:0;padding:8px 10px;border-left:2px solid #b98a58;background:rgba(255,255,255,.55);color:#75695c;font-size:11px;line-height:1.6}.progress span{font-size:11px;color:#7b7165}.research-plan{margin:14px;border:1px solid #e7ddcf;border-radius:9px;background:#fffcf7}.research-plan>header{display:flex;align-items:center;justify-content:space-between;padding:11px 12px;border-bottom:1px solid #eee5d9}.research-plan>header div{display:flex;flex-direction:column}.research-plan>header small{color:#8b7f71;font-size:10px}.plan-columns{display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:10px;padding:0 12px 10px}.plan-columns ol,.plan-columns ul,.open-questions ul{margin:0;padding-left:18px;color:#5e554b;font-size:11px;line-height:1.65}.report-content{max-height:calc(100vh - 430px);min-height:300px;overflow-y:auto;padding:18px 24px;line-height:1.9}.output-actions{display:flex;justify-content:flex-end;gap:7px;padding:12px;border-top:1px solid #ece4d8}.source-summary{display:grid;gap:5px}.source-summary button,.history button{padding:7px;border:0;border-radius:7px;background:#f7f1e7;color:#82582e;cursor:pointer;text-align:left;transition:transform .15s ease,background-color .15s ease}.source-summary button:hover,.history button:hover,.source-links button:hover{transform:translateY(-1px);background:#f0e5d5}.claim-card{margin-bottom:8px;padding:9px;border:1px solid #ece3d7;border-radius:8px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.claim-meta{display:flex;align-items:center;gap:7px}.claim-meta span,.claim-meta small{font-size:10px}.claim-meta span:first-child{font-weight:700}.claim-meta span.supported{color:#327052}.claim-meta span.partial{color:#8b6a20}.claim-meta span.needs_review{color:#b5661f}.claim-meta span.unsupported{color:#ad4242}.claim-meta small{margin-left:auto;color:#948779}.claim-card p{margin:7px 0;font-size:12px;line-height:1.55}.claim-card em{display:block;color:#817569;font-size:11px;font-style:normal;line-height:1.5}.claim-card .counterpoint{margin-top:4px;color:#8b5f46}.source-links{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}.source-links button{padding:2px 5px;border:0;border-radius:4px;background:#f5eee3;color:#8a5d31;cursor:pointer;font-size:9px;transition:transform .15s ease,background-color .15s ease}.source-links small{color:#a39688;font-size:10px}.history{display:grid;gap:5px}.history button{display:flex;flex-direction:column}.history button.active{outline:1px solid #b98a58}.history small{overflow:hidden;color:#82776a;text-overflow:ellipsis;white-space:nowrap}.open-questions li+li{margin-top:4px}@media(max-width:1240px){.workspace-grid{grid-template-columns:250px minmax(480px,1fr)}.audit-pane{grid-column:1/-1}}@media(max-width:780px){.workspace-grid{grid-template-columns:1fr}.audit-pane{grid-column:auto}.method-row,.plan-columns{grid-template-columns:1fr}.output-actions{flex-wrap:wrap;justify-content:flex-start}}
 .evidence-summary>div{display:grid;grid-template-columns:1fr 1fr;gap:5px}.evidence-summary span{display:flex;justify-content:space-between;padding:6px 7px;border-radius:6px;background:#f7f1e7;color:#786b5b;font-size:11px}.claim-review-actions{display:flex!important;align-items:center;flex-direction:row!important}.claim-card.editing{display:grid;gap:7px}.claim-edit-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}.open-questions li{display:flex;flex-direction:column}.open-questions li small{margin-top:3px;color:#8b7460}
 .report-head-actions{display:flex;gap:7px}.immersive-report{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:48px;width:min(100%,1280px);margin:0 auto;padding:10px 8px 72px}.immersive-report>main{min-width:0}.immersive-kicker{margin-bottom:20px;color:#8d7358;font-size:10px;letter-spacing:1.5px}.immersive-report>main>.markdown-body{width:min(100%,76ch);font-family:var(--study-font-reading);font-size:17px;line-height:1.95}.immersive-report>aside{position:sticky;top:0;align-self:start;padding-left:22px;border-left:1px solid var(--study-card-border)}.immersive-report>aside h2{margin-bottom:12px;font-size:16px}.immersive-counts{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:14px}.immersive-counts span{display:flex;justify-content:space-between;padding:7px;background:var(--study-surface-muted);font-size:11px}.immersive-report>aside article{display:flex;flex-direction:column;padding:10px 0;border-top:1px solid var(--study-card-border)}.immersive-report>aside article b{font-family:var(--study-font-reading);font-size:12px;line-height:1.55}.immersive-report>aside article small{margin-top:5px;color:var(--study-text-secondary)}.note-reader-actions{display:flex;justify-content:flex-end;gap:8px}@media(max-width:840px){.immersive-report{grid-template-columns:1fr}.immersive-report>aside{position:static;padding-left:0;border-top:1px solid var(--study-card-border);border-left:0}.immersive-report>main>.markdown-body{font-size:16px}}
-.task-monitor{display:grid;gap:9px;padding:12px;border:1px solid #dfcfb9;border-radius:9px;background:#fffaf1}.task-monitor header{display:flex;align-items:center;justify-content:space-between}.task-monitor header div{display:flex;min-width:0;flex-direction:column}.task-monitor header small{overflow:hidden;max-width:240px;color:#8c7e6d;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.task-monitor p,.task-monitor>small{margin:0;color:#75695c;font-size:11px}.task-stages{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}.task-stages span{padding:5px 3px;border-radius:5px;background:#eee7dc;color:#9a8f81;font-size:9px;text-align:center}.task-stages span.active{background:#ead8bd;color:#815627;font-weight:700}.task-stages span.done{background:#e5efe7;color:#39704e}@media(max-width:680px){.task-stages{grid-template-columns:1fr 1fr}.task-stages span:last-child{grid-column:1/-1}}
+.task-monitor{display:grid;gap:9px;padding:12px;border:1px solid #dfcfb9;border-radius:9px;background:#fffaf1}.task-monitor header{display:flex;align-items:center;justify-content:space-between}.task-monitor header div{display:flex;min-width:0;flex-direction:column}.task-monitor header small{overflow:hidden;max-width:240px;color:#8c7e6d;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.task-monitor p,.task-monitor>small{margin:0;color:#75695c;font-size:11px}.task-stages{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px}.task-stages span{padding:5px 3px;border-radius:5px;background:#eee7dc;color:#9a8f81;font-size:9px;text-align:center}.task-stages span.active{background:#ead8bd;color:#815627;font-weight:700}.task-stages span.done{background:#e5efe7;color:#39704e}@media(max-width:680px){.task-stages{grid-template-columns:1fr 1fr}.task-stages span:last-child{grid-column:1/-1}}
 </style>

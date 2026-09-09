@@ -42,6 +42,8 @@ server.log
 
 # 备份产物
 backup-*.zip
+# WorkBuddy 项目数据（记忆、备份、审计状态，不入库）
+.workbuddy/
 # PID file
 server.pid
 # runtime err log

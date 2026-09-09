@@ -29,7 +29,7 @@ from backend.app.services.parser.ocr import (
     pages_requiring_ocr,
     release_ocr_engine,
 )
-from backend.app.worker.tasks import TaskRecord, update_progress
+from backend.app.worker.tasks import TaskCancelled, TaskRecord, update_progress
 
 
 def save_upload(file_name: str, content: bytes) -> tuple[Path, str]:
@@ -128,8 +128,10 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                 result.total_pages = len(result.pages)
                 if result.structured is not None:
                     from backend.app.services.parser.structured import replace_pages_with_ocr
+                    from backend.app.services.parser.ocr import _file_hash, _ocr_cache_dir
                     result.structured = replace_pages_with_ocr(
-                        result.structured, result.pages, weak_pages
+                        result.structured, result.pages, weak_pages,
+                        layout_cache_dir=_ocr_cache_dir(_file_hash(file_path)),
                     )
 
         if not result.pages or all(not p.strip() for p in result.pages):
@@ -219,11 +221,10 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
             from backend.app.services.parser import TocItem
             from backend.app.services.rag.toc_import import select_import_toc
             selected_toc = select_import_toc(book.file_type, result.toc, cleaned_pages, layout)
-            if selected_toc:
-                result.toc = [
-                    TocItem(title=t["title"], level=t["level"], page=t["page"])
-                    for t in selected_toc
-                ]
+            result.toc = [
+                TocItem(title=t["title"], level=t["level"], page=t["page"])
+                for t in selected_toc
+            ]
         except Exception:  # noqa: BLE001
             # 任一增强来源失败时仍保留原始书签，导入不被阻塞。
             pass
@@ -355,6 +356,16 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
             "keywords": len(keyinfo["keywords"]),
             "ocr": ocr_used,
         }
+    except TaskCancelled:
+        # 用户主动取消 ≠ 解析失败。此前会被下面的通用分支捕获成 failed，
+        # 导致资料库显示"解析失败"而任务中心显示"已取消"，两者自相矛盾。
+        db.rollback()
+        book = db.get(Book, book_id)
+        if book is not None:
+            book.status = "pending"
+            book.error_msg = None
+            db.commit()
+        raise
     except Exception as e:  # noqa: BLE001
         db.rollback()
         book = db.get(Book, book_id)
@@ -389,15 +400,24 @@ def _save_analysis(db, book_id: int, keyinfo: dict, layout) -> None:
 
 
 def _simhash(text: str, hash_bits: int = 64) -> int:
-    """简易 SimHash：对文本分词后加权哈希，生成指定位数的指纹。"""
+    """简易 SimHash：对文本分词后加权哈希，生成指定位数的指纹。
+
+    注意：词哈希必须用稳定的摘要算法（这里用 BLAKE2b），不能用内置 hash()。
+    内置 hash 受 PYTHONHASHSEED 随机化影响，重启后同一份文本会算出不同指纹，
+    去重结果无法跨进程复现。
+    """
+    import hashlib
+
     from backend.app.services.rag.chunker import _get_jieba
     jb = _get_jieba()
     words = [w.strip() for w in jb.cut(text) if w.strip() and len(w) >= 2]
     if not words:
         return 0
+    digest_size = max(1, hash_bits // 8)
     v = [0] * hash_bits
     for w in words:
-        h = hash(w) & ((1 << hash_bits) - 1)
+        h = int.from_bytes(hashlib.blake2b(w.encode("utf-8"), digest_size=digest_size).digest(), "big")
+        h &= (1 << hash_bits) - 1
         for i in range(hash_bits):
             if h & (1 << i):
                 v[i] += 1

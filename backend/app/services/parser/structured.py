@@ -279,7 +279,7 @@ def extract_structured_pdf(path: str | Path, prefer_pdftext: bool = True) -> Str
 
 
 def replace_pages_with_ocr(document: StructuredDocument, page_texts: list[str],
-                           page_numbers: set[int]) -> StructuredDocument:
+                           page_numbers: set[int], layout_cache_dir: Path | None = None) -> StructuredDocument:
     """把 OCR 页写回统一结构；未识别页继续保留原始坐标块。"""
     by_page = {page.page: page for page in document.pages}
     for page_no in page_numbers:
@@ -300,7 +300,45 @@ def replace_pages_with_ocr(document: StructuredDocument, page_texts: list[str],
             confidence=0.8,
         )] if text else []
     document.pages.sort(key=lambda item: item.page)
+    if layout_cache_dir is not None:
+        hydrate_ocr_geometry(document, layout_cache_dir)
     return document
+
+
+def hydrate_ocr_geometry(document: StructuredDocument, cache_dir: Path) -> int:
+    """Restore per-line OCR geometry from local caches, without running OCR.
+
+    Old imports stored a single full-page block; its top edge was then mistaken
+    for a header. Only replace OCR/empty pages, preserving native text evidence.
+    """
+    restored = 0
+    for page in document.pages:
+        if page.blocks and not all(block.source == 'ocr' for block in page.blocks):
+            continue
+        cache = Path(cache_dir) / f'page_{page.page:04d}.layout.json'
+        try:
+            payload = json.loads(cache.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        blocks = []
+        if page.width <= 0 or page.height <= 0:
+            continue
+        for item in payload.get('items', []):
+            try:
+                x, y, w, h = (float(item[k]) for k in ('x', 'y', 'w', 'h'))
+                text = str(item.get('text') or '').strip()
+                if not text or min(x, y) < 0 or min(w, h) <= 0 or x + w > 1.001 or y + h > 1.001:
+                    continue
+                blocks.append(DocumentBlock(page=page.page, text=text, lines=[text],
+                    bbox=(x * page.width, y * page.height, (x + w) * page.width, (y + h) * page.height),
+                    font_size=h * page.height, source='ocr', confidence=float(item.get('confidence') or .8),
+                    reading_order=len(blocks)))
+            except (KeyError, TypeError, ValueError):
+                continue
+        if blocks:
+            page.blocks = blocks
+            restored += 1
+    return restored
 
 
 def repeated_margin_lines(document: StructuredDocument, min_pages: int = 3) -> tuple[set[str], set[str]]:

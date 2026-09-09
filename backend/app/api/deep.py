@@ -13,9 +13,8 @@ from backend.app.models import Book, BookDeep, Chapter, Chunk
 from backend.app.services.deep_analysis import (
     audit_paper_card,
     build_paper_card,
-    build_section_texts,
-    complete_with_ai,
-    extract_titles_3level,
+    build_chapter_inputs,
+    section_key,
     summarize_by_toc,
     to_markdown,
     verify_toc,
@@ -26,24 +25,11 @@ router = APIRouter(prefix="/api", tags=["deep"])
 CATEGORIES = ["数学", "管理学", "经济学", "计算机", "英语", "政治", "物理", "化学", "生物", "法学", "文学", "历史", "哲学", "其他"]
 
 
-def _page_texts_from_chunks(db: Session, book_id: int) -> list[str]:
-    """由 chunks 按 page_start 重建页文本（标题检测用首行即可）。"""
-    chunks = db.scalars(
-        select(Chunk).where(Chunk.book_id == book_id).order_by(Chunk.chunk_index)
-    ).all()
-    pages: dict[int, list[str]] = {}
-    for c in chunks:
-        p = c.page_start or 1
-        pages.setdefault(p, []).append(c.content)
-    maxp = max(pages.keys()) if pages else 0
-    return ["\n".join(pages.get(i, [])) for i in range(1, maxp + 1)]
-
-
 async def run_deep_analysis(record, book_id: int) -> dict:
     """执行深度分析：标题提取→核对→AI补全→逐章总结→Markdown。"""
     from backend.app.core.database import SessionLocal
     from backend.app.services.llm import LLMRouter, load_llm_config
-    from backend.app.worker.tasks import update_progress
+    from backend.app.worker.tasks import TaskCancelled, update_progress
 
     db = SessionLocal()
     try:
@@ -61,14 +47,17 @@ async def run_deep_analysis(record, book_id: int) -> dict:
         db.commit()
 
         update_progress(record, 0.1, "deep", "正在提取三级标题目录...")
-        pages = _page_texts_from_chunks(db, book_id)
-        toc = extract_titles_3level(pages)
-        # 本地提取失败 → 用现有 chapters 表生成目录兜底
+        chapters = db.scalars(select(Chapter).where(Chapter.book_id == book_id)
+                              .order_by(Chapter.order_index, Chapter.id)).all()
+        chunks = db.scalars(select(Chunk).where(Chunk.book_id == book_id)
+                           .order_by(Chunk.chunk_index, Chunk.id)).all()
+        # Respect the reviewed directory; never replace it with headings extracted
+        # from a chunk's first lines. Root ordinal is independent of order_index.
+        toc, ch_texts, section_texts = build_chapter_inputs(chapters, chunks)
         if not toc:
-            chapters = db.scalars(
-                select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.order_index)
-            ).all()
-            toc = [{"title": ch.title, "level": ch.level or 1, "page": ch.start_page or 1} for ch in chapters]
+            toc = [{"title": book.title, "level": 1, "page": 1}]
+            ch_texts = {1: "\n\n".join(f"[B{book_id}-C{c.id}]\n{c.content}" for c in chunks)}
+            section_texts = {section_key(toc[0]): "\n\n".join(c.content for c in chunks)}
 
         verify = verify_toc(toc)
         update_progress(record, 0.3, "deep", f"核对完成：{verify['chapters']}章/{verify['sections']}节，缺失 {len(verify['issues'])} 项")
@@ -76,39 +65,24 @@ async def run_deep_analysis(record, book_id: int) -> dict:
         # AI 补全（有 Key 时）
         cfg = load_llm_config(db, "research")
         provider = LLMRouter.get("auto", cfg)
-        use_ai = bool(cfg.get("deepseek_api_key"))
-        if use_ai and verify["issues"]:
-            update_progress(record, 0.45, "deep", "AI 补全缺失标题...")
-            toc = await complete_with_ai(provider, toc, verify["issues"], pages)
-            verify = verify_toc(toc)
-            update_progress(record, 0.55, "deep", f"补全后核对：缺失 {len(verify['issues'])} 项")
+        use_ai = bool(cfg.get("configured", cfg.get("deepseek_api_key")))
 
         # 逐章 AI 总结（增量缓存：跳过内容未变化的章节）
         summaries: list[dict] = []
         import hashlib as _hashlib
         if use_ai:
             update_progress(record, 0.6, "deep", "AI 按目录逐章精读总结...")
-            chapters = db.scalars(
-                select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.order_index)
-            ).all()
-            ch_texts: dict[int, str] = {}
-            ch_hashes: dict[int, str] = {}
-            for ch in chapters:
-                chunks = db.scalars(
-                    select(Chunk).where(Chunk.chapter_id == ch.id).order_by(Chunk.chunk_index)
-                ).all()
-                text = "\n".join(c.content for c in chunks)
-                ch_texts[ch.order_index] = text
-                ch_hashes[ch.order_index] = _hashlib.md5(text.encode()).hexdigest()
+            # Version the cache to invalidate old truncated/misaligned summaries.
+            ch_hashes = {i: _hashlib.sha256(("full-chapter-v2:" + text).encode()).hexdigest()
+                         for i, text in ch_texts.items()}
 
             # 加载旧缓存：已总结且内容哈希未变的章节跳过
             old_summaries: dict[str, str] = {}  # title -> summary
             old_hashes: dict[int, str] = {}
-            cached_toc_titles: set[str] = set()
             if deep.summaries_json:
                 try:
                     for s in json.loads(deep.summaries_json):
-                        old_summaries[s.get("title", "")] = s.get("summary", "")
+                        old_summaries[s.get("key", s.get("title", ""))] = s.get("summary", "")
                 except (ValueError, TypeError):
                     pass
             if deep.chapter_hashes_json:
@@ -124,16 +98,17 @@ async def run_deep_analysis(record, book_id: int) -> dict:
             cached_summaries: list[dict] = []
             for i, ch_toc in enumerate(chapters_toc, start=1):
                 title = ch_toc["title"]
+                key = section_key(ch_toc)
                 text = ch_texts.get(i, "")
                 cur_hash = ch_hashes.get(i, "")
                 old_hash = old_hashes.get(i, "")
-                if text and cur_hash == old_hash and title in old_summaries:
+                if text and cur_hash == old_hash and key in old_summaries:
                     # 内容未变，用缓存
-                    cached_summaries.append({"title": title, "summary": old_summaries[title]})
+                    cached_summaries.append({"title": title, "key": key, "summary": old_summaries[key]})
                 elif text:
                     need_summarize[i] = text
                 else:
-                    cached_summaries.append({"title": title, "summary": "（该章无正文内容）"})
+                    cached_summaries.append({"title": title, "key": key, "summary": "（该章无正文内容）"})
 
             skipped = len(cached_summaries)
             need_count = len(need_summarize)
@@ -143,21 +118,35 @@ async def run_deep_analysis(record, book_id: int) -> dict:
 
             # 只对 need_summarize 的章节调 AI
             new_summaries: list[dict] = []
+            completed = {s["key"]: s for s in cached_summaries}
+            def persist_chapter(i, result):
+                completed[result["key"]] = result
+                partial = [completed[section_key(t)] for t in chapters_toc if section_key(t) in completed]
+                deep.toc_json = json.dumps(toc, ensure_ascii=False)
+                deep.summaries_json = json.dumps(partial, ensure_ascii=False)
+                deep.chapter_hashes_json = json.dumps([
+                    {"order_index": n, "hash": ch_hashes[n]}
+                    for n, t in enumerate(chapters_toc, 1) if section_key(t) in completed], ensure_ascii=False)
+                deep.markdown = to_markdown(book.title, toc, partial, section_texts)
+                db.commit()
+                record.result = {"completed_chapters": len(partial), "total_chapters": len(chapters_toc)}
+            db.commit()  # no database read transaction held during remote inference
             if need_summarize:
                 def _sum_progress(i, total, title):
                     update_progress(record, 0.62 + 0.2 * i / max(total, 1), "deep",
                                     f"AI 精读总结 {i}/{total}：{title[:30]}")
                 new_summaries = await summarize_by_toc(provider, book.title, toc, need_summarize,
-                                                       on_progress=_sum_progress)
+                                                       on_progress=_sum_progress, on_chapter=persist_chapter)
 
             # 合并缓存 + 新总结（按目录顺序）
-            new_map = {s["title"]: s["summary"] for s in new_summaries}
+            new_map = {s["key"]: s for s in new_summaries}
             for ch_toc in chapters_toc:
                 title = ch_toc["title"]
-                if title in new_map:
-                    summaries.append({"title": title, "summary": new_map[title]})
+                key = section_key(ch_toc)
+                if key in new_map:
+                    summaries.append(new_map[key])
                 else:
-                    cs = next((c for c in cached_summaries if c["title"] == title), None)
+                    cs = next((c for c in cached_summaries if c["key"] == key), None)
                     if cs:
                         summaries.append(cs)
 
@@ -170,22 +159,32 @@ async def run_deep_analysis(record, book_id: int) -> dict:
             update_progress(record, 0.85, "deep", "未配置 AI，生成纯本地 Markdown（无 AI 总结）...")
 
         # Markdown
-        section_texts = build_section_texts(
-            [(c.page_start or 1, c.content) for c in db.scalars(
-                select(Chunk).where(Chunk.book_id == book_id).order_by(Chunk.chunk_index)).all()],
-            toc,
-        )
         md = to_markdown(book.title, toc, summaries, section_texts)
+        deep.toc_json = json.dumps(toc, ensure_ascii=False)
+        deep.summaries_json = json.dumps(summaries, ensure_ascii=False)
+        deep.markdown = md
+        db.commit()
 
         # 证据型 Paper Card：复用同一批来源块，不重复提取 PDF。
         if use_ai:
+            # 上面的多次 commit 已让 chunks 全部过期（session 默认 expire_on_commit），
+            # 这里重取一次：否则 build_paper_card 逐块访问 .content/.page_start 时
+            # 会为每个对象单独发一条懒加载查询。
+            chunks = db.scalars(select(Chunk).where(Chunk.book_id == book_id)
+                                .order_by(Chunk.chunk_index)).all()
             update_progress(record, 0.92, "deep", "正在生成证据型阅读卡...")
-            all_chunks = db.scalars(
-                select(Chunk).where(Chunk.book_id == book_id).order_by(Chunk.chunk_index)
-            ).all()
-            card = await build_paper_card(provider, book.title, toc, all_chunks)
-            deep.paper_card = card
-            deep.card_audit_json = json.dumps(audit_paper_card(card), ensure_ascii=False)
+            try:
+                card = await build_paper_card(provider, book.title, toc, chunks, summaries=summaries,
+                    on_progress=lambda _: update_progress(record, .92, "deep", "正在生成阅读卡，章节正文已保存"))
+                deep.paper_card = card
+                deep.card_audit_json = json.dumps(audit_paper_card(card), ensure_ascii=False)
+            except TaskCancelled:
+                raise
+            except Exception as card_exc:
+                # 把供应商的真实拒绝原因透给用户（模型未开通 / 模型名写错 / 限流），
+                # 否则界面只有一句笼统的"生成失败"，用户无从下手。
+                deep.error_msg = (f"阅读卡生成失败：{str(card_exc)[:200]}；"
+                                  "逐章精读与原文已保存，可重新研读重试阅读卡。")
 
         clean_toc = [{k: v for k, v in t.items() if k != "parent"} for t in toc]
         deep.toc_json = json.dumps(clean_toc, ensure_ascii=False)
@@ -193,10 +192,15 @@ async def run_deep_analysis(record, book_id: int) -> dict:
         deep.markdown = md
         deep.status = "done"
         db.commit()
-        update_progress(record, 1.0, "deep", "完成")
+        update_progress(record, 1.0, "deep", deep.error_msg or "完成")
         return {"toc": len(toc), "chapters": verify["chapters"], "sections": verify["sections"],
                 "summaries": len(summaries), "markdown_chars": len(md),
                 "paper_card": bool(deep.paper_card), "ai": use_ai}
+    except TaskCancelled:
+        # 用户主动取消 ≠ 研读失败。逐章结果已由 persist_chapter 增量提交，
+        # 这里只回滚当前未提交的部分；重新研读时会命中哈希表跳过已完成章节。
+        db.rollback()
+        raise
     except Exception as e:  # noqa: BLE001
         db.rollback()
         deep = db.scalar(select(BookDeep).where(BookDeep.book_id == book_id))
@@ -212,13 +216,17 @@ async def run_deep_analysis(record, book_id: int) -> dict:
 @router.post("/books/{book_id}/deep-analyze", status_code=202)
 def deep_analyze(book_id: int, db: Session = Depends(get_db)):
     """手动触发深度分析（后台任务）。"""
-    from backend.app.worker.tasks import submit
+    from backend.app.worker.tasks import has_active_task, submit
 
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
     if book.status != "ready":
         raise HTTPException(409, "书籍尚未解析完成")
+    # 单 worker 串行队列不会让两个任务并发写坏数据，但会重复计费并在任务中心
+    # 留两条同名进度；提交前先告知用户。
+    if has_active_task("deep", book_id):
+        raise HTTPException(409, "该书已有研读任务在排队或运行中；请在任务中心等待完成或停止后再提交")
     record = submit("deep", lambda rec: run_deep_analysis(rec, book_id), book_id=book_id)
     return {"task_id": record.id, "status": "running"}
 

@@ -32,18 +32,34 @@ from backend.app.schemas import (
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
 
-def _to_resp(node: KnowledgeNode, db: Session) -> KnowledgeNodeResp:
-    children = db.scalars(
-        select(KnowledgeNode).where(KnowledgeNode.parent_id == node.id)
-        .order_by(KnowledgeNode.order_index, KnowledgeNode.id)
-    ).all()
+def _to_resp(node: KnowledgeNode, db: Session, _child_map: dict[int, list[KnowledgeNode]] | None = None) -> KnowledgeNodeResp:
+    """展开单个节点。传入 _child_map 时用一次性查好的子节点索引，避免逐层递归查库（N+1）。"""
+    if _child_map is None:
+        children = list(db.scalars(
+            select(KnowledgeNode).where(KnowledgeNode.parent_id == node.id)
+            .order_by(KnowledgeNode.order_index, KnowledgeNode.id)
+        ).all())
+    else:
+        children = _child_map.get(node.id, [])
     return KnowledgeNodeResp(
         id=node.id, parent_id=node.parent_id, title=node.title,
         book_id=node.book_id, chapter_id=node.chapter_id, note=node.note,
         node_type=node.node_type or "concept", mastery=node.mastery or "unknown",
         ref_node_id=node.ref_node_id, order_index=node.order_index,
-        children=[_to_resp(c, db) for c in children],
+        children=[_to_resp(c, db, _child_map) for c in children],
     )
+
+
+def _build_child_map(db: Session) -> dict[int, list[KnowledgeNode]]:
+    """一次性取出全部非根节点并按父节点分组（单条 SQL），替代递归中的逐节点查询。"""
+    child_map: dict[int, list[KnowledgeNode]] = {}
+    rows = db.scalars(
+        select(KnowledgeNode).where(KnowledgeNode.parent_id.is_not(None))
+        .order_by(KnowledgeNode.order_index, KnowledgeNode.id)
+    ).all()
+    for row in rows:
+        child_map.setdefault(row.parent_id, []).append(row)
+    return child_map
 
 
 def _get_node(db: Session, node_id: int) -> KnowledgeNode:
@@ -53,13 +69,17 @@ def _get_node(db: Session, node_id: int) -> KnowledgeNode:
     return node
 
 
-def _collect_ids(node: KnowledgeNode, db: Session) -> list[int]:
+def _collect_ids(node: KnowledgeNode, db: Session, _child_map: dict[int, list[KnowledgeNode]] | None = None) -> list[int]:
+    """递归收集子树 id。传入 _child_map 时复用已查好的索引，避免 N+1。"""
     ids = [node.id]
-    children = db.scalars(
-        select(KnowledgeNode).where(KnowledgeNode.parent_id == node.id)
-    ).all()
+    if _child_map is None:
+        children = list(db.scalars(
+            select(KnowledgeNode).where(KnowledgeNode.parent_id == node.id)
+        ).all())
+    else:
+        children = _child_map.get(node.id, [])
     for c in children:
-        ids.extend(_collect_ids(c, db))
+        ids.extend(_collect_ids(c, db, _child_map))
     return ids
 
 
@@ -68,8 +88,9 @@ def get_tree(book_ids: list[int] | None = Query(default=None), db: Session = Dep
     roots = db.scalars(
         select(KnowledgeNode).where(KnowledgeNode.parent_id.is_(None))
         .order_by(KnowledgeNode.order_index, KnowledgeNode.id)
-    ).all()
-    items = [_to_resp(r, db) for r in roots]
+    )
+    child_map = _build_child_map(db)
+    items = [_to_resp(r, db, child_map) for r in roots]
     scope = set(book_ids or [])
     if scope:
         def belongs(node: KnowledgeNodeResp) -> bool:
@@ -470,9 +491,13 @@ def update_node(node_id: int, req: KnowledgeNodeUpdateReq, db: Session = Depends
 @router.delete("/nodes/{node_id}", status_code=204)
 def delete_node(node_id: int, db: Session = Depends(get_db)):
     node = _get_node(db, node_id)
-    ids = _collect_ids(node, db)
+    child_map = _build_child_map(db)
+    ids = _collect_ids(node, db, child_map)
     # 删除知识组织不应连带删除阅读器中的原文高亮，只解除挂接关系。
     db.execute(update(Annotation).where(Annotation.knowledge_node_id.in_(ids)).values(knowledge_node_id=None))
+    # 先解除节点之间的自引用（含子树外部指向被删节点的引用），
+    # 否则外键残留会让删除抛错、或留下指向已删节点的悬空引用。
+    db.execute(update(KnowledgeNode).where(KnowledgeNode.ref_node_id.in_(ids)).values(ref_node_id=None))
     db.query(KnowledgeNode).filter(KnowledgeNode.id.in_(ids)).delete(synchronize_session=False)
     db.commit()
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
@@ -91,6 +91,7 @@ def _profile_summary(row: WritingDnaProfile) -> dict:
 def _revision(row: WritingDnaRevision) -> dict:
     return {"id": row.id, "profile_id": row.profile_id, "version": row.version,
             "language_dna": row.language_dna, "structure_patterns": row.structure_patterns,
+            "logic_dna": row.logic_dna or "",
             "cognitive_framework": row.cognitive_framework, "visual_style_guide": row.visual_style_guide,
             "writing_dna": row.writing_dna, "quality": _loads(row.quality_json, {}),
             "feedback": row.feedback or "", "created_at": row.created_at}
@@ -210,7 +211,11 @@ def get_profile(profile_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Writing DNA 项目不存在")
     revisions = db.scalars(select(WritingDnaRevision).where(WritingDnaRevision.profile_id == profile_id)
                            .order_by(WritingDnaRevision.version.desc())).all()
+    book_ids = _loads(row.book_ids_json, [])
+    existing_ids = set(db.scalars(select(Book.id).where(Book.id.in_(book_ids))).all()) if book_ids else set()
+    missing_book_ids = [book_id for book_id in book_ids if book_id not in existing_ids]
     return {**_profile_summary(row), "corpus_manifest": _loads(row.corpus_manifest_json, []),
+            "missing_book_ids": missing_book_ids,
             "revisions": [_revision(revision) for revision in revisions]}
 
 
@@ -231,6 +236,25 @@ def create_profile(req: ProfileCreateReq, db: Session = Depends(get_db)):
     return {"profile_id": row.id, "task_id": task.id, "corpus_count": len(manifest)}
 
 
+@router.delete("/profiles/{profile_id}")
+def delete_profile(profile_id: int, db: Session = Depends(get_db)):
+    row = db.get(WritingDnaProfile, profile_id)
+    if not row:
+        raise HTTPException(404, "Writing DNA 项目不存在")
+    if row.status in {"pending", "running"}:
+        raise HTTPException(409, "该项目正在蒸馏，请等待完成或先取消任务后再删除")
+    output_count = db.scalar(select(func.count()).select_from(WritingOutput).where(WritingOutput.profile_id == profile_id)) or 0
+    revision_count = db.scalar(select(func.count()).select_from(WritingDnaRevision)
+                               .where(WritingDnaRevision.profile_id == profile_id)) or 0
+    # 输出保留（profile_id 置空，仍可在“写作输出”中查看）；版本历史随项目一并删除。
+    db.execute(update(WritingOutput).where(WritingOutput.profile_id == profile_id).values(profile_id=None))
+    db.query(WritingDnaRevision).filter(WritingDnaRevision.profile_id == profile_id).delete()
+    db.delete(row)
+    db.commit()
+    return {"deleted": True, "profile_id": profile_id,
+            "removed_revisions": revision_count, "kept_outputs": output_count}
+
+
 @router.post("/profiles/{profile_id}/refine", status_code=202)
 def refine_profile(profile_id: int, req: ProfileRefineReq, db: Session = Depends(get_db)):
     row = db.get(WritingDnaProfile, profile_id)
@@ -239,7 +263,11 @@ def refine_profile(profile_id: int, req: ProfileRefineReq, db: Session = Depends
     if row.status in {"pending", "running"}:
         raise HTTPException(409, "当前版本仍在蒸馏，请等待完成后再提交下一版")
     removed = set(req.remove_book_ids)
-    ids = list(dict.fromkeys([book_id for book_id in _loads(row.book_ids_json, []) if book_id not in removed] + req.book_ids))
+    stored_ids = [book_id for book_id in _loads(row.book_ids_json, []) if book_id not in removed]
+    # 语料里的书目可能已被从书库删除；refine 时自动剔除，否则整个档案会被失效引用卡死。
+    existing_ids = set(db.scalars(select(Book.id).where(Book.id.in_(stored_ids))).all()) if stored_ids else set()
+    pruned = [book_id for book_id in stored_ids if book_id not in existing_ids]
+    ids = list(dict.fromkeys([book_id for book_id in stored_ids if book_id in existing_ids] + req.book_ids))
     try:
         manifest = validate_corpus(db, ids)
     except ValueError as exc:
@@ -248,7 +276,8 @@ def refine_profile(profile_id: int, req: ProfileRefineReq, db: Session = Depends
     row.feedback = req.feedback.strip() or row.feedback; row.status = "pending"; row.error_msg = None
     db.commit()
     task = submit("writing_dna", lambda record: distill_profile_task(record, row.id), book_id=ids[0])
-    return {"profile_id": row.id, "task_id": task.id, "corpus_count": len(ids), "next_version": row.current_version + 1}
+    return {"profile_id": row.id, "task_id": task.id, "corpus_count": len(ids),
+            "next_version": row.current_version + 1, "pruned_book_ids": pruned}
 
 
 @router.post("/profiles/{profile_id}/imitate")

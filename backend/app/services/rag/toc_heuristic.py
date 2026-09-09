@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from statistics import median
 
 
 _CN = "一二三四五六七八九十百千万"
@@ -142,6 +143,11 @@ def _compact_heading_spacing(raw: str) -> str:
 
 def classify_heading(line: str) -> tuple[str, int] | None:
     """返回规范标题及层级；正文句和目录点线返回 None。"""
+    # 必须在清洗之前判断：清洗会删掉点线和印刷页码，丢失目录页负证据。
+    if _TOC_DOTS.search(str(line)) or _SENTENCE_PUNCT.search(str(line)):
+        return None
+    if len(line) > 22 and re.search(r'[，,]', line):
+        return None
     s = _compact_heading_spacing(line)
     if (
         not s or len(s) > 100 or _TOC_DOTS.search(s) or _SENTENCE_PUNCT.search(s)
@@ -200,17 +206,11 @@ def _norm_title_key(title: str) -> str:
 def _deduplicate(results: list[dict]) -> list[dict]:
     # 相同标题可能在不同章节重复出现，只去掉同一页的重复来源。
     seen: set[tuple[str, int, int]] = set()
-    seen_numbered_roots: set[str] = set()
     out: list[dict] = []
     for item in sorted(results, key=lambda x: (x["page"], x.get("line", 0), x["level"])):
         key = (_norm_title_key(item["title"]), item["level"], item["page"])
         if key in seen:
             continue
-        root_key = _norm_title_key(item["title"])
-        if item["level"] == 1 and classify_heading(item["title"]):
-            if root_key in seen_numbered_roots:
-                continue
-            seen_numbered_roots.add(root_key)
         seen.add(key)
         out.append({k: v for k, v in item.items() if k != "line"})
     return out
@@ -253,10 +253,34 @@ def _join_heading_lines(lines: list[str], idx: int) -> tuple[str, int]:
     return line.rstrip() + _compact_heading_spacing(nxt), 2
 
 
+def contents_page_numbers(pages: list[str]) -> set[int]:
+    """识别总目录和分篇目录；印刷页码不是 PDF 物理页定位证据。"""
+    found = set()
+    for pno, text in enumerate(pages, 1):
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        header = any(re.fullmatch(r"(?:目\s*录|总目录|详细目录|contents|table\s+of\s+contents)",
+                                  line, re.I) for line in lines[:5])
+        entries = sum(bool(re.search(r"\D.{1,90}(?:[.．·…]{2,}\s*|\s+)\d{1,4}\s*$", line))
+                      for line in lines)
+        headings = sum(bool(_HEADING_START_RE.match(line)) for line in lines)
+        separate_numbers = sum(bool(re.fullmatch(r'\d{1,4}', line)) for line in lines)
+        # 延续页可能没有“目录”字样；需要多数行呈条目形态，避免误伤正文列表。
+        if ((header and (entries >= 2 or headings >= 2))
+                or (entries >= 4 and entries >= len(lines) * .45)
+                or (headings >= 3 and separate_numbers >= 3
+                    and headings + separate_numbers >= len(lines) * .45
+                    and sum(bool(_SENTENCE_PUNCT.search(line)) for line in lines) <= 2)):
+            found.add(pno)
+    return found
+
+
 def extract_toc_heuristic(pages: list[str], min_pages: int = 2) -> list[dict]:
     """扫描整页标题候选，允许同页多个层级标题。"""
     results: list[dict] = []
+    contents_pages = contents_page_numbers(pages)
     for pno, text in enumerate(pages, start=1):
+        if pno in contents_pages:
+            continue
         lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
         idx = 0
         while idx < len(lines):
@@ -280,8 +304,19 @@ def extract_toc_from_layout(layout) -> list[dict]:
     if not layout or not layout.pages:
         return results
     for page_blocks in layout.pages:
+        if contents_page_numbers(["\n".join(blk.text for blk in page_blocks)]):
+            continue
+        widths = [blk.bbox[2] - blk.bbox[0] for blk in page_blocks
+                  if hasattr(blk, 'bbox') and len(blk.text) >= 22 and blk.bbox[2] > blk.bbox[0]]
+        body_width = median(widths) if widths else float('inf')
         for idx, blk in enumerate(page_blocks):
-            if blk.block_type != "title":
+            is_ocr = getattr(blk, 'source', '') == 'ocr'
+            above = blk.bbox[1] - page_blocks[idx - 1].bbox[3] if is_ocr and idx else 0
+            below = page_blocks[idx + 1].bbox[1] - blk.bbox[3] if is_ocr and idx + 1 < len(page_blocks) else 0
+            separated = above > layout.body_size * .7 and below > layout.body_size * .3
+            if blk.block_type != "title" and not (is_ocr and blk.block_type == 'body' and separated):
+                continue
+            if _TOC_DOTS.search(blk.text):
                 continue
             title = _clean_title(blk.text)
             compact = re.sub(r"\s+", "", title)
@@ -295,6 +330,13 @@ def extract_toc_from_layout(layout) -> list[dict]:
             ):
                 continue
             classified = classify_heading(title)
+            if is_ocr and not classified and (
+                len(title) < 2 or _SENTENCE_PUNCT.search(blk.text)
+                or re.search(r'[，,]', blk.text)
+                or (blk.bbox[2] - blk.bbox[0] >= body_width * .92 and blk.size < layout.body_size * 1.35)
+                or (blk.size < layout.body_size * 1.3 and not separated)
+            ):
+                continue
             if classified:
                 title, level = classified
             else:

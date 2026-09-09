@@ -20,6 +20,10 @@ from backend.app.core.database import SessionLocal, engine
 from backend.app.models import ImportTask
 
 _task_registry: dict[str, "TaskRecord"] = {}
+# registry 由后台 loop 线程与 FastAPI 请求线程共同访问：遍历期间被插入会抛
+# "dictionary changed size during iteration"，而该异常发生在 _worker 的 finally 中，
+# 会直接杀死 worker 协程并让队列永久停摆。所有访问必须持此锁。
+_TASK_REGISTRY_LOCK = threading.RLock()
 _queue: asyncio.Queue | None = None
 _interactive_queue: asyncio.Queue | None = None
 _backend_loop: asyncio.AbstractEventLoop | None = None
@@ -47,12 +51,13 @@ class TaskRecord:
 
 def _release_completed_tasks() -> None:
     """释放已结束任务的闭包，仅在内存保留最近记录；完整历史仍在 SQLite。"""
-    completed = [
-        task_id for task_id, task in _task_registry.items()
-        if task.status in ("done", "failed", "cancelled")
-    ]
-    for task_id in completed[:-_MAX_COMPLETED_IN_MEMORY]:
-        _task_registry.pop(task_id, None)
+    with _TASK_REGISTRY_LOCK:
+        completed = [
+            task_id for task_id, task in _task_registry.items()
+            if task.status in ("done", "failed", "cancelled")
+        ]
+        for task_id in completed[:-_MAX_COMPLETED_IN_MEMORY]:
+            _task_registry.pop(task_id, None)
 
 
 def _persist(record: TaskRecord) -> None:
@@ -150,9 +155,14 @@ async def _worker(queue: asyncio.Queue) -> None:
                 record.error = str(e)
                 _persist(record)
         finally:
-            if record.status in ("done", "failed", "cancelled"):
-                record._coro = None
-                _release_completed_tasks()
+            try:
+                if record.status in ("done", "failed", "cancelled"):
+                    record._coro = None
+                    _release_completed_tasks()
+            except Exception:  # noqa: BLE001
+                # 释放内存失败绝不能传播：异常从这里逃逸会终止 worker 协程，
+                # 之后提交的任务永远停在 pending 且无自愈。
+                pass
             queue.task_done()
 
 
@@ -185,11 +195,29 @@ def submit(name: str, coro_factory: Callable[[TaskRecord], Awaitable[Any]],
         id=f"{name}-{uuid.uuid4().hex[:8]}", name=name,
         book_id=book_id, _coro=coro_factory,
     )
-    _task_registry[record.id] = record
+    with _TASK_REGISTRY_LOCK:
+        _task_registry[record.id] = record
     _persist(record)
     # 入队后由 _worker 串行 await，避免多任务并发解析/并发 AI 请求
     asyncio.run_coroutine_threadsafe(_queue_for(name).put(record), loop)
     return record
+
+
+def has_active_task(name: str, book_id: int) -> bool:
+    """同一书籍是否已有同名任务在排队或运行中（已结束/已取消的不算）。
+
+    队列是单 worker 串行执行的，重复提交不会并发写坏数据，但会让模型调用、
+    OCR 这些按量计费的步骤重跑一遍，并在任务中心留下两个同名进度。
+    这里用于在提交入口提前告知用户，而不是让他们等跑完才发现重复。
+    """
+    try:
+        return any(
+            task.name == name and task.book_id == book_id
+            and task.status in ("pending", "running")
+            for task in list_tasks()
+        )
+    except Exception:  # noqa: BLE001 — 查询失败时不应阻塞用户提交
+        return False
 
 
 def get_task(task_id: str) -> TaskRecord | None:
@@ -217,7 +245,8 @@ def get_task(task_id: str) -> TaskRecord | None:
 
 
 def list_tasks() -> list[TaskRecord]:
-    return list(_task_registry.values())
+    with _TASK_REGISTRY_LOCK:
+        return list(_task_registry.values())
 
 
 class TaskCancelled(RuntimeError):
@@ -232,7 +261,8 @@ def cancel_task(task_id: str) -> TaskRecord | None:
         record = get_task(task_id)
         if record is None:
             return None
-        _task_registry[task_id] = record
+        with _TASK_REGISTRY_LOCK:
+            _task_registry[task_id] = record
     if record.status in ("done", "failed", "cancelled"):
         return record
     record.cancel_requested = True
@@ -283,7 +313,12 @@ def update_progress(
     force: bool = False,
 ) -> None:
     if record.cancel_requested:
-        raise TaskCancelled("任务已取消；已完成的页面缓存会在下次解析时复用")
+        # 取消提示要贴合任务类型。这条早期只为 PDF 解析/OCR 而写，
+        # 现在研读、报告、写作 DNA、PPT 等任务共用同一函数，
+        # 不能一律告诉用户"页面缓存会复用"。
+        if record.name in {"import", "reimport"}:
+            raise TaskCancelled("任务已取消；已完成的页面缓存会在下次解析时复用")
+        raise TaskCancelled("任务已取消；已完成的部分结果会保留，可稍后继续")
     record.progress = progress
     if stage:
         record.stage = stage
@@ -329,7 +364,8 @@ def recover_pending_tasks() -> list[str]:
                     id=row.id, name=row.name or "import", book_id=row.book_id, status="pending",
                     _coro=lambda rec, bid=row.book_id: run_import(rec, bid),
                 )
-                _task_registry[row.id] = record
+                with _TASK_REGISTRY_LOCK:
+                    _task_registry[row.id] = record
                 loop = _ensure_backend()
                 asyncio.run_coroutine_threadsafe(_queue_for(record.name).put(record), loop)
                 recovered.append(row.id)

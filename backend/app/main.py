@@ -141,6 +141,13 @@ def _migrate():
                     conn.execute(text("ALTER TABLE import_tasks ADD COLUMN retry_count INTEGER DEFAULT 0"))
             except Exception:  # noqa: BLE001
                 pass
+            # Writing DNA v2：逻辑结构考察层（旧版本行为 NULL）
+            try:
+                wr_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(writing_dna_revisions)")).fetchall()]
+                if wr_cols and "logic_dna" not in wr_cols:
+                    conn.execute(text("ALTER TABLE writing_dna_revisions ADD COLUMN logic_dna TEXT"))
+            except Exception:  # noqa: BLE001
+                pass
             # PDF 批注 v2：多页分段、原文锚点与待重定位状态。
             try:
                 ann_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(annotations)")).fetchall()]

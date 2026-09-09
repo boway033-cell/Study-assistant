@@ -31,6 +31,7 @@ class BlockInfo:
     block_type: str  # title / body / header / footer / table / formula / other
     page: int  # 1-based
     page_height: float
+    source: str = ''
 
 
 @dataclass
@@ -76,6 +77,7 @@ def analyze_structured(document) -> LayoutResult:
                 text=block.text, size=size, is_bold=is_bold, is_italic=False,
                 bbox=block.bbox, block_type=btype, page=page.page,
                 page_height=page.height,
+                source=block.source,
             )
             converted.append(info)
             all_blocks_by_text.setdefault(block.text, []).append(info)
@@ -206,9 +208,9 @@ def _classify(text: str, size: float, is_bold: bool, is_italic: bool,
     """单块分类。"""
     x0, y0, x1, y1 = bbox
     # 页眉/页脚（顶部/底部边缘）
-    if y0 < page_height * _HEADER_RATIO:
+    if 0 < y1 <= page_height * _HEADER_RATIO:
         return "header"
-    if y1 > page_height * (1 - _FOOTER_RATIO):
+    if page_height > 0 and y0 >= page_height * (1 - _FOOTER_RATIO):
         return "footer"
     # 公式：含大量数学符号，或斜体且居中
     math_ratio = sum(1 for c in text if c in _MATH_CHARS) / max(len(text), 1)

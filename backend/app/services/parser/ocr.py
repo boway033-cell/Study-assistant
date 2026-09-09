@@ -31,16 +31,31 @@ def _checkpoint(on_checkpoint, page_no: int, phase: str) -> None:
         on_checkpoint(page_no, phase)
 
 
+# 看门狗超时后，被放弃的识别线程仍持有 _OCR_ENGINE_LOCK（Python 无法强制终止本地线程）。
+# 在此期间新任务会在锁上白等到再次超时；用此标记改为快速失败并给出明确原因。
+_OCR_ENGINE_STUCK = threading.Event()
+
+
+def _on_ocr_future_done(future) -> None:
+    """识别线程真正结束后清除"引擎占用中"标记（无论成功、失败或被放弃）。"""
+    _OCR_ENGINE_STUCK.clear()
+
+
 def _run_with_timeout(callable_, timeout_seconds: int, page_no: int, on_wait=None):
     from concurrent.futures import ThreadPoolExecutor, TimeoutError
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"ocr-page-{page_no}")
     future = executor.submit(callable_)
+    # 看门狗无法真正中断本地 OCR 线程：超时后它仍持有引擎锁。
+    # 先标记"引擎占用中"，让后续任务快速失败而不是再空等一整个超时周期，
+    # 线程真正结束后由回调自动清除。
+    future.add_done_callback(_on_ocr_future_done)
     started_at = time.monotonic()
     try:
         while True:
             remaining = timeout_seconds - (time.monotonic() - started_at)
             if remaining <= 0:
                 future.cancel()
+                _OCR_ENGINE_STUCK.set()
                 raise OCRPageTimeout(
                     f"PDF 第 {page_no} 页连续 {timeout_seconds} 秒没有 OCR 结果；已完成页面缓存会保留"
                 )
@@ -49,6 +64,7 @@ def _run_with_timeout(callable_, timeout_seconds: int, page_no: int, on_wait=Non
             except TimeoutError as exc:
                 if time.monotonic() - started_at >= timeout_seconds:
                     future.cancel()
+                    _OCR_ENGINE_STUCK.set()
                     raise OCRPageTimeout(
                         f"PDF 第 {page_no} 页连续 {timeout_seconds} 秒没有 OCR 结果；已完成页面缓存会保留"
                     ) from exc
@@ -100,7 +116,17 @@ def has_ocr_engine() -> bool:
     return False
 
 
+from functools import lru_cache
+
+
 def _file_hash(path: Path) -> str:
+    path = Path(path).resolve()
+    stat = path.stat()
+    return _file_hash_cached(str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+@lru_cache(maxsize=64)
+def _file_hash_cached(path: str, size: int, modified: int, changed: int) -> str:
     """流式计算文件 SHA-256（前 16 位，作 OCR 缓存键）。"""
     import hashlib
     h = hashlib.sha256()
@@ -209,9 +235,11 @@ def _iter_pdf_page_images(p: Path, page_numbers: set[int] | None = None,
     doc = fitz.open(p)
     total = doc.page_count
     try:
-        for page_no, page in enumerate(doc, start=1):
-            if page_numbers is not None and page_no not in page_numbers:
+        targets = sorted(page_numbers) if page_numbers is not None else range(1, total + 1)
+        for page_no in targets:
+            if not 1 <= page_no <= total:
                 continue
+            page = doc.load_page(page_no - 1)
             pix = page.get_pixmap(dpi=dpi, alpha=False)
             image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             del pix
@@ -224,10 +252,17 @@ def _iter_pdf_page_images(p: Path, page_numbers: set[int] | None = None,
 
 _rapid_engine = None
 _OCR_ENGINE_LOCK = threading.Lock()
+_OCR_INIT_LOCK = threading.Lock()
 
 
 def _get_rapid_engine():
     """缓存 RapidOCR 引擎实例（首次加载模型，之后复用）。"""
+    global _rapid_engine
+    with _OCR_INIT_LOCK:
+        return _initialize_rapid_engine()
+
+
+def _initialize_rapid_engine():
     global _rapid_engine
     if _rapid_engine is None:
         from backend.app.core.config import settings
@@ -342,6 +377,11 @@ def _ocr_rapid(p: Path, cache_dir: Path | None = None,
 
     每页结果缓存到 cache_dir/page_NNNN.txt：中断后重跑命中缓存直接读取（断点续 OCR）。
     """
+    if _OCR_ENGINE_STUCK.is_set():
+        raise OCRPageTimeout(
+            "上一次 OCR 超时后识别引擎仍被占用，本次已中止（已识别页面的缓存会保留）。"
+            "请稍候重试，或在 .env 中调整 OCR_PAGE_TIMEOUT_SECONDS。"
+        )
     import numpy as np
     import cv2
 
@@ -367,9 +407,7 @@ def _ocr_rapid(p: Path, cache_dir: Path | None = None,
             _recognize, page_timeout_seconds, i,
             on_wait=lambda: _checkpoint(on_checkpoint, i, "recognizing"),
         )
-        result = response[0] if isinstance(response, tuple) else getattr(response, "boxes", None)
-        if result is None and hasattr(response, "txts"):
-            result = [[None, text, score] for text, score in zip(response.txts, response.scores)]
+        result = rapid_result_rows(response)
         if result:
             lines = [str(item[1]) for item in result]
             text = "\n".join(lines)
@@ -388,6 +426,19 @@ def _ocr_rapid(p: Path, cache_dir: Path | None = None,
         if on_page_result:
             on_page_result(i, text, result or [], False)
     return texts
+
+
+def rapid_result_rows(response) -> list:
+    """兼容旧 tuple 与新版数组结果，避免把坐标数组误当成文字记录。"""
+    if isinstance(response, tuple):
+        return list(response[0]) if response[0] is not None else []
+    boxes = getattr(response, "boxes", None)
+    texts = getattr(response, "txts", None)
+    scores = getattr(response, "scores", None)
+    if boxes is None or texts is None:
+        return []
+    return [[box, text, float(scores[i]) if scores is not None else None]
+            for i, (box, text) in enumerate(zip(boxes, texts))]
 
 
 def _ocr_tesseract(p: Path, cache_dir: Path | None = None,

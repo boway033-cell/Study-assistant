@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -60,19 +61,54 @@ def _restore_backup(backup_path: Path, database_path: Path) -> None:
         recovery_path.unlink(missing_ok=True)
 
 
-def check_integrity() -> tuple[bool, str]:
-    """SQLite 完整性检测。返回 (ok, message)。"""
+def check_integrity_status() -> tuple[str, str]:
+    """SQLite 完整性检测。返回 (status, message)，status ∈ {"ok", "corrupt", "unknown"}。
+
+    必须区分"确证损坏"与"无法检测"：连接被占用、文件被杀软锁定等都会让检测抛异常，
+    这类 unknown 状态绝不能等同于损坏，否则会触发无确认的备份回滚，丢失上次备份之后的全部改动。
+    """
     db_path = settings.db_path
     if not db_path.exists():
-        return True, "数据库尚未创建（首次启动）"
+        return "ok", "数据库尚未创建（首次启动）"
+    conn = None
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
         result = conn.execute("PRAGMA integrity_check").fetchone()
-        conn.close()
-        ok = result[0] == "ok"
-        return ok, result[0]
-    except Exception as e:
-        return False, f"检测失败: {e}"
+        if not result:
+            return "unknown", "完整性检测未返回结果"
+        return ("ok" if result[0] == "ok" else "corrupt"), result[0]
+    except Exception as e:  # noqa: BLE001
+        return "unknown", f"检测失败（未确认损坏）: {e}"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def check_integrity() -> tuple[bool, str]:
+    """SQLite 完整性检测。返回 (ok, message)（保持旧签名）。"""
+    status, message = check_integrity_status()
+    return status == "ok", message
+
+
+def _snapshot_before_restore(db_path: Path, backup_dir: Path) -> str | None:
+    """回滚前保留当前数据库现场（含 WAL/SHM），避免误判损坏后无法追回。"""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = backup_dir / f"pre-restore-{stamp}.db"
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        if db_path.exists():
+            shutil.copy2(db_path, target)
+        for suffix in ("-wal", "-shm"):
+            side = Path(str(db_path) + suffix)
+            if side.exists():
+                shutil.copy2(side, Path(str(target) + suffix))
+        return str(target)
+    except Exception:  # noqa: BLE001
+        # 无法保留现场时不阻断恢复（真损坏场景下拷贝也可能失败），但调用方会记录未保留。
+        return None
 
 
 def auto_backup() -> str | None:
@@ -243,14 +279,18 @@ def run_data_checks() -> dict:
     results: dict = {}
 
     # 1. 完整性检测
-    ok, msg = check_integrity()
-    results["integrity"] = {"ok": ok, "message": msg}
-    if not ok:
+    status, msg = check_integrity_status()
+    results["integrity"] = {"ok": status == "ok", "message": msg, "status": status}
+    # 仅在"确证损坏"时回滚；unknown（被锁/无法检测）绝不回滚。
+    if status == "corrupt":
         # 数据库损坏 → 尝试从最近备份恢复
         backup_dir = settings.data_dir / "backups"
         backups = sorted(backup_dir.glob("study_*.db"), key=lambda p: p.name, reverse=True)
         if backups:
             try:
+                snapshot = _snapshot_before_restore(settings.db_path, backup_dir)
+                if snapshot:
+                    results["integrity"]["pre_restore_snapshot"] = snapshot
                 _restore_backup(backups[0], settings.db_path)
                 results["integrity"]["restored_from"] = str(backups[0])
             except Exception:

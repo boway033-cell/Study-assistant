@@ -487,6 +487,7 @@ class WritingDnaRevision(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     language_dna: Mapped[str] = mapped_column(Text, nullable=False, default="")
     structure_patterns: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    logic_dna: Mapped[str | None] = mapped_column(Text)  # v2 新增：逻辑结构考察层；旧版本为 NULL
     cognitive_framework: Mapped[str] = mapped_column(Text, nullable=False, default="")
     visual_style_guide: Mapped[str] = mapped_column(Text, nullable=False, default="")
     writing_dna: Mapped[str] = mapped_column(Text, nullable=False, default="")

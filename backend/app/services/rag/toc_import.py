@@ -35,7 +35,15 @@ def select_import_toc(file_type: str, native_toc: list[Any], cleaned_pages: list
         extract_toc_from_layout,
         extract_toc_heuristic,
         merge_toc_sources,
+        contents_page_numbers,
     )
     text_toc = extract_toc_heuristic(cleaned_pages)
     layout_toc = extract_toc_from_layout(layout) if layout else []
-    return merge_toc_sources(native, text_toc, layout_toc)
+    excluded = contents_page_numbers(cleaned_pages)
+    if layout:
+        for blocks in layout.pages:
+            if blocks and contents_page_numbers(["\n".join(block.text for block in blocks)]):
+                excluded.add(blocks[0].page)
+    sources = [[row for row in source if row["page"] not in excluded]
+               for source in (native, text_toc, layout_toc)]
+    return merge_toc_sources(*sources)

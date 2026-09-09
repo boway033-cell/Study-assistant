@@ -327,49 +327,132 @@ async def complete_with_ai(provider, toc: list[dict], issues: list[dict], pages:
 
 
 # ---------- 4. 按目录逐章 AI 详细总结 ----------
+def section_key(item: dict) -> str:
+    """IDs disambiguate repeated chapter titles; page/title works for local fallback."""
+    return str(item.get("chapter_id") or f"{item.get('page', 1)}:{item['title']}")
+
+
+def build_chapter_inputs(chapters, chunks) -> tuple[list[dict], dict[int, str], dict[str, str]]:
+    """Partition each chunk once, then collect every descendant into its root.
+
+    order_index is an ordering field, not a one-based chapter number. Prefer
+    explicit parent IDs and use levels only for older imports lacking parents.
+    """
+    ordered = sorted(chapters, key=lambda ch: (ch.order_index, ch.id))
+    by_id = {ch.id: ch for ch in ordered}
+    parents, stack = {}, []
+    for ch in ordered:
+        while stack and (stack[-1].level or 1) >= (ch.level or 1):
+            stack.pop()
+        parents[ch.id] = ch.parent_id if ch.parent_id in by_id and ch.parent_id != ch.id else (
+            stack[-1].id if stack else None)
+        stack.append(ch)
+
+    def ancestry(cid):
+        chain = [cid]
+        while parents.get(chain[-1]) is not None:
+            parent = parents[chain[-1]]
+            if parent in chain:
+                raise ValueError("章节存在循环父子关系，请先校正目录")
+            chain.append(parent)
+        return chain
+
+    toc = [{"title": ch.title, "level": len(ancestry(ch.id)),
+            "page": ch.start_page or 1, "chapter_id": ch.id} for ch in ordered]
+    root_numbers = {item["chapter_id"]: i for i, item in enumerate(
+        (entry for entry in toc if entry["level"] == 1), 1)}
+    root_parts = {i: [] for i in root_numbers.values()}
+    section_parts = {str(ch.id): [] for ch in ordered}
+    by_page = sorted(ordered, key=lambda ch: (ch.start_page or 1, ch.order_index))
+    for chunk in chunks:
+        if not chunk.content:
+            continue
+        owner = by_id.get(chunk.chapter_id)
+        if owner is None and by_page:
+            eligible = [ch for ch in by_page if (ch.start_page or 1) <= (chunk.page_start or 1)]
+            owner = eligible[-1] if eligible else by_page[0]
+        if owner is None:
+            continue
+        section_parts[str(owner.id)].append(chunk.content)
+        root = ancestry(owner.id)[-1]
+        source = f"[B{chunk.book_id}-C{chunk.id}] PDF第{chunk.page_start or 1}-{chunk.page_end or chunk.page_start or 1}页"
+        root_parts[root_numbers[root]].append(source + "\n" + chunk.content)
+    return toc, {i: "\n\n".join(parts) for i, parts in root_parts.items()}, {
+        key: "\n\n".join(parts) for key, parts in section_parts.items()}
+
+
+async def _bounded_stream(provider, messages, error_prefix, on_progress=None):
+    # Share the research transport's idle timeout, cancellation heartbeat and
+    # capped output instead of allowing a provider stream to hang indefinitely.
+    from backend.app.api.study import _stream_answer
+    return await _stream_answer(provider, messages, error_prefix, on_progress=on_progress)
+
+
 async def summarize_by_toc(provider, book_title: str, toc: list[dict],
                            chapter_texts: dict[int, str], max_chars: int = 12000,
-                           on_progress=None) -> list[dict]:
-    """对每个一级章节生成详细总结（带进度回调 + 单次重试）。chapter_texts: {章序号: 全文}。
+                           on_progress=None, on_chapter=None) -> list[dict]:
+    """Read every source slice, reduce bounded notes, persist completed chapters."""
+    from backend.app.services.long_research import reduce_notes
 
-    Fix: match chapters by title not just sequential index to avoid content mismatch.
-    """
+    if max_chars < 100:
+        raise ValueError("章节分批长度过小")
     chapters = [t for t in toc if t["level"] == 1]
     total = len(chapters)
     out: list[dict] = []
     for i, ch in enumerate(chapters, start=1):
-        if on_progress:
-            on_progress(i, total, ch["title"])
-        text = chapter_texts.get(i, "")
-        if not text:
-            out.append({"title": ch["title"], "summary": "（该章无正文内容）"})
+        # Missing keys represent cached chapters, not empty chapters.
+        if i not in chapter_texts:
             continue
+        text = chapter_texts.get(i, "")
+        def notify(detail=""):
+            if on_progress:
+                on_progress(i, total, ch["title"] + detail)
+        notify()
+        if not text:
+            result = {"title": ch["title"], "key": section_key(ch), "summary": "（该章无正文内容）", "processed_chars": 0}
+            out.append(result)
+            if on_chapter:
+                on_chapter(i, result)
+            continue
+        notes = []
+        batch_count = (len(text) + max_chars - 1) // max_chars
+        if batch_count > 1:
+            for batch, offset in enumerate(range(0, len(text), max_chars), 1):
+                detail = f" · 第 {batch}/{batch_count} 批"
+                notify(detail)
+                note = await _bounded_stream(provider, [
+                    {"role": "system", "content": "阅读本章的一批原文，保留主张、推理、证据、反例和来源标记，生成不超过1200字的精读笔记。后续会综合全部批次，不写全章结论。"},
+                    {"role": "user", "content": f"《{book_title}》{ch['title']} · 第{batch}/{batch_count}批\n\n{text[offset:offset + max_chars]}"},
+                ], "章节分批研读失败", on_progress=lambda _: notify(detail))
+                notes.append(note)
+                if sum(map(len, notes)) > max_chars:
+                    notes = await reduce_notes(provider, notes, _bounded_stream,
+                        lambda *_: notify(" · 正在综合分批笔记"), offset + max_chars, len(text))
+            # reduce_notes has a 24k ceiling; repeat to respect this request's budget.
+            while sum(map(len, notes)) > max_chars:
+                notes = await reduce_notes(provider, notes, _bounded_stream,
+                    lambda *_: notify(" · 正在综合分批笔记"), len(text), len(text))
+        material = "\n\n".join(notes) if notes else text
         prompt = [
             {"role": "system", "content": (
-                "你是复习精读助手。根据教材章节原文，生成详细总结："
-                "1) 本节核心主题；2) 关键概念/定义/公式（逐个列出）；3) 主要论点与逻辑；"
-                "4) 可能的考点。用中文 Markdown 格式，600-900 字，不要遗漏重要内容。"
+                "你是文献精读助手。根据本章完整原文或覆盖全部原文的分批笔记，写成逻辑连贯的中文分析，"
+                "解释核心问题、概念、论证机制、证据、反例与章节间联系。依据文献类型自行安排结构，"
+                "允许有依据的延伸，清楚区别作者观点与分析判断；不堆叠免责声明，不套考试提纲。"
+                "600-1200字，保留材料中的来源标记，不捏造原文。"
             )},
-            {"role": "user", "content": f"《{book_title}》{ch['title']}\n\n{text[:max_chars]}"},
+            {"role": "user", "content": f"《{book_title}》{ch['title']}\n已完整读取{len(text)}字、{batch_count}批。\n\n{material}"},
         ]
-        answer = ""
-        ok = False
-        for attempt in range(2):  # 失败重试一次（限流/网络抖动）
-            try:
-                answer = ""
-                async for delta in provider.stream_chat(prompt):
-                    answer += delta
-                if answer.strip():
-                    ok = True
-                    break
-            except Exception:  # noqa: BLE001
-                answer = ""
-        out.append({"title": ch["title"], "summary": answer.strip() if ok else "（AI 总结失败）"})
+        answer = await _bounded_stream(provider, prompt, "章节精读失败", on_progress=lambda _: notify(" · 正在成文"))
+        result = {"title": ch["title"], "key": section_key(ch), "summary": answer.strip(),
+                  "processed_chars": len(text), "batches": batch_count}
+        out.append(result)
+        if on_chapter:
+            on_chapter(i, result)
     return out
 
 
 async def build_paper_card(provider, book_title: str, toc: list[dict], chunks,
-                           max_chars: int = 26000) -> str:
+                           max_chars: int = 26000, summaries=None, on_progress=None) -> str:
     """生成固定 01-16 节的来源约束阅读卡。
 
     每个 source ID 都映射到数据库 chunk 和 PDF 页码；来源不足必须明确标记，
@@ -388,6 +471,12 @@ async def build_paper_card(provider, book_title: str, toc: list[dict], chunks,
             break
         sources.append(block)
         used += len(block)
+    if summaries:
+        from backend.app.services.long_research import reduce_notes
+        sources = [f"{item['title']}\n{item['summary']}" for item in summaries]
+        while sum(map(len, sources)) > max_chars:
+            sources = await reduce_notes(provider, sources, _bounded_stream,
+                lambda *_: on_progress(0) if on_progress else None, 0, 0)
     toc_text = "\n".join(f"{t['level']}级 PDF第{t['page']}页 {t['title']}" for t in toc[:100])
     prompt = [
         {"role": "system", "content": (
@@ -404,13 +493,7 @@ async def build_paper_card(provider, book_title: str, toc: list[dict], chunks,
             + "\n".join(sources)
         )},
     ]
-    answer = ""
-    try:
-        async for delta in provider.stream_chat(prompt):
-            answer += delta
-    except Exception:  # noqa: BLE001
-        return ""
-    return answer.strip()
+    return (await _bounded_stream(provider, prompt, "阅读卡生成失败", on_progress=on_progress)).strip()
 
 
 def audit_paper_card(card: str) -> dict:
@@ -450,7 +533,7 @@ def to_markdown(book_title: str, toc: list[dict], summaries: list[dict],
         md.append(f"{indent}- {t['title']}")
     md.append("")
 
-    summary_map = {s["title"]: s["summary"] for s in summaries}
+    summary_map = {s.get("key", s["title"]): s["summary"] for s in summaries}
     # 按层级建树：每个标题挂在最近的上级标题下（用副本，不污染原数据）
     order = sorted([dict(t) for t in toc], key=lambda x: (x["page"], x["level"]))
     stack: list[dict] = []  # 上级标题栈
@@ -466,7 +549,7 @@ def to_markdown(book_title: str, toc: list[dict], summaries: list[dict],
             md.append(prefix + " " + t["title"])
             md.append("")
             if t["level"] == 1:
-                summary = summary_map.get(t["title"])
+                summary = summary_map.get(section_key(t), summary_map.get(t["title"]))
                 if summary and summary != "（该章无正文内容）":
                     # AI 总结独立折叠卡片，与原文明显分开（用户可点击展开/收起）
                     md.append("<details>")
@@ -478,7 +561,7 @@ def to_markdown(book_title: str, toc: list[dict], summaries: list[dict],
                     md.append("")
                     md.append("---")
                     md.append("")
-            body = section_texts.get(t["title"])
+            body = section_texts.get(section_key(t), section_texts.get(t["title"]))
             if body:
                 # 仅一级章节显示"章节原文"标题（与 AI 总结分隔）；小节正文直接跟随标题
                 if t["level"] == 1:

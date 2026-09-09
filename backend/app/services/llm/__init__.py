@@ -156,13 +156,20 @@ class OpenAIChatProvider(LLMProvider):
         if not self.api_key and not self.base_url.startswith(("http://localhost", "http://127.0.0.1")):
             return False, "未配置 API Key"
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=5)) as client:
-                response = await client.get(f"{self.base_url}/models", headers=self._headers())
-            if response.status_code == 200:
+            # 只测 GET /models 会漏掉「模型未开通 / 模型名写错」这类真实故障：
+            # 出现过 /models 返回 200、设置页显示已连接，而 chat 请求一律 400 的情况。
+            # 这里直接发一次最小真实对话，收到首个增量即视为可用。
+            out = ""
+            async for delta in self.stream_chat([{"role": "user", "content": "只回复两个字：正常"}]):
+                out += delta
+                break
+            if out.strip():
                 return True, f"已连接（{self.display_name} · {self.model}）"
-            return False, f"HTTP {response.status_code}: {response.text[:160]}"
+            return False, f"{self.display_name} 连接正常但未返回内容，请检查模型名"
         except httpx.HTTPError as exc:
             return False, f"连接失败：{type(exc).__name__}: {exc}"
+        except Exception as exc:  # noqa: BLE001 — 供应商返回的业务错误要原样告诉用户
+            return False, str(exc)[:200]
 
 
 class DeepSeekProvider(OpenAIChatProvider):

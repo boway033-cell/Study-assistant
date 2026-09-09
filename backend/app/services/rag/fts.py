@@ -302,6 +302,51 @@ def get_chapter_neighbors(chunk_id: int, radius: int = 1) -> str:
         return "\n".join(r.content for r in selected)
 
 
+def get_chapter_neighbors_batch(chunk_ids: list[int], radius: int = 1) -> dict[int, str]:
+    """批量版 get_chapter_neighbors：语义与单条完全一致，但只用 2 条 SQL。
+
+    原实现对每条检索结果各查两次库（N+1），top_k=20 就是 40 次查询。
+    """
+    from sqlalchemy import select
+    from backend.app.models import Chunk
+
+    wanted = [int(cid) for cid in chunk_ids if cid]
+    if not wanted:
+        return {}
+
+    with engine.connect() as conn:
+        targets = conn.execute(
+            select(Chunk.id, Chunk.chapter_id, Chunk.chunk_index).where(Chunk.id.in_(wanted))
+        ).all()
+        if not targets:
+            return {}
+
+        chapter_ids = sorted({t.chapter_id for t in targets if t.chapter_id is not None})
+        rows_by_chapter: dict[int | None, list] = {cid: [] for cid in chapter_ids}
+        if chapter_ids:
+            for row in conn.execute(
+                select(Chunk.chapter_id, Chunk.content, Chunk.chunk_index)
+                .where(Chunk.chapter_id.in_(chapter_ids))
+                .order_by(Chunk.chapter_id, Chunk.chunk_index)
+            ).all():
+                rows_by_chapter.setdefault(row.chapter_id, []).append(row)
+
+        result: dict[int, str] = {}
+        for target in targets:
+            rows = rows_by_chapter.get(target.chapter_id) or []
+            if not rows:
+                result[target.id] = ""
+                continue
+            if len(rows) <= 3:
+                result[target.id] = "\n".join(r.content for r in rows)
+                continue
+            idx = next((i for i, r in enumerate(rows) if r.chunk_index == target.chunk_index), 0)
+            lo = max(0, idx - radius)
+            hi = min(len(rows), idx + radius + 1)
+            result[target.id] = "\n".join(r.content for r in rows[lo:hi])
+        return result
+
+
 def get_book_outline(book_id: int | None = None) -> dict:
     """全文兜底：返回书籍目录 + 章节结构（无正文命中时）。"""
     from sqlalchemy import select

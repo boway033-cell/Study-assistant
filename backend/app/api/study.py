@@ -55,7 +55,7 @@ _MODE_GUIDANCE = {
 }
 
 
-async def _stream_answer(provider, messages: list[dict], error_prefix: str, on_progress=None) -> str:
+async def _stream_answer(provider, messages: list[dict], error_prefix: str, on_progress=None, on_text=None) -> str:
     """统一流式调用与短暂故障重试；不在内存保留模型隐性推理过程。"""
     import asyncio
 
@@ -65,23 +65,55 @@ async def _stream_answer(provider, messages: list[dict], error_prefix: str, on_p
         last_notified_at = time.monotonic()
         last_notified_size = 0
         try:
-            async for delta in provider.stream_chat(messages):
-                answer += delta
-                now = time.monotonic()
-                if on_progress and (
-                    now - last_notified_at >= 1.5 or len(answer) - last_notified_size >= 800
-                ):
-                    on_progress(len(answer))
-                    last_notified_at = now
-                    last_notified_size = len(answer)
+            iterator = provider.stream_chat(messages).__aiter__()
+            pending = None
+            try:
+                async with asyncio.timeout(900):
+                    while True:
+                        try:
+                            pending = asyncio.create_task(anext(iterator))
+                            started = time.monotonic()
+                            while not pending.done():
+                                done, _ = await asyncio.wait({pending}, timeout=2)
+                                if done:
+                                    break
+                                if on_progress:
+                                    on_progress(len(answer))
+                                if time.monotonic() - started >= 120:
+                                    raise TimeoutError('模型连续120秒未返回内容')
+                            delta = pending.result()
+                        except StopAsyncIteration:
+                            break
+                        answer += delta
+                        if len(answer) > 80000:
+                            raise ValueError('模型输出超出单次安全长度')
+                        now = time.monotonic()
+                        if now - last_notified_at >= 1.5 or len(answer) - last_notified_size >= 800:
+                            if on_progress:
+                                on_progress(len(answer))
+                            if on_text:
+                                on_text(answer)
+                            last_notified_at = now
+                            last_notified_size = len(answer)
+            finally:
+                if pending and not pending.done():
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+                if hasattr(iterator, 'aclose'):
+                    await iterator.aclose()
             if answer.strip():
                 if on_progress:
                     on_progress(len(answer))
+                if on_text:
+                    on_text(answer)
                 return answer
             last_err = "AI 返回为空"
         except Exception as exc:  # noqa: BLE001
             if exc.__class__.__name__ == "TaskCancelled":
                 raise
+            if answer and on_text:
+                on_text(answer)
+                raise RuntimeError(f'{error_prefix}：连接中断，已接收的草稿保留在任务中') from exc
             last_err = str(exc)
         await asyncio.sleep(2 * (attempt + 1))
     raise RuntimeError(f"{error_prefix}：{last_err}")
@@ -237,6 +269,19 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
     try:
         update_progress(record, 0.15, "overview", "正在汇总文献内容...")
         scope = set(book_ids)
+        requested_chapters = list(chapter_ids or [])
+        if chapter_ids:
+            # A selected parent chapter includes its subsections within these books.
+            parents = db.execute(select(Chapter.id, Chapter.parent_id).where(Chapter.book_id.in_(scope))).all()
+            selected = set(chapter_ids)
+            if not selected.issubset({cid for cid, _ in parents}):
+                raise ValueError('所选章节已失效或不属于当前文献范围，请重新选择；未自动扩大到整本书')
+            while True:
+                expanded = selected | {cid for cid, parent in parents if parent in selected}
+                if expanded == selected:
+                    break
+                selected = expanded
+            chapter_ids = sorted(selected)
         context_parts: list[str] = []
         allowed_refs: set[str] = set()
         context_chars = 0
@@ -247,7 +292,7 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
             if chapter.book_id not in scope:
                 continue
             book = db.get(Book, chapter.book_id)
-            chunks = db.scalars(select(Chunk).where(Chunk.chapter_id == chapter.id).order_by(Chunk.chunk_index).limit(8)).all()
+            chunks = db.scalars(select(Chunk).where(Chunk.chapter_id == chapter.id).order_by(Chunk.chunk_index)).yield_per(32)
             for chunk in chunks:
                 if context_chars >= 46000:
                     break
@@ -287,6 +332,39 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
         if not cfg.get("configured"):
             raise ValueError("研究模型尚未配置或不可用，请在设置中选择并检测一个模型")
         provider = LLMRouter.get("auto", cfg)
+        from backend.app.services.long_research import scope_size, read_long_scope, iter_evidence_batches
+        _, corpus_chars = scope_size(db, book_ids, chapter_ids)
+        full_scope = reasoning_depth == 'deep' and not (note_ids and not chapter_ids)
+        long_reading = full_scope and corpus_chars > 24000
+        coverage = None
+        if long_reading:
+            record.result = {'kind': 'study-report', 'book_ids': book_ids, 'focus': focus[:200]}
+            def reading_progress(done, total, message):
+                record.result['reading_coverage'] = {'processed_chars': done, 'total_chars': total}
+                update_progress(record, .16 + .14 * done / max(total, 1), 'evidence-reading', message)
+            selected_context, allowed_refs, coverage = await read_long_scope(
+                db, provider, book_ids, chapter_ids, focus, _source_anchor, _stream_answer, reading_progress)
+            # Notes selected with chapters remain part of the authorized input.
+            for note in selected_notes:
+                if note.book_id in scope:
+                    anchor = f'B{note.book_id}:NOTE{note.id}'
+                    selected_context += f'\n[{anchor}]用户笔记：{note.content[:2000]}'
+                    allowed_refs.add(anchor)
+            overview_context = selected_context
+        elif full_scope and corpus_chars:
+            parts = []
+            for body, refs, _ in iter_evidence_batches(db, book_ids, chapter_ids, _source_anchor):
+                parts.append(body)
+                allowed_refs.update(refs)
+            # Preserve any explicitly selected notes as well as the full text.
+            for note in selected_notes:
+                if note.book_id in scope:
+                    anchor = f'B{note.book_id}:NOTE{note.id}'
+                    parts.append(f'[{anchor}]用户笔记：{note.content[:2000]}')
+                    allowed_refs.add(anchor)
+            selected_context = '\n\n'.join(parts)
+            overview_context = selected_context
+            coverage = {'processed_chars': corpus_chars, 'total_chars': corpus_chars}
         plan = _normalize_plan({}, research_mode)
         if reasoning_depth == "deep":
             update_progress(record, 0.32, "research-plan", "AI 正在拆分问题并规划论证路径...")
@@ -324,6 +402,7 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
             "book_ids": book_ids,
             "focus": focus[:200],
             "research_plan": plan,
+            "reading_coverage": coverage,
         }
         update_progress(record, 0.46, "research-plan", "研究路径已形成，准备检索证据", force=True)
 
@@ -398,17 +477,69 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                 f"可引用材料：\n{evidence_context[:48000]}"
             )},
         ]
-        answer = await _stream_answer(
-            provider,
-            prompt,
-            "综合研读失败",
-            lambda chars: update_progress(
-                record,
-                min(0.94, 0.7 + 0.24 * min(chars / max(target_length * 1.35, 1600), 1)),
-                "synthesis",
-                f"AI 正在组织论证与写作（已接收 {chars} 字）...",
-            ),
-        )
+        def save_draft(text):
+            record.result['draft_markdown'] = text
+            update_progress(record, record.progress, 'synthesis',
+                            f'正在写作，已保存 {len(text)} 字草稿', force=True)
+
+        if long_reading or target_length > 4500:
+            # Long prose is not wrapped in one fragile, output-limit-sized JSON.
+            # Write bounded sections and retain every completed section on disk.
+            count = max(2, min(6, (target_length + 1999) // 2000))
+            outlines = plan.get('report_outline') or ['提出中心论题', '展开证据与比较', '综合解释与结论']
+            prose_prompt = [dict(item) for item in prompt]
+            prose_prompt[0]['content'] = prose_prompt[0]['content'].split('只输出 JSON 对象：')[0] + (
+                '只输出 Markdown 正文，不输出 JSON、主张清单或写作说明。证据来自分批阅读的笔记，'
+                '保留有效来源锚点，不能把笔记中的解释当作原文直接引语。')
+            pieces = []
+            for index in range(count):
+                preceding = '\n\n'.join(pieces)
+                section_prompt = [*prose_prompt, {'role': 'user', 'content': (
+                    f'全文共{count}段写作任务，现在写第{index + 1}段，约{target_length // count}字。'
+                    f'拟议论证路径：{json.dumps(outlines, ensure_ascii=False)}。'
+                    '按顺序推进整篇论证，不重复已写内容；只在最后一段收束全文。'
+                    f'已完成正文末尾：\n{preceding[-3500:]}'
+                )}]
+                piece = await _stream_answer(provider, section_prompt, '分段成文失败',
+                    on_progress=lambda chars: update_progress(record,
+                        .70 + .24 * (index + min(chars / max(target_length // count, 1), .95)) / count,
+                        'synthesis', f'正在写作第 {index + 1}/{count} 段'),
+                    on_text=lambda text: save_draft(preceding + '\n\n' + text))
+                pieces.append(piece)
+            report_text = '\n\n'.join(pieces)
+            audit = {}
+            try:
+                audit_text = await _stream_answer(provider, [
+                    {'role': 'system', 'content': '核对文章中的关键主张与材料，输出JSON：'
+                     '{"claims":[{"claim":"主张","source_refs":["材料中的原始锚点"],'
+                     '"status":"supported|partial|needs_review|unsupported",'
+                     '"synthesis_relation":"consensus|complementary|conflict|single_source|unresolved",'
+                     '"reason":"判断理由","counterpoint":"反例或限制"}],"open_questions":[]}。'
+                     '最多12项，不补造来源，不把模型的分批笔记当直接引语。'},
+                    {'role': 'user', 'content': f'文章：\n{report_text}\n证据笔记：\n{evidence_context}'},
+                ], '主张审计失败', on_progress=lambda _: update_progress(
+                    record, .95, 'synthesis', '正文已保存，正在核对来源与主张'))
+                from backend.app.services.llm import parse_json_response
+                audit = parse_json_response(audit_text) or {}
+            except Exception as exc:
+                if exc.__class__.__name__ == 'TaskCancelled':
+                    raise
+                # A finished article must not disappear because auxiliary auditing failed.
+                audit = {'open_questions': ['自动主张审计未完成，请人工复核来源。']}
+            answer = json.dumps({**(audit if isinstance(audit, dict) else {}),
+                                 'report_markdown': report_text}, ensure_ascii=False)
+        else:
+            answer = await _stream_answer(
+                provider,
+                prompt,
+                "综合研读失败",
+                lambda chars: update_progress(
+                    record,
+                    min(0.94, 0.7 + 0.24 * min(chars / max(target_length * 1.35, 1600), 1)),
+                    "synthesis",
+                    f"AI 正在组织论证与写作（已接收 {chars} 字）...",
+                ),
+            )
 
         from backend.app.services.llm import parse_json_response
         try:
@@ -436,10 +567,11 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
         report = StudyReport(
             book_ids_json=json.dumps(book_ids or [], ensure_ascii=False),
             selection_json=json.dumps({
-                "chapter_ids": chapter_ids or [], "note_ids": note_ids or [],
+                "chapter_ids": requested_chapters, "note_ids": note_ids or [],
                 "research_mode": research_mode, "reasoning_depth": reasoning_depth,
                 "writing_style": writing_style, "extension_level": extension_level,
                 "target_length": target_length,
+                "reading_coverage": coverage,
                 "citation_notes": citation_notes,
                 "research_plan": plan, "open_questions": open_questions,
                 "hypotheses": hypotheses, "evidence_summary": _evidence_summary(claims),
@@ -456,8 +588,6 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
         update_progress(record, 1.0, "overview", "完成", force=True)
         return {"report_id": report.id, "chars": len(report_content), "claims": len(claims),
                 "hypotheses": len(hypotheses), "plan_steps": len(plan.get("subquestions", []))}
-    except Exception as e:  # noqa: BLE001
-        raise
     finally:
         db.close()
 
@@ -483,6 +613,7 @@ def _report_payload(r, include_content: bool = True) -> dict:
         "id": r.id, "book_ids": json.loads(r.book_ids_json or "[]"),
         "focus": r.focus or "", "framework": r.framework or "", "selection": selection,
         "research_plan": selection.get("research_plan", {}),
+        "reading_coverage": selection.get("reading_coverage"),
         "open_questions": selection.get("open_questions", []),
         "hypotheses": selection.get("hypotheses", []),
         "evidence_summary": selection.get("evidence_summary", {}),

@@ -159,6 +159,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { annotationSegments, clipSelectionRects } from '../utils/pdfAnnotations'
+import { wheelNavigation } from '../utils/readerNavigation'
 import {
   listAnnotations, createAnnotation, updateAnnotation, deleteAnnotation,
   repairAnnotation, getPdfTextLayer,
@@ -498,7 +499,8 @@ const renderTextLayer = async (p, pdfPage, vp, generation, token) => {
   }
   if (generation !== renderGeneration || pageRenderTokens[p] !== token || textRefs[p] !== tl) return
   // 扫描页没有 PDF 文本层：仅为当前页异步取得 OCR 坐标，不加载整本文档。
-  if (!tl.querySelector('span') && props.bookId && p === page.value) {
+  if (!tl.querySelector('span') && props.bookId &&
+      (p === page.value || (mode.value === 'double' && p === pairEndOf(page.value)))) {
     void renderOcrTextLayer(p, tl, generation, token)
   }
 }
@@ -519,6 +521,8 @@ const renderOcrTextLayer = async (p, tl, generation, token = pageRenderTokens[p]
       span.style.left = (item.x * 100) + '%'
       span.style.top = (item.y * 100) + '%'
       span.style.fontSize = `${Math.max(4, item.h * tl.clientHeight)}px`
+      span.style.height = `${item.h * tl.clientHeight}px`
+      span.style.lineHeight = `${item.h * tl.clientHeight}px`
       fragment.appendChild(span)
     }
     tl.appendChild(fragment)
@@ -581,6 +585,7 @@ const notifyPageChange = () => {
   emit('page-change', { page: page.value, chapter: currentChapter()?.title || '' })
 }
 
+const wheelState = { lastAt: -Infinity, direction: 0, edge: 0, turnedAt: -Infinity }
 const onWheel = (e) => {
   if (e.ctrlKey || e.metaKey) {
     e.preventDefault()
@@ -589,9 +594,15 @@ const onWheel = (e) => {
   }
   if (mode.value === 'scroll') return  // 连续模式自然滚动
   if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
-  if (e.deltaY > 0) goPage(1)
-  else goPage(-1)
-  e.preventDefault()
+  const direction = wheelNavigation(scroller.value, e.deltaY, performance.now(), wheelState)
+  if (direction) {
+    e.preventDefault()
+    goPage(direction)
+    // 向前翻页从底部接着读；向后翻页从顶部开始。
+    if (direction < 0) nextTick(() => {
+      scroller.value.scrollTop = scroller.value.scrollHeight
+    })
+  }
 }
 
 const goPage = (delta) => {
@@ -750,7 +761,21 @@ const onMouseUp = async (e) => {
 }
 
 const snapshotRange = (range, exact) => {
-  const rangeRects = Array.from(range.getClientRects()).filter(r => r.width > 0.5 && r.height > 0.5)
+  // 浏览器跨行 Range 会包含父 span 的整行矩形；逐文本节点裁剪端点，
+  // 防止只选几个字却保存整行或整页的高亮。
+  const rangeRects = []
+  for (const layer of rootEl.value.querySelectorAll('.text-layer')) {
+    const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT)
+    let node
+    while ((node = walker.nextNode())) {
+      if (!range.intersectsNode(node)) continue
+      const piece = document.createRange()
+      piece.selectNodeContents(node)
+      if (node === range.startContainer) piece.setStart(node, range.startOffset)
+      if (node === range.endContainer) piece.setEnd(node, range.endOffset)
+      rangeRects.push(...piece.getClientRects())
+    }
+  }
   const pages = Array.from(rootEl.value?.querySelectorAll('.pr-page') || []).map(pageEl => ({
     page: Number(pageEl.dataset.page),
     source: pageEl.querySelector('.text-layer span[data-source="ocr"]') ? 'ocr' : 'pdf-text',
@@ -1027,9 +1052,15 @@ onBeforeUnmount(() => {
   clearTimeout(zoomTimer)
   clearTimeout(saveTimer)
   if (scrollFrame) cancelAnimationFrame(scrollFrame)
+  // 先让在途渲染因 generation 不匹配而退出，再销毁文档：
+  // 否则排队的 getPage/render 会继续在已 destroy 的 pdfDoc 上执行，
+  // 闭包长期持有组件、canvas 与文本层，内存无法释放。
+  renderGeneration++
+  renderQueue = Promise.resolve()
   if (loadingTask) { try { loadingTask.destroy() } catch {} loadingTask = null }
   for (const p of Object.keys(rendered.value)) clearPage(Number(p))
   if (pdfDoc) { try { pdfDoc.destroy() } catch {} }
+  pdfDoc = null
 })
 </script>
 

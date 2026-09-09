@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 
 from cryptography.fernet import Fernet
@@ -13,6 +14,8 @@ from cryptography.fernet import Fernet
 from backend.app.core.config import settings
 
 _PREFIX = "enc:"
+
+logger = logging.getLogger(__name__)
 
 _fernet: Fernet | None = None
 
@@ -34,8 +37,13 @@ def _load_key() -> bytes:
     key = Fernet.generate_key()
     try:
         key_file.write_bytes(key)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        # 密钥无法落盘时绝不能静默继续：下次启动会生成一把新密钥，
+        # 库中已加密的 API Key 将永久无法解密，而界面仍显示"已配置"。
+        raise RuntimeError(
+            f"无法写入加密密钥文件 {key_file}：{exc}。"
+            f"请检查目录写权限，或在 .env 中设置 SECRET_KEY 后重启。"
+        ) from exc
     return key
 
 
@@ -59,5 +67,8 @@ def decrypt(value: str) -> str:
         return value  # 旧数据（明文）原样返回，向后兼容
     try:
         return _get_fernet().decrypt(value[len(_PREFIX):].encode()).decode()
-    except Exception:  # noqa: BLE001
-        return value
+    except Exception as exc:  # noqa: BLE001
+        # 解密失败时绝不回吐密文：否则 "enc:xxx" 会被当作 API Key 原样送出。
+        # 返回空串等价于"未配置"，调用方会提示用户重新填写。
+        logger.warning("API Key 解密失败（密钥可能已变更），该配置值已忽略：%s", exc)
+        return ""

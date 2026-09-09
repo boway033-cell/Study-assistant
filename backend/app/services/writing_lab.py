@@ -100,8 +100,10 @@ def validate_corpus(db, book_ids: list[int]) -> list[dict]:
     manifest = []
     for book_id in ids:
         book = books.get(book_id)
-        if not book or book.status != "ready":
-            raise ValueError(f"书目 {book_id} 尚未完成解析")
+        if not book:
+            raise ValueError(f"书目 {book_id} 已不存在（可能已从书库删除），请先在语料清单中移除它")
+        if book.status != "ready":
+            raise ValueError(f"《{book.title}》尚未完成解析（当前状态：{book.status}）")
         chars = db.scalar(select(Chunk.word_count).where(Chunk.book_id == book_id).limit(1))
         text = _article_text(db, book_id)
         if len(text) < 500:
@@ -159,6 +161,48 @@ def _local_language_dna(db, manifest: list[dict]) -> tuple[str, dict]:
     return md, stats
 
 
+LOGIC_MARKERS = {
+    "因果推进": ["因此", "所以", "由此", "从而", "导致", "使得", "由于", "正因为如此"],
+    "转折对照": ["然而", "但是", "不过", "相比之下", "相反", "与此不同", "事实上", "实际上"],
+    "递进深化": ["进一步", "更重要的是", "更进一步", "甚至", "何况", "更关键的是"],
+    "让步限定": ["当然", "固然", "诚然", "尽管", "虽然", "未必", "在某种程度上"],
+    "例证展开": ["例如", "譬如", "比如", "举例来说", "以某", "一个案例"],
+    "总结收束": ["综上", "总之", "可见", "由此可见", "概括而言", "换句话说", "也就是说"],
+}
+
+
+def _local_logic_dna(db, manifest: list[dict]) -> tuple[str, dict]:
+    """统计段落级逻辑标记、论证单元规模与问题驱动信号，作为逻辑结构 DNA 的量化基线。"""
+    marker_counts: Counter = Counter()
+    question_count = paragraph_count = paragraph_chars = total_chars = 0
+    for item in manifest:
+        text = _article_text(db, item["book_id"])
+        total_chars += len(text)
+        paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+        paragraph_count += len(paragraphs)
+        paragraph_chars += sum(len(part) for part in paragraphs)
+        question_count += len(re.findall(r"[？?]", text))
+        for kind, markers in LOGIC_MARKERS.items():
+            for marker in markers:
+                marker_counts[kind] += len(re.findall(re.escape(marker), text))
+    total_markers = sum(marker_counts.values())
+    stats = {
+        "article_count": len(manifest), "total_chars": total_chars,
+        "average_paragraph_chars": round(paragraph_chars / max(1, paragraph_count), 1),
+        "question_count": question_count,
+        "logic_marker_density": round(total_markers * 1000 / max(1, total_chars), 2),
+        "marker_counts": {kind: marker_counts[kind] for kind in LOGIC_MARKERS},
+    }
+    md = "# 逻辑结构DNA\n\n## 量化基线\n\n" + "\n".join([
+        f"- 语料：{stats['article_count']} 篇，{stats['total_chars']} 字符",
+        f"- 平均段落长度：{stats['average_paragraph_chars']} 字（单个论证单元的典型规模）",
+        f"- 疑问句总数：{question_count}（问题驱动式推进的原始信号）",
+        f"- 逻辑连接词密度：{stats['logic_marker_density']} 处/千字",
+        "- 分类计数：" + "、".join(f"{kind} {count}" for kind, count in stats["marker_counts"].items()),
+    ])
+    return md, stats
+
+
 def _representative_excerpt(text: str, budget: int = 2800) -> str:
     if len(text) <= budget:
         return text
@@ -179,6 +223,7 @@ async def distill_profile_task(record: TaskRecord, profile_id: int) -> dict:
         profile.corpus_manifest_json = json.dumps(manifest, ensure_ascii=False)
         update_progress(record, 0.08, "corpus", f"正在逐篇读取 {len(ids)} 篇完整文章")
         language_md, stats = _local_language_dna(db, manifest)
+        logic_md, logic_stats = _local_logic_dna(db, manifest)
         samples = []
         for index, item in enumerate(manifest):
             text = _article_text(db, item["book_id"])
@@ -191,23 +236,29 @@ async def distill_profile_task(record: TaskRecord, profile_id: int) -> dict:
         provider = LLMRouter.get("auto", cfg)
         prompt = f"""你在执行 Writing DNA 蒸馏。语料由 {len(manifest)} 篇完整文章构成；量化统计基于全文，
 下方每篇提供首中尾代表片段用于跨文章归纳。不要摘要具体观点，不复制独特句子，只提取可操作规律。
-必须输出 JSON 对象，键为 structure_patterns、cognitive_framework、visual_style_guide、writing_dna、quality。
-前四项是中文 Markdown 字符串；writing_dna 不超过4000字并含语言、结构、选题、素材、认知、视觉六节。
+必须输出 JSON 对象，键为 structure_patterns、logic_structure、cognitive_framework、visual_style_guide、writing_dna、quality。
+前四项是中文 Markdown 字符串；writing_dna 不超过4000字并含语言、逻辑、结构、选题、素材、认知、视觉七节。
 structure_patterns 至少给出3种内容类型；cognitive_framework 至少3条非显而易见命题。
+logic_structure 聚焦论证与推进规律：主张—证据—推理的典型链条、段落间衔接方式（因果/转折/递进/让步/例证）、
+开头如何建立问题、结尾如何收束、反驳与让步的惯用处理；至少给出4条可操作规律，
+并对照逻辑量化基线指出哪些连接手段被过度使用或明显缺失，不得把某篇的孤立做法写成普遍规律。
 若图片内容样本不足5篇，视觉指南必须明确“图片语义样本不足，待补充”，不得臆测。
-quality 包含 structure_type_count、cognitive_claim_count、visual_sample_count、limitations 数组。
+quality 包含 structure_type_count、cognitive_claim_count、visual_sample_count、logic_pattern_count、limitations 数组。
 用户完善反馈：{profile.feedback or '无'}
 全文量化统计：{json.dumps(stats, ensure_ascii=False)}
+逻辑量化基线：{json.dumps(logic_stats, ensure_ascii=False)}
 语料代表片段：\n{corpus[:72000]}"""
         result = await _call_json(provider, [{"role": "system", "content": "只输出严格 JSON，不冒充原作者。"},
                                              {"role": "user", "content": prompt}])
         quality = result.get("quality") if isinstance(result.get("quality"), dict) else {}
         quality.update({"article_count": len(manifest), "metadata_coverage": 1.0,
-                        "local_stats": stats, "rights_acknowledged": bool(profile.rights_acknowledged)})
+                        "local_stats": stats, "logic_local_stats": logic_stats,
+                        "rights_acknowledged": bool(profile.rights_acknowledged)})
         version = profile.current_version + 1
         revision = WritingDnaRevision(
             profile_id=profile.id, version=version, language_dna=language_md + "\n\n" + str(result.get("language_notes") or ""),
             structure_patterns=str(result.get("structure_patterns") or "# 文章结构模板\n\n待人工复核。"),
+            logic_dna=(logic_md + "\n\n" + str(result.get("logic_structure") or "")).strip(),
             cognitive_framework=str(result.get("cognitive_framework") or "# 写作视角与认知框架\n\n待人工复核。"),
             visual_style_guide=str(result.get("visual_style_guide") or "# 视觉风格指南\n\n图片语义样本不足，待补充。"),
             writing_dna=str(result.get("writing_dna") or "# Writing-DNA\n\n待人工复核。")[:16000],
@@ -429,6 +480,7 @@ async def generate_literature_review(db, *, question: str, title: str, book_ids:
         dna_version = revision.version
         style_context = "\n\n".join([
             revision.language_dna, revision.structure_patterns,
+            *([revision.logic_dna] if revision.logic_dna else []),
             revision.cognitive_framework, revision.writing_dna,
         ])
     evidence_context, manifest, valid_anchors = collect_literature_evidence(db, book_ids, question)
@@ -499,13 +551,14 @@ async def imitate(db, profile_id: int, topic: str, genre: str, length: int, brie
     )
     cfg = load_llm_config(db, "writing"); cfg["deepseek_model"] = "pro"
     provider = LLMRouter.get("auto", cfg)
+    logic_block = f"\n【逻辑结构DNA】\n{revision.logic_dna}" if revision.logic_dna else ""
     prompt = f"""按下列 Writing DNA 写一篇新的中文文章。复刻抽象的语言、结构和视觉排版规律，
 不得复制原文独特短语、事实和观点，不得冒充原作者；文末附“本文为风格参考写作”。
 用户要求优先于 DNA。题目：{topic}\n体裁：{genre}\n目标长度：约{length}字\n补充要求：{brief or '无'}
 【强制取材边界】事实、观点、数字、案例和结论只能来自下列已选知识对象。保留其中的冲突、不确定性、反例、证据质量与限定词；
 不得把未核验假设写成事实。用 [NOTE:…]、[EVIDENCE:…] 或 [REPORT:…] 标记关键事实的来源即可；标记只供机器审计，系统会自动转换为脚注，不要让它参与句法或逐段堆叠。材料不足时直接收缩主张。
 【已选知识对象】\n{knowledge_context}
-【语言DNA】\n{revision.language_dna}\n【结构模板】\n{revision.structure_patterns}
+【语言DNA】\n{revision.language_dna}\n【结构模板】\n{revision.structure_patterns}{logic_block}
 【认知框架】\n{revision.cognitive_framework}\n【视觉指南】\n{revision.visual_style_guide}
 【整合DNA】\n{revision.writing_dna}\n【5篇相近原文，仅校准语感，不得取材】\n{calibration[:14000]}"""
     output_text = await _call(provider, [{"role": "system", "content": "生成独立新作；内容只能取自已选知识对象，风格语料不得充当事实来源。围绕中心主张直接、连贯地写作，避免近似复述、作者冒充、免责声明和修饰词堆叠。"},
