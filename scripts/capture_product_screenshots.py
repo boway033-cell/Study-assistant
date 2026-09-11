@@ -101,7 +101,7 @@ def create_demo_pdf(path: Path) -> None:
         )
         page.insert_textbox(
             fitz.Rect(64, 280, 530, 610),
-            body + "\n\n本文件仅用于 Study Assistant v2.0 界面演示，不对应真实论文、作者或研究项目。",
+            body + "\n\n本文件仅用于 Study Assistant v2.3.0 界面演示，不对应真实论文、作者或研究项目。",
             fontname=font_name,
             fontsize=12,
             lineheight=1.7,
@@ -336,6 +336,7 @@ def seed_demo(data_dir: Path) -> list[int]:
             profile_id=profile.id,
             version=2,
             language_dna="## 语言原则\n\n句子直接承担判断；修饰词只在改变证据强度时保留。",
+            logic_dna="## 论证与衔接\n\n先给出主张，再说明证据及推理过程。段落围绕同一问题递进，比较不同研究的解释条件，用反例检验结论。",
             structure_patterns="## 结构原则\n\n问题—证据关系—竞争解释—边界—下一步。",
             cognitive_framework="## 推理原则\n\n区分共识、冲突与互补证据，不把相关关系写成因果。",
             visual_style_guide="## 视觉原则\n\n长文保持清楚层级，表格只用于真正的横向比较。",
@@ -353,7 +354,17 @@ def seed_demo(data_dir: Path) -> list[int]:
             kind="literature_review",
             title="跨学科证据如何形成对话",
             input_type="text",
-            output_text="综述正文演示：共识并不消除分歧，真正需要比较的是证据条件与解释边界。",
+            output_text=("# 跨学科证据如何形成对话\n\n> 以下为虚构演示稿，仅展示阅读与编辑界面。\n\n"
+                "## 从共同问题建立比较\n\n"
+                "三组材料从城市环境、生态观察与叙事研究出发，共同关注情境如何改变观察结果。"
+                "比较首先需要明确研究对象、时间窗口和概念口径，让每一项判断具有可核对的范围。\n\n"
+                "## 共识、冲突与互补\n\n"
+                "环境观测提供变化趋势，案例材料解释行动条件，文本细读呈现经验如何被表达。"
+                "这些证据可以围绕同一问题相互补充。出现结论分歧时，应继续检查测量方式、"
+                "样本背景和解释层次，保留材料尚无法排除的竞争性判断。\n\n"
+                "## 把阅读变成后续问题\n\n"
+                "下一步可以把比较尺度与证据缺口记入知识笔记，形成新的阅读清单。"
+                "每次补充资料后，再回到已有判断，核对哪些结论得到支持、哪些需要修改。"),
             audit_json=json.dumps({"book_ids": selected, "citation_count": 5, "cited_book_ids": selected,
                                    "discipline": "跨学科", "review_type": "叙事综述"}, ensure_ascii=False),
         ))
@@ -397,12 +408,16 @@ def capture(base_url: str, book_ids: list[int], destination: Path) -> None:
         ("research-workspace.jpg", "/knowledge-hub?view=study"),
         ("workbench.jpg", f"/literature-workbench?bookId={book_ids[0]}"),
         ("writing-lab.jpg", "/writing"),
+        ("writing-review.jpg", "/writing"),
         ("writing-clean.jpg", "/writing"),
+        ("writing-output.jpg", "/writing"),
     ]
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1600, "height": 1000}, device_scale_factor=1)
         browser_errors: list[str] = []
+        page.on("response", lambda response: browser_errors.append(f"HTTP {response.status}: {response.url}")
+                if response.status >= 400 else None)
         page.on("pageerror", lambda error: browser_errors.append(f"pageerror: {error}"))
         page.on(
             "console",
@@ -444,9 +459,12 @@ def capture(base_url: str, book_ids: list[int], destination: Path) -> None:
                 if profile.count():
                     profile.first.click()
                     page.wait_for_timeout(700)
-            elif filename == "writing-clean.jpg":
-                page.get_by_role("tab", name="多文献综述").click()
-                review_select = page.locator(".review-config .review-field .el-select").first
+                    page.get_by_text("逻辑结构 DNA", exact=True).click()
+                    page.wait_for_timeout(250)
+            elif filename == "writing-review.jpg":
+                page.get_by_role("tab", name="写作生成", exact=True).click()
+                page.get_by_text("多文献综述", exact=True).first.click()
+                review_select = page.locator(".generate-config .review-field .el-select").first
                 review_select.click()
                 page.wait_for_timeout(250)
                 for index in range(3):
@@ -457,6 +475,14 @@ def capture(base_url: str, book_ids: list[int], destination: Path) -> None:
                 page.keyboard.press("Escape")
                 page.locator(".review-fields.two input").nth(0).fill("跨学科证据如何形成对话")
                 page.locator(".review-fields.two input").nth(1).fill("共识、冲突与互补证据分别成立于哪些条件？")
+                page.wait_for_timeout(350)
+            elif filename == "writing-clean.jpg":
+                page.get_by_role("tab", name="写作输出", exact=True).click()
+                page.locator('.output-history > button').filter(has_text='表达审阅示例').click()
+                page.get_by_role("tab", name="去 AI 味", exact=True).click()
+            elif filename == "writing-output.jpg":
+                page.get_by_role("tab", name="写作输出", exact=True).click()
+                page.locator('.output-history > button').first.click()
                 page.wait_for_timeout(350)
 
             body = page.locator("body").inner_text()
@@ -528,6 +554,7 @@ def main() -> int:
         book_ids = seed_demo(data_dir)
         env = os.environ.copy()
         env["DATA_DIR"] = str(data_dir)
+        env["PORT"] = str(args.port)
         log_path = temp / "server.log"
         with log_path.open("w", encoding="utf-8") as log:
             process = subprocess.Popen(

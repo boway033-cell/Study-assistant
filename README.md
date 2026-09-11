@@ -1,164 +1,188 @@
 <div align="center">
 
-# Study Assistant · 个人文献知识库
+# Study Assistant
+### 让读过的文献，成为下一次思考的起点。
 
-**把散落的 PDF、Word 与 PPT 变成可阅读、可检索、可核验、可继续写作的个人知识系统。**
+个人文献知识库 · 跨文献研读 · Writing DNA · 写作与汇报
 
-[![Release](https://img.shields.io/badge/release-v2.3.0-8B5A2B.svg)](CHANGELOG.md)
-[![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
+[![Version](https://img.shields.io/badge/version-2.3.0-8B5A2B)](CHANGELOG.md)
+[![Local first](https://img.shields.io/badge/local--first-Windows-304747)](PRIVACY.md)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-b28b54.svg)](LICENSE)
 
-[下载最新版](https://github.com/boway033-cell/Study-assistant/releases/latest) · [安装与更新](docs/DOWNLOAD_AND_INSTALL.md) · [产品边界](docs/产品文档.md) · [隐私说明](PRIVACY.md)
-
-本地优先 · 原文证据链 · 跨文献综合 · 写作与 PPTX 输出
+[开始使用](#开始使用) · [写作工作台](#写作工作台) · [版本变化](#230-这次更新了什么) · [产品边界](#适用范围与当前边界)
 
 </div>
 
-### 2.2 新增：公文写作
+Study Assistant 帮你整理自己上传的论文、专著、教材和研究资料。把 PDF、Word、PPT 导入本地知识库后，可以阅读原文、标注证据、比较多篇文献，再把积累的笔记与研究结果用于写作和 PPTX 汇报。
 
-写作工作台新增“公文写作”：材料 → 提纲确认 → 起草 → 审稿 → Word 导出。
-保留旧稿和改稿版本，支持本篇排版与经确认的默认格式配置。模型调用前需明确允许发送本稿材料。
-三个技能均已接入：lieflat 结构诊断、official-document 公文起草审稿、sanmu Word 排版及结构校验。
-本功能含 **PolyForm Noncommercial 1.0.0** 许可材料，不属于纯 MIT 分发；详见 [第三方许可](THIRD_PARTY_NOTICES.md)。
-事实与签发权限须人工核对；结构校验不等于正式公文合规或页面视觉验收。
+**资料入库 → 阅读与标注 → 知识沉淀 → 跨文献研究 → 写作 / 汇报**
 
-![Study Assistant 2.0 文献知识库](docs/assets/screenshots/library.jpg)
+![Study Assistant 2.3.0 资料库：书架、文献列表与阅读进度](docs/assets/screenshots/library.jpg)
 
-<div align="center"><sub>v2.0.0 真实运行界面；截图全部来自隔离的虚构演示库，不含用户文献。</sub></div>
+<p align="center"><sub>本页截图来自 2.3.0 实际运行界面，书目、作者、正文和研究结果均为隔离演示库中的虚构样例。</sub></p>
 
-## 它的核心不是“再做一个 PDF 聊天框”
+## 从自己的资料开始
 
-Study Assistant 服务于一条完整的个人研究链：
+如果你长期积累文献，需要找回读过的段落、比较研究结论，并把阅读成果组织成文章，这就是它的主要使用场景。
 
-> 资料入库 → 可靠阅读 → 证据沉淀 → 跨文献研读 → 写作 / PPTX → 回到原文复核
+| 你正在做的事 | 对应工作区 | 留下的成果 |
+|---|---|---|
+| 整理论文、专著和研究资料 | 资料库 | 书架、书目档案、目录、可检索原文 |
+| 阅读、摘录、梳理问题 | 研读与沉淀 | 高亮、批注、知识笔记、证据卡 |
+| 比较多篇文献的解释 | 研究报告 | 连贯分析文章、共识与冲突、主张来源 |
+| 用已有积累写新文章 | 写作工作台 | Writing DNA、综述、新稿、Word |
+| 把研究成果讲给别人 | PPTX 汇报 | 可编辑提纲、演示文件、来源审计 |
 
-你仍然决定读哪些资料、采用哪些证据、接受哪些修改。AI 负责整理、比较和提出可审查的解释，不把模型记忆冒充你的知识库，也不会把未选文献混入写作。
+导入、阅读、目录修订、全文搜索和本地知识组织可在没有模型 API Key 时使用。需要 AI 时，再配置自己的模型连接。
 
-| 常见断点 | Study Assistant 2.2 |
-|---|---|
-| 文件越存越多，找不到当前项目需要的材料 | 多级虚拟书架、筛选、十种排序方式与拖拽自定义顺序；一篇文献可归入多个书架 |
-| 扫描件目录混乱，正文被误判为标题 | 原生目录、版面、编号链和 OCR 共同判断；低置信度结果进入可拖拽的目录校正台 |
-| AI 给出结论，却无法回到依据 | 文献、章节、页码、文本块和批注保持稳定来源链；机器锚点在成文界面转为紧凑引用 |
-| 多篇文献只是轮流摘要，没有真正综合 | 研究报告显式区分共识、冲突、互补证据、竞争解释、偏倚与适用边界 |
-| 笔记、报告和写作彼此断开 | 批判性审查可回存为知识笔记和证据卡；写作与 PPTX 强制从已选知识对象取材 |
-| 写作太模板化，或被引用编号打断 | 支持连贯分析文章与探索性延伸；Writing DNA 只校准写法，去 AI 味改动逐条审阅 |
-| 知识库逐渐损坏但无从发现 | 健康检查识别未解析、低质量 OCR、无目录、无元数据、重复资料与失效锚点 |
+## 阅读与知识沉淀
 
-## 四个核心工作区
+### 文献有结构，阅读有落点
 
-### 01 · 资料库：让文献先变得可管理
+PDF、DOCX、PPTX 统一入库。用多级虚拟书架、收藏、阅读状态和排序管理资料；自定义顺序支持拖拽，全库与各书架分别保存。
 
-- 导入 PDF、DOCX、PPTX，自动建立元数据、目录、文本块和全文索引。
-- 用智能视图、书架、分类、阅读状态和收藏缩小范围。
-- 按自定义顺序、导入时间、题名、作者、年份、最近阅读或进度排序。
-- 在“自定义顺序”下直接拖动文献；全库顺序与每个书架顺序分别保存。
-- OCR 显示页级进度，支持取消和无进展超时；重任务统一进入任务中心。
+原文阅读支持连续、单页、双页、目录跳转和位置记忆。长 PDF 按可见范围保留页面节点与画布；双页内容超过屏幕时，先上下滚动，到达边界后再翻页。
 
-### 02 · 研读与沉淀：每个判断都能回到材料
+![原文阅读：目录导航、阅读模式与标注入口](docs/assets/screenshots/reader.jpg)
+
+扫描件按需 OCR，并显示页级进度。自动目录综合书签、正文、编号与版面信息；需要调整时，可以拖动条目、修改层级和页码、对照原页，保存后继续留在当前工作区。目录修订保留恢复记录。
+
+### 让摘录进入下一次研究
+
+高亮、批注、知识笔记与证据卡分别保存。把摘录提升为笔记，把笔记组织进知识树，并沿来源回到文献与原页。
+
+![知识沉淀：在所选书目范围内查看笔记与证据](docs/assets/screenshots/knowledge-notes.jpg)
+
+知识库问答结合全文检索与可选向量召回查找依据。健康检查帮助发现未解析资料、低质量 OCR、缺失目录或元数据、重复资料和失效锚点；知识库洞察关注结构覆盖、来源链与研究成果。
+
+## 跨文献研究：把证据组织成解释
+
+先选文献、章节或笔记，再提出具体问题，例如：“这些研究在哪些条件下形成共识，分歧又来自哪里？”
+
+研究报告支持自主规划分析维度，比较**共识、冲突、互补证据、反例和竞争解释**，形成连贯文章。社会科学、人文与文学、自然科学与生物医学可以采用不同的分析角度。
+
+![研究报告：研究材料、文章与主张来源审计](docs/assets/screenshots/research-workspace.jpg)
+
+深度模式对所选长文本分批阅读、综合证据，再分段成文。任务显示阶段进度，已完成的章节或草稿逐步保存。正文把内部定位符转换成紧凑来源标记；主张与完整来源保留在审计区，供核对、修订并回存为知识笔记和证据卡。
+
+研究报告可选用 Writing DNA 校准表达和论证结构。原文观点、综合解释与待验证推断仍需分别辨认。
+
+## 写作工作台
+
+2.3.0 将写作整理为四个入口：**写作 DNA、写作生成、去 AI 味、写作输出**。语料与风格档案在 DNA 中管理，生成与修订的稿件统一进入写作输出。
+
+### 01 · Writing DNA：积累自己的表达习惯
+
+从至少 20 篇有权处理的完整语料中提炼语言、文章结构、论证逻辑和认知习惯。可查看历史版本、补充语料、反馈问题并生成下一版本。
+
+![Writing DNA：语料管理、版本与逻辑结构](docs/assets/screenshots/writing-lab.jpg)
+
+逻辑结构层关注“主张—证据—推理”如何连接，以及段落递进、反驳、让步和收束方式。DNA 用于校准写法；新稿事实取自本次选择的知识对象或文献。
+
+### 02 · 写作生成：新作与多文献综述
+
+**独立新作**从已选知识笔记、证据卡或批判性审查报告取材，结合 DNA、题目、体裁与目标字数成文。
+
+**多文献综述**选择 2–50 篇已解析文献，设定核心问题、综合路径、学科角度与目标长度，比较证据关系。可以选择主题型叙事综述、范围梳理或证据图谱。
+
+![写作生成：多文献选择、研究问题与目标长度](docs/assets/screenshots/writing-review.jpg)
+
+综述当前从每篇文献的首、中、尾和议题相关片段构建材料包，并报告引用覆盖。需要对所选全文做分批研读时，使用“研读与沉淀 → 研究报告”的深度模式。
+
+### 03 · 去 AI 味与输出：逐条审阅，继续编辑
+
+对已有文本或 Word 提出最小改写建议，减少机械铺垫、重复例证和冗余表达。可指定 DNA 作为目标语体，逐条接受或撤销修改，并继续编辑、导出 Word。
 
 <table>
-  <tr>
-    <td width="50%"><img src="docs/assets/screenshots/reader.jpg" alt="隐私安全的虚构文献阅读器截图"><br><b>原文阅读与目录校正</b><br><sub>连续、单页、双页、目录定位、高亮、批注与结构精读。</sub></td>
-    <td width="50%"><img src="docs/assets/screenshots/knowledge-notes.jpg" alt="隐私安全的知识笔记截图"><br><b>笔记与证据</b><br><sub>高亮、划线、知识笔记和证据卡分开保存，统一按来源查看。</sub></td>
-  </tr>
+<tr>
+<td width="50%"><img src="docs/assets/screenshots/writing-clean.jpg" alt="去 AI 味：文本或 Word 输入与目标语体"><br><b>表达审阅</b><br>保留事实信息，选择需要采用的修改。</td>
+<td width="50%"><img src="docs/assets/screenshots/writing-output.jpg" alt="写作输出：稿件归档与阅读"><br><b>统一稿件归档</b><br>按类型找回新作、综述与清洗结果。</td>
+</tr>
 </table>
 
-- PDF 渲染按可见页调度并限制像素预算，缩放时取消过期任务；失败页可以单独重试。
-- 目录支持改标题、页码、层级、顺序、新增、删除和拖拽；保存后原位刷新，不折叠整个工作区。
-- 先限定书目范围，再进入笔记、知识树、图谱或研究报告；不选择时不会默认混合全库。
-- 知识库问答采用 FTS5、RRF 与可选向量召回，回答携带可回跳来源。
+公文写作提供材料、提纲、起草、审稿和 Word 排版流程。相关第三方材料含非商业许可，使用前请查看[第三方许可说明](THIRD_PARTY_NOTICES.md)。
 
-![跨文献研究报告工作区](docs/assets/screenshots/research-workspace.jpg)
+## 从知识对象生成 PPTX
 
-研究报告不是固定模板。模型可以根据材料和问题组织连贯文章、进行受控延伸，同时把事实、解释和待验证推断分开。右侧审计区逐条显示来源、置信度、反例、竞争解释及跨文献关系；人工修订后可沉淀回知识库。
+选取笔记、证据卡或研究报告，设置受众、用途与时长，先审阅逐页提纲，再生成可编辑 PPTX。每页主张可以核查对应来源，输出同时保留来源、数字与图像权利检查结果。
 
-### 03 · 写作工作台：从知识对象到完整文章
+![PPTX 汇报工作台：选择知识对象与设置汇报语境](docs/assets/screenshots/workbench.jpg)
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/assets/screenshots/writing-lab.jpg" alt="Writing DNA 页面"><br><b>版本化 Writing DNA</b><br><sub>从 20 篇以上自有完整语料提炼结构、语言和推理习惯；每次完善保留旧版。</sub></td>
-    <td width="50%"><img src="docs/assets/screenshots/writing-clean.jpg" alt="多文献综述页面"><br><b>多文献综述</b><br><sub>显式选择 2–50 篇文献，比较共识、冲突、互补证据与最强反证。</sub></td>
-  </tr>
-</table>
+本机 PowerPoint 可自动化时，可执行逐页渲染；不可用时保留 PPTX 和结构审计结果，并标明尚未完成真实视觉验收。
 
-- Writing DNA 只约束表达方式，不提供事实，也不复制原作者的独特表达。
-- 独立新作只从已选笔记、证据卡和批判性审查报告取材，允许 AI 在证据边界内形成连贯论证。
-- 多文献综述覆盖社会科学、人文与文学、自然科学与生物医学及跨学科镜头。
-- 正文使用自然的脚注/引用呈现，内部定位符不直接打断阅读；引用审计仍可回到原页。
-- 文本与 DOCX 去 AI 味只处理明确的机械表达，候选修改由用户逐条接受或撤销。
-- 草稿可继续编辑并导出 Word，来源变化后会提示重新核对。
+## 2.3.0 这次更新了什么
 
-### 04 · PPTX 汇报：证据先于排版
+- **长文阅读**：连续模式窗口化渲染、页面资源释放、引用切换时正确换源；目录校正和按页文本复用缓存。
+- **写作流程**：四个入口、统一输出归档；Writing DNA 增加逻辑结构层，并用于研究报告和表达审阅。
+- **后台任务**：新作与文本 / Word 去 AI 味进入任务中心；问答可停止输出，失败任务提供重试或返回工作区的入口。
+- **检索与列表**：筛选分页交给数据库，章节上下文批量获取，JSON 响应压缩，幂等读取失败时重试一次。
+- **持续使用**：研究训练和绘图会话持久化，长文阅读行宽、部分键盘操作和触控目标得到调整。
 
-![PPTX 文献汇报工作台](docs/assets/screenshots/workbench.jpg)
+开发扫描与剩余项见[项目交接](docs/PROJECT_HANDOVER.md)，逐项变化见[变更日志](CHANGELOG.md)。
 
-- 必须先选择知识笔记、证据卡或批判性审查报告，再设定受众、用途、时长和页数。
-- 生成前审阅逐页提纲，生成后检查主张—来源、数字、权利与覆盖率。
-- PowerPoint 可用时执行真实逐页渲染与视觉验收；不可自动化时明确降级为结构审计，不伪装成已完成视觉验收。
-- 复杂多面板、矢量图和公式页仍需要人工复核，详见[产品边界](docs/产品文档.md#当前边界)。
+## 模型与数据
 
-## 本地优先，但不含糊地描述联网边界
+可配置 DeepSeek、Kimi、智谱 GLM、通义、OpenAI、Anthropic、Gemini 或自定义连接。按任务选择模型和回退顺序；内置适配支持 OpenAI Chat、Anthropic Messages 和 Gemini 协议。
 
-| 数据 / 操作 | 默认行为 |
+| 操作 | 数据去向 |
 |---|---|
-| 原始文件、SQLite、FTS5、批注、笔记、报告和写作稿 | 保存在本机 `backend/data/` |
-| 解析、目录、OCR、健康检查、知识库洞察 | 本机执行 |
-| AI 问答、研读、写作、PPTX、出题 | 仅在用户触发后，把所选范围的必要内容发送给对应模型供应商 |
-| 页面视觉解读 | 仅在用户触发后发送当前页面图像 |
+| 文献、数据库、批注、笔记和输出 | 默认保存于本机 `backend/data/` |
+| 本地解析、OCR、全文检索、健康与洞察 | 在本机执行 |
+| 主动调用 AI 问答、研读、写作、汇报 | 所需文本发送给你配置的模型供应商 |
+| 主动调用页面视觉解读 | 当前页面图像发送给视觉模型供应商 |
 
-设置页可分别为问答、研究、写作、PPTX 与通用生成选择连接和回退链。内置 DeepSeek、Kimi、智谱 GLM、通义、OpenAI、Anthropic、Gemini，也支持自定义供应商；没有 API Key 时，导入、阅读、目录修订、全文检索和本地知识组织仍可使用。详见 [PRIVACY.md](PRIVACY.md)。
+深度研读可能分批发送所选全文。API Key 在本机加密保存；模型服务的费用与数据政策由对应供应商决定。详见[隐私说明](PRIVACY.md)。
 
-## 下载与启动
+## 开始使用
 
-当前 2.2 发布物是**本地 Web 应用包**，不是免安装桌面 EXE。页面在浏览器中打开，但服务、资料和数据库都运行在本机。
+当前是 **Windows 本地 Web 应用**：服务运行在电脑上，通过浏览器使用。尚未提供免安装桌面 EXE。
 
-最短路径（Windows）：
+**下载包**：前往 [GitHub Releases](https://github.com/boway033-cell/Study-assistant/releases)，选择带前端产物的应用 ZIP；以页面实际发布的版本和附件为准。下载包无需安装 Node.js，仍需 64 位 Python 3.12+。
 
-1. 从 [GitHub Releases](https://github.com/boway033-cell/Study-assistant/releases/latest) 下载 `study-assistant-v2.3.0.zip` 并完整解压。
-2. 安装 64 位 Python 3.12+，在项目目录打开 PowerShell。
-3. 运行下列命令创建环境并安装依赖：
+在解压后的项目目录打开 PowerShell：
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\start.bat
 ```
 
-4. 双击 `start.bat`；首次启动会建立 `backend/data/`。使用 `stop.bat` 停止服务。
-5. 在设置页按需添加模型连接。Key 加密保存在本机。
+启动器会选择本地可用端口并打开页面。停止服务使用 `stop.bat`。第一次使用，导入一份资料，确认解析完成，再进入阅读器；需要 AI 时到设置页添加模型连接并配置任务路由。
 
-完整的下载选择、源码构建、更新、备份和故障排查见：[安装与更新指南](docs/DOWNLOAD_AND_INSTALL.md)。
+<details>
+<summary><b>从源码运行 2.3.0</b></summary>
 
-## 2.2 的质量基线
-
-- 后端完整测试、前端单测和生产构建由 CI 持续执行。
-- 资料库新增 320–1920px、侧栏展开/折叠的 24 组浏览器回归；“设置 → 界面”可调整发光边框、机械按键和列表密度。
-- 固定检索集覆盖跨学科问答、引用正确性和无答案拒答；容量基线覆盖 3,000 本 / 300,000 文本块合成库。
-- 截图脚本只连接临时演示数据库，并在写盘前检查禁止展示词；不会读取用户正式知识库。
-- SQLite 适合当前个人中小型资料库。数千本真实文献的迁移阈值仍需更大规模验证，不把合成基线包装为已证明的无限扩展能力。
-
-本地验证：
+需要 Git、Python 3.12+ 和 Node.js 22+。
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+git clone https://github.com/boway033-cell/Study-assistant.git
+cd Study-assistant
+git checkout v2.3.0
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 cd frontend
 npm ci
-npm run test:unit
 npm run build
+cd ..
+.\start.bat
 ```
 
-## 文档
+</details>
 
-- [产品定位、功能边界与路线](docs/产品文档.md)
-- [安装、更新、备份与卸载](docs/DOWNLOAD_AND_INSTALL.md)
-- [产品功能地图](docs/PRODUCT_FUNCTION_MAP.md)
-- [项目交接](docs/PROJECT_HANDOVER.md)
-- [研究报告方法](docs/RESEARCH_REPORT_METHOD.md)
-- [容量与检索评测](docs/SCALING_AND_RETRIEVAL_EVAL.md)
-- [架构](docs/01-architecture.md) · [API](docs/03-api.md) · [脚本](scripts/README.md)
-- [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [变更记录](CHANGELOG.md)
+更新前停止服务并备份完整数据目录。安装、备份、迁移与故障排查见[下载与安装指南](docs/DOWNLOAD_AND_INSTALL.md)。
 
----
+## 适用范围与当前边界
 
-<div align="center"><b>以原文为根，以知识为枝；让每次阅读都能进入下一次思考。</b></div>
+目录识别、OCR 和 AI 分析仍需要对照原文复核。多文献综述使用你选择的库内资料；系统文献检索、筛选、质量评价与元分析需要另行完成。
+
+SQLite 已有 3,000 本 / 300,000 文本块的合成容量基线；真实大规模扫描库、向量检索和并发写入仍需进一步压测。解析与交互任务目前共用事件循环，部分同步解析步骤仍可能影响响应。页高变化很大的 PDF、复杂多面板图、可编辑矢量重绘和公式页仍是重点改进方向。
+
+已有后端回归、前端测试、浏览器走查和固定检索评测。不同批次的验证条件和剩余问题记录在交接文档中；前端测试包含源码契约检查，模型替身测试也不能替代真实文献质量评估。
+
+## 文档与参与
+
+[产品文档](docs/产品文档.md) · [开发交接](docs/PROJECT_HANDOVER.md) · [功能地图](docs/PRODUCT_FUNCTION_MAP.md) · [研究报告方法](docs/RESEARCH_REPORT_METHOD.md) · [容量与检索评测](docs/SCALING_AND_RETRIEVAL_EVAL.md)
+
+[贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [隐私说明](PRIVACY.md) · [主项目 MIT 许可证](LICENSE) · [第三方许可](THIRD_PARTY_NOTICES.md)
+
+主项目采用 MIT 许可证；随附第三方材料保留各自许可证，公文写作部分包含 **PolyForm Noncommercial 1.0.0** 材料。分发或商业使用前请核对相应范围。
