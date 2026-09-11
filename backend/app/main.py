@@ -242,6 +242,12 @@ async def lifespan(_app: FastAPI):
         registry.shutdown()
     except Exception:  # noqa: BLE001
         pass
+    # 释放 OCR 共享执行器与可能仍在驻留的模型，并取消空闲释放定时器
+    try:
+        from backend.app.services.parser.ocr import shutdown_ocr_runtime
+        shutdown_ocr_runtime()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 app = FastAPI(title="Study assistant", version="2.3.0", lifespan=lifespan)

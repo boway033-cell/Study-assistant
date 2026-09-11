@@ -76,7 +76,7 @@ def _fill_number_gaps(path: Path, rows: list[dict], document: StructuredDocument
         uncached = {page for page in pages if not _ocr_layout_path(path, page).exists()}
         if uncached:
             try:
-                from backend.app.services.parser.ocr import ocr_pdf, release_ocr_engine
+                from backend.app.services.parser.ocr import ocr_pdf, schedule_ocr_engine_release
                 if record:
                     from backend.app.worker.tasks import update_progress
                     update_progress(record, record.progress, "toc-ocr", f"正在 OCR 核对目录缺号页 {min(uncached)}–{max(uncached)}")
@@ -84,7 +84,8 @@ def _fill_number_gaps(path: Path, rows: list[dict], document: StructuredDocument
                     ocr_pdf(path, page_numbers=uncached, base_pages=document.page_texts(),
                             page_timeout_seconds=min(settings.ocr_page_timeout_seconds, 90))
                 finally:
-                    release_ocr_engine()
+                    # 目录补页 OCR 结束后也走延迟释放，避免把下一段导入的热模型卸掉。
+                    schedule_ocr_engine_release()
             except Exception:  # OCR 增强失败不阻断已有目录重建
                 pass
         used_titles = {re.sub(r"\s+", "", str(row.get("title") or "")) for row in rows}

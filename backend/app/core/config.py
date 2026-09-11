@@ -23,6 +23,31 @@ def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
 
+def _env_int(key: str, default: int, low: int, high: int) -> int:
+    """读取整数配置：非法值回退默认值，越界值夹到边界（避免启动崩溃）。"""
+    try:
+        value = int(str(_env(key, str(default))).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, value))
+
+
+def _env_float(key: str, default: float, low: float, high: float) -> float:
+    """读取浮点配置：非法值回退默认值，越界值夹到边界。"""
+    try:
+        value = float(str(_env(key, str(default))).strip())
+    except (TypeError, ValueError):
+        return default
+    if value != value:  # NaN
+        return default
+    return max(low, min(high, value))
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    value = str(_env(key, "true" if default else "false")).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 class Settings:
     """集中配置。.env 文件为可选（项目根目录 .env）。"""
 
@@ -72,6 +97,31 @@ class Settings:
             96, min(self.ocr_render_dpi, int(_env("OCR_LARGE_DOCUMENT_DPI", "120")))
         )
         self.ocr_use_angle_cls: bool = _env("OCR_USE_ANGLE_CLS", "false").lower() == "true"
+
+        # OCR 第一阶段：引擎生命周期、空白页跳过与性能指标
+        # 0 = 任务结束立即释放（旧行为）；>0 = 空闲这么多秒后释放，连续导入可复用模型。
+        self.ocr_engine_idle_seconds: int = _env_int("OCR_ENGINE_IDLE_SECONDS", 300, 0, 3600)
+        self.ocr_skip_blank_pages: bool = _env_bool("OCR_SKIP_BLANK_PAGES", True)
+        # 非白像素比例 <= 阈值判定为空白页，直接跳过完整 OCR（保守，默认极低）。
+        self.ocr_blank_page_threshold: float = _env_float(
+            "OCR_BLANK_PAGE_THRESHOLD", 0.008, 0.0, 0.5
+        )
+        self.ocr_metrics_enabled: bool = _env_bool("OCR_METRICS_ENABLED", True)
+
+        # OCR 第二阶段：有限并发流水线
+        # worker 上限刻意压到 4：RapidOCR 每个实例内部已用多线程，盲目开大只会争抢。
+        # 1 = 回退第一阶段单页串行路径。
+        self.ocr_workers: int = _env_int("OCR_WORKERS", 2, 1, 4)
+        # 生产者最多超前渲染的页数（内存上界之一）。
+        self.ocr_render_ahead: int = _env_int("OCR_RENDER_AHEAD", 3, 1, 16)
+        # 页图像队列容量（内存上界之二）。
+        self.ocr_max_image_queue: int = _env_int("OCR_MAX_IMAGE_QUEUE", 4, 1, 16)
+        # 每个 ONNX 实例内部线程数；0 = 使用 onnxruntime 默认。当前捆绑的 rapidocr
+        # 版本不支持时自动忽略（有探测与一次性告警）。
+        self.ocr_onnx_intra_threads: int = _env_int("OCR_ONNX_INTRA_THREADS", 6, 0, 64)
+        self.ocr_onnx_inter_threads: int = _env_int("OCR_ONNX_INTER_THREADS", 1, 0, 8)
+        # 单页异常/超时后是否继续处理剩余页面（失败页不写缓存，重跑会补识别）。
+        self.ocr_continue_on_page_error: bool = _env_bool("OCR_CONTINUE_ON_PAGE_ERROR", True)
 
         self._ensure_dirs()
 

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import threading
 import time
 from pathlib import Path
 
@@ -27,9 +29,11 @@ from backend.app.services.parser.ocr import (
     has_ocr_engine,
     ocr_pdf,
     pages_requiring_ocr,
-    release_ocr_engine,
+    schedule_ocr_engine_release,
 )
 from backend.app.worker.tasks import TaskCancelled, TaskRecord, update_progress
+
+logger = logging.getLogger(__name__)
 
 
 def save_upload(file_name: str, content: bytes) -> tuple[Path, str]:
@@ -89,29 +93,44 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                 completed = 0
                 weak_total = len(weak_pages)
                 fresh_completed = 0
+                ocr_summary: dict | None = None
                 ocr_started_at = time.monotonic()
+                # 第二阶段：页进度回调可能来自多个 OCR worker 线程，计数必须原子化
+                ocr_progress_lock = threading.Lock()
 
                 def _ocr_progress(page_no: int, total: int, cached: bool) -> None:
                     nonlocal completed, fresh_completed
-                    completed += 1
-                    if not cached:
-                        fresh_completed += 1
-                    frac = 0.15 + 0.15 * (completed / max(weak_total, 1))
+                    with ocr_progress_lock:
+                        completed += 1
+                        if not cached:
+                            fresh_completed += 1
+                        done, fresh = completed, fresh_completed
+                    frac = 0.15 + 0.15 * (done / max(weak_total, 1))
                     tag = "（命中缓存）" if cached else ""
                     eta = ""
-                    if fresh_completed:
-                        per_page = (time.monotonic() - ocr_started_at) / fresh_completed
-                        remaining_seconds = int(per_page * max(0, weak_total - completed))
+                    if fresh:
+                        per_page = (time.monotonic() - ocr_started_at) / fresh
+                        remaining_seconds = int(per_page * max(0, weak_total - done))
                         if remaining_seconds >= 60:
                             eta = f" · 预计剩余约 {max(1, round(remaining_seconds / 60))} 分钟"
                     update_progress(record, min(frac, 0.30), "ocr",
-                                    f"OCR {completed}/{weak_total} · PDF 第 {page_no} 页{tag}{eta}")
+                                    f"OCR {done}/{weak_total} · PDF 第 {page_no} 页{tag}{eta}")
 
                 def _ocr_checkpoint(page_no: int, phase: str) -> None:
                     # update_progress is also the cooperative cancellation checkpoint.
                     label = "检查页缓存" if phase == "cache" else "识别中"
                     update_progress(record, record.progress, "ocr",
                                     f"OCR 第 {page_no} 页：{label}（单页 {settings.ocr_page_timeout_seconds} 秒无结果将停止）")
+
+                def _ocr_metrics(summary: dict) -> None:
+                    """接收 OCR 结构化性能摘要（只有数值，正文/路径一律不落日志）。"""
+                    nonlocal ocr_summary
+                    ocr_summary = summary
+                    logger.info(
+                        "OCR 性能摘要 pages=%s seconds=%s avg_seconds_per_page=%s pages_per_minute=%s",
+                        summary.get("pages"), summary.get("seconds"),
+                        summary.get("avg_seconds_per_page"), summary.get("pages_per_minute"),
+                    )
 
                 try:
                     result.pages = await asyncio.to_thread(
@@ -122,9 +141,23 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                         base_pages=result.pages,
                         on_checkpoint=_ocr_checkpoint,
                         page_timeout_seconds=settings.ocr_page_timeout_seconds,
+                        on_metrics=_ocr_metrics,
                     )
                 finally:
-                    release_ocr_engine()
+                    # 第一阶段：不再每份文档卸载一次模型，空闲 OCR_ENGINE_IDLE_SECONDS 后释放。
+                    schedule_ocr_engine_release()
+                if ocr_summary:
+                    pages_summary = ocr_summary.get("pages", {})
+                    failed_note = ""
+                    if pages_summary.get("failed"):
+                        failed_note = f"，失败 {pages_summary['failed']} 页（不写缓存，重跑会自动补识别）"
+                    update_progress(
+                        record, record.progress, "ocr",
+                        f"OCR 完成 {completed}/{weak_total} 页 · 平均 "
+                        f"{ocr_summary.get('avg_seconds_per_page', 0)} 秒/页"
+                        f"（命中缓存 {pages_summary.get('cached', 0)} 页，"
+                        f"空白跳过 {pages_summary.get('blank', 0)} 页{failed_note}）",
+                    )
                 result.total_pages = len(result.pages)
                 if result.structured is not None:
                     from backend.app.services.parser.structured import replace_pages_with_ocr
