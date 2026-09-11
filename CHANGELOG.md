@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 修复（高亮/划线批注渲染，2026-09-11）
+
+- 前端：`PdfReader` 的 `hlIndex` 每页高亮索引在 v2.3.0 优化时引入 Map 写回回归——`m.get(pg) || []` 首次遇到某页得到的是临时数组、`push` 后从未 `m.set` 写回，导致所有 PDF 的高亮/划线色块永不渲染（标注数据、面板、导出、跳转均正常）。改为先 `m.set(pg, [])` 建键再 `push`，并新增行为契约回归测试。
+
+### 优化（OCR 性能，2026-09-11）
+
+- 第一阶段（低风险）：任务级共享单 worker 执行器；OCR 引擎空闲延迟释放（默认 300s，`OCR_ENGINE_IDLE_SECONDS`）+ 退出清理；空白页检测写空缓存并跳过完整 OCR（`OCR_SKIP_BLANK_PAGES` / `OCR_BLANK_PAGE_THRESHOLD`）；分阶段性能指标（`OCR_METRICS_ENABLED`）；页缓存原子写。
+- 第二阶段（有限并发流水线）：`OCR_WORKERS=2` 单生产者 + N worker + 协调器看门狗；独立引擎实例池；`OCR_RENDER_AHEAD` / `OCR_MAX_IMAGE_QUEUE` 双内存上界；页级失败策略 `OCR_CONTINUE_ON_PAGE_ERROR`；结果按页码归并；`OCR_WORKERS=1` 串行回退。
+- 修复第一阶段隐患：渲染图像所有权随 yield 转移（消费方负责 close）、全部命中缓存时不再加载模型、空闲定时器竞态加锁、指标计数加锁。
+
 ### 修复（审计 P1 收尾与产品契约补齐，2026-09-11）
 
 - 后端：`/api/knowledge/records` 过滤全部下推 SQL 并按页裁枝 + 精确计数；重复检测改一次批量取 chunks；`office_render` 超时只回收自建进程树并移入独立执行器；literature 网络错误返回 503、未预期异常返回 500，不再回显内部异常文本与路径。
