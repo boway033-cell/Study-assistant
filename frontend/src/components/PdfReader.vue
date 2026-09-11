@@ -750,8 +750,8 @@ const hlIndex = computed(() => {
       if (!Number.isFinite(pg)) continue
       for (const r of (seg.rects || [])) {
         if (![r.x, r.y, r.w, r.h].every(Number.isFinite) || r.w <= 0 || r.h <= 0) continue
-        const arr = m.get(pg) || []
-        arr.push({
+        if (!m.has(pg)) m.set(pg, [])
+        m.get(pg).push({
           id: a.id,
           ann: a,
           markType: a.mark_type || 'highlight',
