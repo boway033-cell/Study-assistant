@@ -1,6 +1,7 @@
 """PDF 阅读器标注 API（多页高亮、原文锚点、OCR 文字层与笔记）。"""
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -189,13 +190,13 @@ def audit_annotations(book_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/annotations/{annotation_id}/repair", response_model=AnnotationResp)
-def repair_annotation(annotation_id: int, db: Session = Depends(get_db)):
+async def repair_annotation(annotation_id: int, db: Session = Depends(get_db)):
     """使用原文重新定位旧批注；失败时保留原记录并标为待人工重选。"""
     a = db.get(Annotation, annotation_id)
     if not a:
         raise HTTPException(404, "标注不存在")
     book = db.get(Book, a.book_id)
-    path = _book_pdf_path(book)
+    path = await asyncio.to_thread(_book_pdf_path, book)
     quote = (a.text or "").strip()
     rects: list[dict] = []
     source = "pdf-text"
@@ -235,7 +236,7 @@ def repair_annotation(annotation_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/books/{book_id}/pdf-text-layer/{page_no}")
-def pdf_text_layer(book_id: int, page_no: int, generate: bool = Query(default=True), db: Session = Depends(get_db)):
+async def pdf_text_layer(book_id: int, page_no: int, generate: bool = Query(default=True), db: Session = Depends(get_db)):
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
@@ -243,7 +244,8 @@ def pdf_text_layer(book_id: int, page_no: int, generate: bool = Query(default=Tr
         raise HTTPException(422, "页码超出范围")
     try:
         from backend.app.services.parser.ocr_layer import get_ocr_text_layer
-        return get_ocr_text_layer(_book_pdf_path(book), page_no, generate=generate)
+        path = await asyncio.to_thread(_book_pdf_path, book)
+        return get_ocr_text_layer(path, page_no, generate=generate)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
     except ValueError as exc:

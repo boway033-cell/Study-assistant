@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -18,6 +19,8 @@ from sqlalchemy import select
 
 from backend.app.core.database import SessionLocal, engine
 from backend.app.models import ImportTask
+
+logger = logging.getLogger(__name__)
 
 _task_registry: dict[str, "TaskRecord"] = {}
 # registry 由后台 loop 线程与 FastAPI 请求线程共同访问：遍历期间被插入会抛
@@ -87,7 +90,11 @@ def _persist(record: TaskRecord) -> None:
         finally:
             db.close()
     except Exception:  # noqa: BLE001
-        pass
+        # 状态落库失败只降级为日志：进度/取消状态丢失必须留痕，否则重启恢复
+        # 会静默对不上账（写入仍保持 best-effort，不阻塞任务执行）。
+        logger.warning(
+            "任务状态持久化失败 task_id=%s status=%s", record.id, record.status, exc_info=True
+        )
 
 
 def _ensure_backend() -> asyncio.AbstractEventLoop:

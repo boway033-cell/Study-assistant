@@ -5,16 +5,27 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import hashlib
 import shutil
 import subprocess
 import tempfile
 import threading
+import concurrent.futures
 from pathlib import Path
 
 from backend.app.core.config import PROJECT_ROOT, settings
 
 _render_lock = threading.Lock()
+
+# 独立单线程执行器：Office COM 不宜并发，且避免占用 FastAPI 默认线程池。
+_render_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="office-render")
+
+
+async def render_office_pdf_async(source: Path, file_type: str, file_hash: str | None, timeout: int = 120) -> Path:
+    """在独立单线程执行器内执行渲染，释放事件循环线程。"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_render_executor, render_office_pdf, source, file_type, file_hash, timeout)
 
 
 def office_renderer_available(file_type: str) -> bool:
@@ -72,12 +83,21 @@ def render_office_pdf(source: Path, file_type: str, file_hash: str | None, timeo
                        "-OutputPdf", str(temporary.resolve())]
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             try:
-                result = subprocess.run(command, capture_output=True, text=True, timeout=timeout,
-                                        creationflags=flags, check=False)
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError(f"Office 原版渲染超过 {timeout} 秒") from exc
-            if result.returncode != 0 or not temporary.is_file():
-                detail = (result.stderr or result.stdout or "Office 未生成 PDF")[-800:]
+                proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       creationflags=flags, text=True)
+                out, err = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # 仅回收本模块自己拉起的进程树（powershell + 其子 COM 进程），
+                # 绝不波及用户自己打开的 Office 进程。
+                try:
+                    if proc.pid:
+                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                                       capture_output=True, check=False, creationflags=flags)
+                except Exception:
+                    pass
+                raise RuntimeError(f"Office 原版渲染超过 {timeout} 秒") from None
+            if proc.returncode != 0 or not temporary.is_file():
+                detail = (err or out or "Office 未生成 PDF")[-800:]
                 raise RuntimeError(detail)
             with temporary.open("rb") as stream:
                 if not stream.read(1024).lstrip().startswith(b"%PDF-"):

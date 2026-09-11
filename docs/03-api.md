@@ -490,7 +490,7 @@ POST   /api/writing/profiles/{profile_id}/imitate
 POST   /api/writing/literature-review            # 202，返回 task_id
 POST   /api/writing/clean-text
 POST   /api/writing/clean-docx
-GET    /api/writing/outputs
+GET    /api/writing/outputs                       # 唯一归档端；?kind=imitation|literature_review|ai_tone 可按类型筛选
 GET    /api/writing/outputs/{output_id}
 PATCH  /api/writing/outputs/{output_id}
 POST   /api/writing/outputs/{output_id}/review

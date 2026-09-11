@@ -1,7 +1,7 @@
 # 项目交接文档 · Study assistant（学习助手）
 
 > **用途**：供新对话/新协作者快速接管项目。阅读本文件 + 启动项目即可继续开发。
-> **最后更新**：写作 DNA 逻辑结构层、项目删除与失效书目自愈；长文档可靠性与全链路缺陷修复收口
+> **最后更新**：审计 P1/P2 全量收口、API 链路提速（GZip + SQLite PRAGMA + SQL 下推）、阅读器窗口化渲染、写作工作台入口重组；当前版本 **v2.3.0**
 
 ---
 
@@ -28,9 +28,18 @@
 ### 长文档可靠性与全链路缺陷修复（2026-09-08/09）
 
 - 长文档（扫描件/超大 PDF/章节断续）可靠性修复并配回归：目录识别保留负证据、页眉判定要求页顶区域、OCR 哈希缓存、深度研读分批阅读长文（>24000 字按 12000 字批次、分层压缩证据）、分段持久化草稿且审计失败仍保存正文。详见 `docs/LONG_DOCUMENT_RELIABILITY.md`。
-- 三路缺陷审计（后端/前端/契约）产出 `docs/CODE_AUDIT_2026-09-08.md`，P0 五项全部按“最小加法”收口：数据库完整性检测区分「确证损坏/无法检测」（杜绝误回滚）、加密密钥写盘失败即报错、API Key 解密失败不回吐密文、任务注册表可重入锁 + worker finally 隔离、OCR 看门狗超时标记。随后追加阅读器链路（切书重建、请求序号、卸载清理）、检索与知识树性能（页文本缓存、子树单次组装、章节上下文批量）、一致性与正确性（重解析即清 FTS、取消不再记为失败、BLAKE2b 稳定去重指纹）等批次；详见 `CHANGELOG.md [Unreleased]`。
-- 定向审计用户 2026-09-08 晚的研读优化（`docs/NIGHT_OPTIMIZATION_AUDIT_2026-09-09.md`）并修复：取消与失败拆分提示、`TaskCancelled` 独立分支、阅读卡生成前重取 chunks、重复提交入口拦截（`has_active_task`）等。
+- 三路缺陷审计（后端/前端/契约）产出 `docs/reports/CODE_AUDIT_2026-09-08.md`，P0 五项全部按“最小加法”收口：数据库完整性检测区分「确证损坏/无法检测」（杜绝误回滚）、加密密钥写盘失败即报错、API Key 解密失败不回吐密文、任务注册表可重入锁 + worker finally 隔离、OCR 看门狗超时标记。随后追加阅读器链路（切书重建、请求序号、卸载清理）、检索与知识树性能（页文本缓存、子树单次组装、章节上下文批量）、一致性与正确性（重解析即清 FTS、取消不再记为失败、BLAKE2b 稳定去重指纹）等批次；详见 `CHANGELOG.md [Unreleased]`。
+- 定向审计用户 2026-09-08 晚的研读优化（`docs/reports/NIGHT_OPTIMIZATION_AUDIT_2026-09-09.md`）并修复：取消与失败拆分提示、`TaskCancelled` 独立分支、阅读卡生成前重取 chunks、重复提交入口拦截（`has_active_task`）等。
 - 诊断并修复“证据卡片无法生成”：根因是模型配置（通义模型未开通 + GLM 模型名笔误），`check_available` 改为真实对话探测而非仅 `GET /models`。
+
+### 写作工作台入口重组与去 AI 味 DNA 适配（2026-09-10）
+
+- 写作工作台从「6 个入口 / 4 个输出端」收敛为**四个职责互斥的标签 + 单一输出端**：写作 DNA（资产：语料、蒸馏、版本、完善）、写作生成（独立仿写 / 多文献综述 双模式）、去 AI 味（白名单式最小改写 + 逐条审阅）、写作输出（唯一归档端）。
+- 「独立仿写」原先内嵌在写作 DNA 标签里（资产管理里塞了生成入口，且必须先选中某个 DNA 项目），现移入「写作生成」，由该标签自己的 DNA 选择器指定项目，并按项目文献范围自动载入可取材知识对象（笔记 / 证据卡 / 批判性审查报告）。`loadKnowledgeOptions(bookIds)` 已参数化，不再隐式依赖 DNA 标签的当前档案。
+- 删除「多文献综述」里与独立标签重复的「去 AI 味生成约束」开关：四条硬性禁令（禁翻案式铺垫 / 禁例证复用 / 禁“不是……而是……” / 禁定语后置）在两种生成模式下始终生效。
+- 去 AI 味目标语体说明从「使用某个语言 DNA 判断原语体」更正为完整 Writing DNA（语言 + 逻辑 + 整合层，提示词上限 9000 字），下拉显示档案版本号并注明不参与事实判断。
+- 写作输出标签新增类型筛选（全部 / 独立新作 / 多文献综述 / 去 AI 味），后端 `GET /api/writing/outputs` 新增 `kind` 过滤参数；生成结果与清洗结果均可一键跳到该端。
+- 同时清理了因入口合并而失效的 CSS 规则（`.imitate-panel`、`.imitate-grid`、`.writing-result`、`.review-layout`、`.review-config`、`.review-result`、`.review-constraints`、`.tone-switch`）。回归：前端新增入口矩阵与唯一输出端断言，后端新增 `list_outputs` 类型过滤用例。
 
 ### 写作 DNA：逻辑结构层、项目删除与失效书目自愈（2026-09-09）
 
@@ -487,7 +496,7 @@
 
 ## 12. 开源发布状态
 
-- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布版本 v2.2.0）
+- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布版本 v2.3.0）
 - 许可证 MIT、PRIVACY.md、SECURITY.md、CHANGELOG.md、CONTRIBUTING.md、.gitattributes
 - CI（ci.yml）+ Release 自动打包（release.yml）
 - 分享给朋友：下载 Release 的 zip（含前端产物，不装 Node 也能用），或 git clone 后 `cd frontend && npm i && npm run build`
@@ -504,11 +513,22 @@ cd frontend && npm run build               # 改完前端构建（需 npm.cmd）
 
 # git 推送
 git push origin main
-git tag v2.2.0 && git push origin v2.2.0  # 触发 Release 自动打包
+git tag v2.3.0 && git push origin v2.3.0  # 触发 Release 自动打包
 
 # 关键文档
 docs/README.md  docs/产品文档.md  docs/PROJECT_HANDOVER.md
 docs/LIGHTWEIGHT_DOCUMENT_PIPELINE.md  docs/nature-literature-workflow.md
 docs/01-architecture.md  docs/02-database.md  docs/03-api.md
+docs/reports/（各日期审计与对标报告归档）
 PRIVACY.md  SECURITY.md  CHANGELOG.md  CONTRIBUTING.md  README.md
+```
+
+## 14. 2026-09-11 审计收口与 API 提速（v2.3.0）
+
+- **P1 全部收口**：`knowledge/records` 与 `/notes` 过滤下推 SQL（含通配符转义，等价用例锁定）、去重批量取 chunks、`office_render` 只回收自建进程树并移入独立执行器、literature 错误不再回显内部信息；前端连续模式窗口化渲染、hlStyles 预索引、pageProxy 释放、轮询/订阅可取消、流式停止生成、错误白名单化；契约项（任务中心重试出路、写作三流程 `202` 任务化、76ch、token 化、reduced-motion 等）全部补齐。详见 `docs/reports/P1_FIX_REPORT_2026-09-11.md`。
+- **API 链路提速**：SQLite PRAGMA 五项调优、JSON GZip（实测 7.1×）、前端语义化超时档 + 通用适配器 + 幂等读重试。
+- **P2 九项**：拖拽环检测、deep watch 去除、跳转索引实测化、延迟释放 Blob、键盘可达 ×3、触控 40px ×2、`fitz` try/finally、`_persist` 留痕。详见 `docs/reports/P2_FIX_REPORT_2026-09-11.md`。
+- **并行批次**：ChatSession 会话持久化、写作三流程任务化（`chat_sessions.py` + `test_chat_sessions.py`）。
+- **坑位记录**：给端点函数加 `Query(default=…)` 参数时，测试位置调用拿到的是 Query 对象而非 int（会被 finally 里无关的 IntegrityError 掩盖）；新增参数前必查是否有位置调用方。
+- **未做**：`PdfReader/LibraryView/ReaderView/KnowledgeView` 组件拆分（大重构，单独立项）；#6 双队列挂同一 event loop（架构改造）。
 ```

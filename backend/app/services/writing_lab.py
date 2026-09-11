@@ -22,23 +22,39 @@ from backend.app.services.llm import LLMRouter, load_llm_config, parse_json_resp
 from backend.app.worker.tasks import TaskRecord, update_progress
 
 AI_TONE_RULES = """仅按以下白名单最小改写，未命中内容逐字保留：
-1 翻案腔；2 分句内顿号串联三项以上；3 相邻句同款骨架；4 揭晓式破折号；
+1 翻案式铺垫（先立假想观点、常见误解或自造反例再翻正，如“有人认为……其实……”）；2 分句内顿号串联三项以上；3 相邻句同款骨架；4 揭晓式破折号；
 5 提示性冒号；6 连续三个以上序数词小标题；7 理想化职业人格比喻；
 8 用概括盖住已有数字/时间，或“完成了对/实现了提升/进行了优化”空泛名词化；
 9 “说白了/说穿了/先说结论”；10 只处理五种翻译腔：过长前置定语、
 “当…时”前置从句、前置话题壳、句首连接词路标、同义的“这意味着/表明”复述；
-11 非首段零主语评论且缺少回指。
+11 非首段零主语评论且缺少回指；12 “不是……而是……”及其变体（并非/并不是……而是、
+与其说……不如说、与其说……毋宁说、不在……而在……）：删去否定半句改写为单一正面陈述，
+其余信息不变；13 定语后置（“一个问题，根本性的”）与同位语插入式后置定语
+（“X——……的——”）：把修饰语移回中心语之前，中心语与修饰词本身不变。
 硬约束：不改变标题层级、段落/列表/表格/引用/代码位置；不新增或删除事实、数字、
 姓名、机构、日期、引语、链接、因果和限定词；不因句长、被动句、普通名词化、问句、
 句内排比或一般比喻而改写。每项改动必须给出 rule_ids。"""
 
+AI_TONE_OUTPUT_BANS = """【写作输出硬性禁令，与事实边界同级，逐条执行】
+A 禁止翻案式铺垫：不得先摆出假想观点、常见误解或自造反例再加以纠正（“有人认为……其实……”
+“看似……实则……”“表面上……实际上……”）；一切主张直接正面陈述。综述呈现文献间的
+真实分歧与反证时，直接说明证据冲突本身，不使用这种先立靶子再翻正的结构。
+B 禁止例证复用：同一案例、数字、场景或引语在全文只能出现一次；换一种说法把同一个例子
+再讲一遍同样禁止；不同章节使用各自独立的证据。
+C 禁用“不是……而是……”及其一切变体（并非……而是／并不是……而在于／与其说……不如说／
+与其说……毋宁说／不在……而在……）：需要对比含义时写成两句独立陈述，让证据自己说话。
+D 禁止定语后置：修饰语一律置于中心语之前（写“一个根本性的问题”，不写“一个问题，根本性的”）；
+破折号或逗号插入的同位语式后置定语（“X——……的——”）同样禁止。"""
+
 AI_TONE_GENERATION_GUARD = """生成时主动避开以下机械痕迹，但不得为规避痕迹而改变证据含义：
-翻案腔；三项以上顿号堆砌；连续同款句式；揭晓式破折号；提示性冒号；
+翻案式铺垫；三项以上顿号堆砌；连续同款句式；揭晓式破折号；提示性冒号；
 连续三个以上序数词小标题；空泛人格比喻；用概括覆盖数字、时间或限定词；
 “说白了/说穿了/先说结论”；过长前置定语、路标式连接词和“这意味着”复述；
 无回指的零主语评论。保持必要的学术术语、被动句、数字、引语、因果边界和不确定性。
 正文先提出主张，再用最相关证据推进；删除为预防假想反对而写的免责声明、重复限定和自我辩护。
-真实影响结论的范围与方法限制只在最相关位置平静说明一次，不把“可能、一定程度上、需要指出”等修饰词连续叠加。"""
+真实影响结论的范围与方法限制只在最相关位置平静说明一次，不把“可能、一定程度上、需要指出”等修饰词连续叠加。
+
+""" + AI_TONE_OUTPUT_BANS
 
 LITERATURE_REVIEW_LENSES = {
     "auto": "先依据每篇材料的方法与论证类型判断适用学科镜头；混合语料并列使用相关镜头，不强行统一评价标准。",
@@ -284,6 +300,19 @@ def _latest_revision(db, profile_id: int) -> WritingDnaRevision:
     return revision
 
 
+def dna_style_context(db, profile_id: int, max_chars: int = 12000) -> tuple[str, int]:
+    """综合语言/结构/逻辑/认知/整合 DNA 作为表达约束；只校准写法，不得充当事实来源。"""
+    profile = db.get(WritingDnaProfile, profile_id)
+    if not profile or profile.status != "ready":
+        raise ValueError("所选 Writing DNA 尚未就绪")
+    revision = _latest_revision(db, profile_id)
+    parts = [revision.language_dna, revision.structure_patterns]
+    if revision.logic_dna:
+        parts.append(revision.logic_dna)
+    parts.extend([revision.cognitive_framework, revision.writing_dna])
+    return "\n\n".join(parts)[:max_chars], revision.version
+
+
 def collect_writing_knowledge(db, allowed_book_ids: list[int], knowledge_note_ids: list[int] | None,
                               evidence_card_ids: list[int] | None, report_ids: list[int] | None,
                               max_chars: int = 30000) -> tuple[str, list[dict]]:
@@ -504,6 +533,7 @@ async def generate_literature_review(db, *, question: str, title: str, book_ids:
         output_text, valid_anchors={anchor.strip("[]") for anchor in valid_found}, labels=citation_labels,
     )
     selected_ids = list(dict.fromkeys(int(value) for value in book_ids))
+    violations = ai_flavor_violations(output_text)
     row = WritingOutput(
         profile_id=profile_id, kind="literature_review", title=title[:255], input_type="text",
         source_text=evidence_context, output_text=output_text,
@@ -517,6 +547,7 @@ async def generate_literature_review(db, *, question: str, title: str, book_ids:
             "cited_book_ids": sorted(cited_book_ids),
             "unreferenced_book_ids": [book_id for book_id in selected_ids if book_id not in cited_book_ids],
             "dna_version": dna_version, "ai_tone_constraints": ai_tone_constraints,
+            "ai_tone_violations": violations,
             "content_policy": "selected_library_documents_only",
             "method_boundary": "closed_corpus_not_systematic_review",
             "human_review_required": True,
@@ -554,6 +585,7 @@ async def imitate(db, profile_id: int, topic: str, genre: str, length: int, brie
     logic_block = f"\n【逻辑结构DNA】\n{revision.logic_dna}" if revision.logic_dna else ""
     prompt = f"""按下列 Writing DNA 写一篇新的中文文章。复刻抽象的语言、结构和视觉排版规律，
 不得复制原文独特短语、事实和观点，不得冒充原作者；文末附“本文为风格参考写作”。
+{AI_TONE_OUTPUT_BANS}
 用户要求优先于 DNA。题目：{topic}\n体裁：{genre}\n目标长度：约{length}字\n补充要求：{brief or '无'}
 【强制取材边界】事实、观点、数字、案例和结论只能来自下列已选知识对象。保留其中的冲突、不确定性、反例、证据质量与限定词；
 不得把未核验假设写成事实。用 [NOTE:…]、[EVIDENCE:…] 或 [REPORT:…] 标记关键事实的来源即可；标记只供机器审计，系统会自动转换为脚注，不要让它参与句法或逐段堆叠。材料不足时直接收缩主张。
@@ -578,6 +610,7 @@ async def imitate(db, profile_id: int, topic: str, genre: str, length: int, brie
                                                "calibration_books": [title for _, title, _ in related],
                                                "knowledge_objects": knowledge_manifest,
                                                "citation_notes": citation_notes,
+                                               "ai_tone_violations": ai_flavor_violations(output_text),
                                                "content_policy": "selected_knowledge_objects_only",
                                                "human_review_required": True}, ensure_ascii=False))
     db.add(row); db.commit(); db.refresh(row)
@@ -595,10 +628,94 @@ def _validate_replacement(old: str, new: str) -> None:
             raise ValueError(f"去 AI 味结果删除了限定词：{qualifier}")
 
 
+AI_TONE_VIOLATION_PATTERNS = {
+    "not_but": [
+        r"不是[^。！？；\n]{1,40}?而是",
+        r"并非[^。！？；\n]{1,40}?(?:而是|而在于)",
+        r"与其说[^。！？；\n]{1,40}?(?:不如说|毋宁说)",
+        r"不在[^。！？；\n]{1,30}而在(?:于)?",
+    ],
+    "fan_an": [
+        r"(?:有人认为|许多人认为|人们往往认为|表面上看|表面上|看似|乍看之下|乍一看|"
+        r"传统观点认为|流行观点认为|一种常见的看法是)[^。！？\n]{0,80}?"
+        r"(?:其实|实际上|事实上|实则|恰恰相反|然而实际)",
+    ],
+}
+
+# 「禁止定语后置」需命中两类结构：
+# 1) 原“，……的。”形态（句末短语助词为信号；片段含“是”多为正常“是……的”判断句，已排除）。
+# 2) “X的Y，其<根源/关键/核心/决定因素/原因>(在于|是) Z”与“X的Y，<关键(在于|是)|取决于|来自|源于> Z”
+#    ——这才是真正要拦截的定语后置句式（Y 本是主语属性，被后置成“X的Y，其关键在于…”）。
+POSTPOSED_ATTR_PATTERN = (
+    r"[，,][^，。；！？“\"”‘’（）()是\n]{2,24}的[。；！？\n]"          # 原「，……的。」形态
+    r"|"                                                               # 或
+    r"[\u4e00-\u9fff]{1,16}的[\u4e00-\u9fff]{1,16}[，,]"              # X的Y，
+    r"(?:其(?:根源在于|决定因素是|关键在于|原因在于|核心是|原因是)"          #   其<根源/关键/核心/决定因素/原因>(在于|是)
+    r"|关键(?:在于|是)|取决于|来自|源于)"                              #   或 关键(在于|是)|取决于|来自|源于
+    r"[^。！？；\n]{1,40}"                                            #   Z
+)
+
+
+def _repeated_example_pairs(text: str, limit: int = 5) -> list[list[str]]:
+    """用字符二元组 Jaccard 相似度定位“换汤不换药”的重复例证。"""
+    cleaned = re.sub(r"\[B\d+:C\d+:P\d+(?:-\d+)?\]|\[\^\d+\]|\[\d+\]", "", text)
+    sentences = [part.strip() for part in re.split(r"[。！？\n]", cleaned)
+                 if 14 <= len(part.strip()) <= 120]
+    prepared = []
+    for sentence in sentences[:400]:
+        normalized = re.sub(r"[^\w\u4e00-\u9fff]", "", sentence)
+        if len(normalized) >= 12:
+            grams = {normalized[index:index + 2] for index in range(len(normalized) - 1)}
+            if grams:
+                prepared.append((sentence, normalized, grams))
+    pairs: list[list[str]] = []
+    for i, (sentence, normalized, grams) in enumerate(prepared):
+        for j in range(i + 1, len(prepared)):
+            other_sentence, other_normalized, other_grams = prepared[j]
+            if abs(len(other_normalized) - len(normalized)) > max(12, len(normalized) // 2):
+                continue
+            if len(grams & other_grams) / len(grams | other_grams) >= 0.75:
+                pairs.append([sentence[:40], other_sentence[:40]])
+                if len(pairs) >= limit:
+                    return pairs
+    return pairs
+
+
+def ai_flavor_violations(text: str) -> dict:
+    """对成文做本地“AI 味硬性禁令”扫描；LLM 不保证服从，检测结果供人工复核。"""
+    violations: dict = {}
+    for kind, patterns in AI_TONE_VIOLATION_PATTERNS.items():
+        hits: list[str] = []
+        for pattern in patterns:
+            for match in re.finditer(pattern, text):
+                snippet = match.group(0).replace("\n", " ")[:48]
+                if snippet not in hits:
+                    hits.append(snippet)
+                if len(hits) >= 10:
+                    break
+            if len(hits) >= 10:
+                break
+        if hits:
+            violations[kind] = hits
+    postposed = [match.group(0).lstrip("，,").strip()
+                 for match in re.finditer(POSTPOSED_ATTR_PATTERN, text)][:10]
+    if postposed:
+        violations["postposed_attr"] = postposed
+    pairs = _repeated_example_pairs(text)
+    if pairs:
+        violations["repeated_example_pairs"] = pairs
+    return violations
+
+
 async def clean_blocks(db, blocks: list[dict], profile_id: int | None = None) -> tuple[list[dict], dict]:
     language = ""
     if profile_id:
-        language = _latest_revision(db, profile_id).language_dna
+        revision = _latest_revision(db, profile_id)
+        dna_parts = [revision.language_dna]
+        if revision.logic_dna:
+            dna_parts.append(revision.logic_dna[:2000])
+        dna_parts.append(revision.writing_dna[:2500])
+        language = "\n\n".join(dna_parts)
     cfg = load_llm_config(db, "writing"); provider = LLMRouter.get("auto", cfg)
     accepted: list[dict] = []
     rejected: list[dict] = []
@@ -614,7 +731,7 @@ async def clean_blocks(db, blocks: list[dict], profile_id: int | None = None) ->
     for batch in batches:
         payload = json.dumps(batch, ensure_ascii=False)
         prompt = f"""{AI_TONE_RULES}
-目标语体语言DNA（如为空则按原体裁）：{language[:5000]}
+目标语体 Writing DNA（语言、逻辑与整合层；如为空则按原体裁）：{language[:9000]}
 输入是带稳定 id 的段落/表格文本。只输出 JSON：{{"changes":[{{"id":"...","old":"原文中的精确连续子串","new":"替换文本","rule_ids":[1]}}]}}。
 没有命中的块不要返回。old 必须是该块原文的精确子串；一次改动尽量只覆盖一个问题。
 输入：{payload}"""
@@ -626,7 +743,7 @@ async def clean_blocks(db, blocks: list[dict], profile_id: int | None = None) ->
             old, new = str(change.get("old") or ""), str(change.get("new") or "")
             rules = [int(rule) for rule in change.get("rule_ids", []) if str(rule).isdigit()]
             try:
-                if not old or old not in by_id.get(block_id, "") or not rules or any(rule < 1 or rule > 11 for rule in rules):
+                if not old or old not in by_id.get(block_id, "") or not rules or any(rule < 1 or rule > 13 for rule in rules):
                     raise ValueError("替换操作缺少精确原文或有效规则编号")
                 _validate_replacement(old, new)
                 accepted.append({"id": block_id, "old": old, "new": new, "rule_ids": rules})

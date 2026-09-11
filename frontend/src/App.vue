@@ -182,7 +182,7 @@ html, body, #app { height: 100%; }
 .menu .el-menu-item.is-active {
   background: rgba(185, 138, 88, .2);
   color: #f2d4ad;
-  box-shadow: inset 3px 0 0 #b98a58;
+  box-shadow: inset 3px 0 0 var(--study-ink-soft);
   border-right: none;
   font-weight: 600;
 }
@@ -252,7 +252,7 @@ html, body, #app { height: 100%; }
 /* —— Markdown 排版层级（H1 醒目 / 层级分明 / 行高舒适） —— */
 .markdown-body { color: #333333; font-family:var(--study-font-reading); font-size:16px; line-height: 1.9; }
 .markdown-body h1 {
-  font-family:var(--study-font-display); font-size: 1.65em; font-weight: 600; color: #8B5A2B;
+  font-family:var(--study-font-display); font-size: 1.65em; font-weight: 600; color: var(--study-ink);
   margin: 0.9em 0 0.5em; padding-bottom: 0.35em;
   border-bottom: 3px solid #C2A285;
   letter-spacing: 0.01em;
@@ -268,8 +268,8 @@ html, body, #app { height: 100%; }
 .markdown-body p { margin: 0.45em 0; line-height: 1.9; color: #333333; }
 .markdown-body ul, .markdown-body ol { padding-left: 1.7em; margin: 0.45em 0; }
 .markdown-body li { margin: 0.25em 0; line-height: 1.85; color: #333333; }
-.markdown-body li::marker { color: #8B5A2B; }
-.markdown-body code { background: #ede5d8; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; color: #6F4721; }
+.markdown-body li::marker { color: var(--study-ink); }
+.markdown-body code { background: #ede5d8; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; color: var(--study-ink-strong); }
 .markdown-body pre { background: #f1ebe0; padding: 12px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--el-border-color-lighter); }
 .markdown-body pre code { background: none; padding: 0; color: #333; }
 .markdown-body blockquote { border-left: 4px solid #C2A285; padding-left: 14px; color: #6e6e60; margin: 0.6em 0; background: #f7f2e9; padding: 8px 14px; border-radius: 0 6px 6px 0; }

@@ -7,7 +7,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import String, and_, cast, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
@@ -143,11 +143,23 @@ def list_knowledge_notes(
     if scope:
         node_stmt = node_stmt.where(KnowledgeNode.book_id.in_(scope))
         ann_stmt = ann_stmt.where(Annotation.book_id.in_(scope))
+    if term:
+        # 过滤条件下推到 SQL：原先是把两张表全量读进内存再逐条子串匹配。
+        # 拼接串保留分隔空格，与 f"{a} {b}".lower() 的语义一致；term 中的 LIKE
+        # 通配符显式转义，避免用户搜索 % 或 _ 时扩大匹配范围。
+        pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        node_stmt = node_stmt.where(
+            func.lower(
+                cast(KnowledgeNode.title, String) + " " + cast(func.coalesce(KnowledgeNode.note, ""), String)
+            ).like(pattern, escape="\\")
+        )
+        ann_stmt = ann_stmt.where(
+            func.lower(
+                cast(func.coalesce(Annotation.text, ""), String) + " " + cast(func.coalesce(Annotation.note, ""), String)
+            ).like(pattern, escape="\\")
+        )
     items = []
     for node, book in db.execute(node_stmt.order_by(KnowledgeNode.created_at.desc(), KnowledgeNode.id.desc())).all():
-        searchable = f"{node.title} {node.note or ''}".lower()
-        if term and term not in searchable:
-            continue
         items.append({
             "id": node.id, "title": node.title, "content": node.note or "",
             "book_id": node.book_id, "book_title": book.title if book else None,
@@ -156,9 +168,6 @@ def list_knowledge_notes(
             "origin": "user", "created_at": node.created_at.isoformat(),
         })
     for annotation, book in db.execute(ann_stmt.order_by(Annotation.created_at.desc(), Annotation.id.desc())).all():
-        searchable = f"{annotation.text or ''} {annotation.note or ''}".lower()
-        if term and term not in searchable:
-            continue
         label = "划线" if getattr(annotation, "mark_type", "highlight") == "underline" else "高亮"
         items.append({
             "id": f"annotation:{annotation.id}", "title": (annotation.note or annotation.text or label)[:80],
@@ -191,51 +200,79 @@ def list_knowledge_records(
     scope = sorted({int(value) for value in (book_ids or []) if int(value) > 0})
     wanted = set(record_types or ["highlight", "underline", "annotation", "note", "evidence"])
     term = (q or "").strip().lower()
+    # 用原始分页参数计算下推 limit（先按 int 规整，避免被下方 note 循环同名变量遮蔽影响）
+    safe_page = page if isinstance(page, int) and page > 0 else 1
+    safe_size = page_size if isinstance(page_size, int) else 50
+    wanted_mark = {t for t in wanted if t in ("highlight", "underline")}
+    want_annotation = "annotation" in wanted
     records: list[dict] = []
+    total = 0
 
-    ann_stmt = select(Annotation, Book).join(Book, Book.id == Annotation.book_id)
-    if scope:
-        ann_stmt = ann_stmt.where(Annotation.book_id.in_(scope))
-    if color:
-        ann_stmt = ann_stmt.where(Annotation.color == color)
-    if date_from:
-        ann_stmt = ann_stmt.where(Annotation.created_at >= date_from)
-    if date_to:
-        ann_stmt = ann_stmt.where(Annotation.created_at <= date_to)
-    for annotation, book in db.execute(ann_stmt).all():
-        mark_type = getattr(annotation, "mark_type", "highlight") or "highlight"
-        record_type = "annotation" if (annotation.note or "").strip() else mark_type
-        if record_type not in wanted:
-            continue
-        searchable = f"{annotation.text or ''} {annotation.note or ''}".lower()
-        if term and term not in searchable:
-            continue
-        records.append({
-            "key": f"annotation:{annotation.id}", "entity_type": "annotation", "record_type": record_type,
-            "id": annotation.id, "title": (annotation.note or annotation.text or "阅读标注")[:100],
-            "content": annotation.note or "", "quote": annotation.text or "", "book_id": annotation.book_id,
-            "book_title": book.title, "chapter_id": None, "chapter_title": None, "page": annotation.page,
-            "color": annotation.color, "tags": [], "origin": getattr(annotation, "origin", "user"),
-            "source_link": f"/reader/{annotation.book_id}?page={annotation.page}",
-            "created_at": annotation.created_at.isoformat(),
-        })
+    # --- 标注源：过滤尽量下推到 SQL（含 record_type 的 SQL 条件）---
+    if wanted_mark or want_annotation:
+        ann_cond = []
+        if scope:
+            ann_cond.append(Annotation.book_id.in_(scope))
+        if color:
+            ann_cond.append(Annotation.color == color)
+        if date_from:
+            ann_cond.append(Annotation.created_at >= date_from)
+        if date_to:
+            ann_cond.append(Annotation.created_at <= date_to)
+        if term:
+            ann_cond.append(or_(Annotation.text.ilike(f"%{term}%"), Annotation.note.ilike(f"%{term}%")))
+        type_cond = []
+        if want_annotation:
+            # 有 note（去空白后非空）记为 annotation，与 Python 端 record_type 计算一致
+            type_cond.append(func.trim(Annotation.note) != "")
+        if wanted_mark:
+            type_cond.append(func.coalesce(Annotation.mark_type, "highlight").in_(wanted_mark))
+        ann_cond.append(or_(*type_cond))
+        ann_stmt = (
+            select(Annotation, Book).join(Book, Book.id == Annotation.book_id)
+            .where(*ann_cond)
+            .order_by(Annotation.created_at.desc(), Annotation.id.desc())
+            .limit(safe_page * safe_size)
+        )
+        for annotation, book in db.execute(ann_stmt).all():
+            mark_type = getattr(annotation, "mark_type", "highlight") or "highlight"
+            record_type = "annotation" if (annotation.note or "").strip() else mark_type
+            records.append({
+                "key": f"annotation:{annotation.id}", "entity_type": "annotation", "record_type": record_type,
+                "id": annotation.id, "title": (annotation.note or annotation.text or "阅读标注")[:100],
+                "content": annotation.note or "", "quote": annotation.text or "", "book_id": annotation.book_id,
+                "book_title": book.title, "chapter_id": None, "chapter_title": None, "page": annotation.page,
+                "color": annotation.color, "tags": [], "origin": getattr(annotation, "origin", "user"),
+                "source_link": f"/reader/{annotation.book_id}?page={annotation.page}",
+                "created_at": annotation.created_at.isoformat(),
+            })
+        total += db.scalar(select(func.count()).select_from(Annotation).join(Book, Book.id == Annotation.book_id).where(*ann_cond))
 
     if "note" in wanted:
-        node_stmt = select(KnowledgeNote, Book, Chapter).join(Book, Book.id == KnowledgeNote.book_id).outerjoin(Chapter, Chapter.id == KnowledgeNote.chapter_id)
+        node_cond = []
         if scope:
-            node_stmt = node_stmt.where(KnowledgeNote.book_id.in_(scope))
+            node_cond.append(KnowledgeNote.book_id.in_(scope))
         if chapter_id:
-            node_stmt = node_stmt.where(KnowledgeNote.chapter_id == chapter_id)
+            node_cond.append(KnowledgeNote.chapter_id == chapter_id)
         if date_from:
-            node_stmt = node_stmt.where(KnowledgeNote.created_at >= date_from)
+            node_cond.append(KnowledgeNote.created_at >= date_from)
         if date_to:
-            node_stmt = node_stmt.where(KnowledgeNote.created_at <= date_to)
+            node_cond.append(KnowledgeNote.created_at <= date_to)
+        if term:
+            node_cond.append(or_(KnowledgeNote.title.ilike(f"%{term}%"), KnowledgeNote.content.ilike(f"%{term}%")))
+        if tag:
+            node_cond.append(KnowledgeNote.tags_json.like(f'%"{tag}"%'))
+        node_stmt = (
+            select(KnowledgeNote, Book, Chapter)
+            .join(Book, Book.id == KnowledgeNote.book_id)
+            .outerjoin(Chapter, Chapter.id == KnowledgeNote.chapter_id)
+        )
+        if node_cond:
+            node_stmt = node_stmt.where(*node_cond)
+        node_stmt = node_stmt.order_by(KnowledgeNote.created_at.desc(), KnowledgeNote.id.desc()).limit(safe_page * safe_size)
         for node, book, chapter in db.execute(node_stmt).all():
             tags = json.loads(node.tags_json or "[]")
-            if tag and tag not in tags:
-                continue
-            if term and term not in f"{node.title} {node.content or ''}".lower():
-                continue
+            # 保留原有变量遮蔽语义：page 在本循环内被改写为章节起始页
             page = chapter.start_page if chapter else None
             records.append({
                 "key": f"note:{node.id}", "entity_type": "knowledge_note", "record_type": "note", "id": node.id,
@@ -249,23 +286,36 @@ def list_knowledge_records(
                 "source_link": f"/reader/{node.book_id}?page={node.page or page or 1}" if node.book_id else None,
                 "created_at": node.created_at.isoformat(),
             })
+        count_stmt = select(func.count()).select_from(KnowledgeNote).join(Book, Book.id == KnowledgeNote.book_id).outerjoin(Chapter, Chapter.id == KnowledgeNote.chapter_id)
+        if node_cond:
+            count_stmt = count_stmt.where(*node_cond)
+        total += db.scalar(count_stmt)
 
     if "evidence" in wanted:
-        card_stmt = select(EvidenceCard, Book, Chapter).join(Book, Book.id == EvidenceCard.book_id).outerjoin(Chapter, Chapter.id == EvidenceCard.chapter_id)
+        card_cond = []
         if scope:
-            card_stmt = card_stmt.where(EvidenceCard.book_id.in_(scope))
+            card_cond.append(EvidenceCard.book_id.in_(scope))
         if chapter_id:
-            card_stmt = card_stmt.where(EvidenceCard.chapter_id == chapter_id)
+            card_cond.append(EvidenceCard.chapter_id == chapter_id)
         if date_from:
-            card_stmt = card_stmt.where(EvidenceCard.created_at >= date_from)
+            card_cond.append(EvidenceCard.created_at >= date_from)
         if date_to:
-            card_stmt = card_stmt.where(EvidenceCard.created_at <= date_to)
+            card_cond.append(EvidenceCard.created_at <= date_to)
+        if term:
+            card_cond.append(or_(EvidenceCard.title.ilike(f"%{term}%"), EvidenceCard.evidence_text.ilike(f"%{term}%"),
+                                 EvidenceCard.claim_text.ilike(f"%{term}%")))
+        if tag:
+            card_cond.append(EvidenceCard.tags_json.like(f'%"{tag}"%'))
+        card_stmt = (
+            select(EvidenceCard, Book, Chapter)
+            .join(Book, Book.id == EvidenceCard.book_id)
+            .outerjoin(Chapter, Chapter.id == EvidenceCard.chapter_id)
+        )
+        if card_cond:
+            card_stmt = card_stmt.where(*card_cond)
+        card_stmt = card_stmt.order_by(EvidenceCard.created_at.desc(), EvidenceCard.id.desc()).limit(safe_page * safe_size)
         for card, book, chapter in db.execute(card_stmt).all():
             tags = json.loads(card.tags_json or "[]")
-            if tag and tag not in tags:
-                continue
-            if term and term not in f"{card.title} {card.evidence_text} {card.claim_text or ''}".lower():
-                continue
             records.append({
                 "key": f"evidence:{card.id}", "entity_type": "evidence_card", "record_type": "evidence", "id": card.id,
                 "title": card.title, "content": card.claim_text or "", "quote": card.evidence_text,
@@ -278,10 +328,14 @@ def list_knowledge_records(
                 "source_link": f"/reader/{card.book_id}?page={card.page or (chapter.start_page if chapter else 1)}",
                 "created_at": card.created_at.isoformat(),
             })
+        count_stmt = select(func.count()).select_from(EvidenceCard).join(Book, Book.id == EvidenceCard.book_id).outerjoin(Chapter, Chapter.id == EvidenceCard.chapter_id)
+        if card_cond:
+            count_stmt = count_stmt.where(*card_cond)
+        total += db.scalar(count_stmt)
+
     records.sort(key=lambda item: item["created_at"], reverse=True)
     page = page if isinstance(page, int) and page > 0 else 1
     page_size = page_size if isinstance(page_size, int) else 50
-    total = len(records)
     selected = records[(page - 1) * page_size:page * page_size]
     for item in selected:
         item["content_length"] = len(item.get("content") or "")

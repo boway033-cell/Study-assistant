@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,7 +14,9 @@ from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.models import Book, LiteratureAccessAttempt, LiteratureResource, PaperProfile, Setting
 from backend.app.services.literature_access import (PROVIDER_CAPABILITIES, build_library_handoff,
-    download_verified_pdf, resolve_candidates)
+    download_verified_pdf, resolve_candidates, LiteratureNetworkError)
+
+logger = logging.getLogger(__name__)
 from backend.app.worker.import_task import run_import
 from backend.app.worker.tasks import submit
 
@@ -171,9 +174,19 @@ async def import_open_access(req: ImportReq, db: Session = Depends(get_db)):
         attempt.manifest_json = profile.provenance_json; db.commit(); db.refresh(book)
         task = submit("import", lambda rec: run_import(rec, book.id), book_id=book.id)
         return {"book_id": book.id, "attempt_id": attempt.id, "task_id": task.id, "manifest": verified}
-    except Exception as exc:
+    except HTTPException:
+        raise
+    except LiteratureNetworkError as exc:
+        logger.warning("文献网络获取失败: %s", exc)
+        target.unlink(missing_ok=True); attempt.status = "failed"; attempt.error_msg = "获取文献失败，请稍后重试"; db.commit()
+        raise HTTPException(503, "获取文献失败，请稍后重试") from exc
+    except ValueError as exc:
         target.unlink(missing_ok=True); attempt.status = "failed"; attempt.error_msg = str(exc); db.commit()
         raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        logger.error("文献导入未预期异常: %s", exc)
+        target.unlink(missing_ok=True); attempt.status = "failed"; attempt.error_msg = "导入失败"; db.commit()
+        raise HTTPException(500, "文献导入失败，请稍后重试") from exc
 
 
 @router.post("/library-handoff")

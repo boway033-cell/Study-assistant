@@ -15,7 +15,7 @@
       <strong class="task-title">{{ task.book_title || task.result?.focus || '知识库任务' }}</strong>
       <el-progress v-if="isActive(task)" :percentage="percentage(task.progress)" :stroke-width="6" :show-text="false" />
       <p :class="{ error: task.status === 'failed', stalled: isStalled(task) }">{{ isStalled(task) ? '长时间没有新进度，可取消后重试；已完成页面缓存不会删除。' : task.error || task.message || stageLabel(task.stage) }}</p>
-      <footer><time>{{ formatTime(task.updated_at || task.created_at) }}</time><div class="task-actions"><el-button v-if="canRetry(task)" link type="primary" :loading="retryingId===task.task_id" @click.stop="requestRetry(task)">重新解析</el-button><el-button v-if="isActive(task)" link type="danger" :loading="cancellingId===task.task_id" @click.stop="requestCancel(task)">取消任务</el-button></div></footer>
+      <footer><time>{{ formatTime(task.updated_at || task.created_at) }}</time><div class="task-actions"><el-button v-if="canRetry(task)" link type="primary" :loading="retryingId===task.task_id" @click.stop="requestRetry(task)">重新解析</el-button><el-button v-if="canResubmit(task)" link type="primary" @click.stop="goWorkspace(task)">回到原工作区</el-button><el-button v-if="isActive(task)" link type="danger" :loading="cancellingId===task.task_id" @click.stop="requestCancel(task)">取消任务</el-button></div></footer>
     </div>
   </el-drawer>
 </template>
@@ -34,18 +34,21 @@ const cancellingId = ref('')
 const retryingId = ref('')
 const isActive = (task) => ['pending', 'running', 'cancelling'].includes(task.status)
 const canRetry = task => ['failed', 'cancelled'].includes(task.status) && ['import', 'reimport'].includes(task.name)
+// 后端 retry_task 仅支持 import/reimport 自动重放；其余重任务失败后给“回到原工作区重新提交”的明确出路，避免死路。
+const canResubmit = task => ['failed', 'cancelled'].includes(task.status) && !['import', 'reimport'].includes(task.name)
 const activeTasks = computed(() => taskCenter.items.filter(isActive))
 const finishedTasks = computed(() => taskCenter.items.filter((item) => !isActive(item)))
-const taskLabel = (name) => ({ import: '文献导入 / OCR', reimport: '重新解析', deep: '结构精读', study: '综合研读', 'study-overview': '综合研读', 'literature-review': '文献综述', writing_dna: '写作 DNA', deck: 'PPTX 汇报', deck_outline: 'PPTX 提纲', deck_render: 'PPTX 渲染' }[name] || '知识处理')
+const taskLabel = (name) => ({ import: '文献导入 / OCR', reimport: '重新解析', deep: '结构精读', study: '综合研读', 'study-overview': '综合研读', 'literature-review': '文献综述', writing_dna: '写作 DNA', imitate: '独立仿写', 'clean-text': '去 AI 味（文本）', 'clean-docx': '去 AI 味（Word）', deck: '文献汇报', deck_outline: 'PPTX 提纲', deck_render: 'PPTX 渲染' }[name] || '知识处理')
 const statusLabel = (status) => ({ pending: '排队中', running: '处理中', cancelling: '取消中', cancelled: '已取消', done: '已完成', failed: '失败' }[status] || status)
 const statusType = (status) => ({ done: 'success', failed: 'danger', cancelled: 'info', cancelling: 'warning', running: 'warning', pending: 'info' }[status] || 'info')
-const stageLabel = (stage) => ({ parsing: '正在解析原文', ocr: '正在识别扫描页', deep: '正在结构化精读', overview: '正在汇总研读材料', 'research-plan': '正在规划研究路径', evidence: '正在检索和整理证据', synthesis: '正在跨文献综合写作', generate: '正在生成汇报', deck_outline: '正在生成可编辑提纲', deck_render: '正在渲染并审计 PPTX' }[stage] || stage || '等待处理')
+const stageLabel = (stage) => ({ parsing: '正在解析原文', ocr: '正在识别扫描页', deep: '正在结构化精读', overview: '正在汇总研读材料', 'research-plan': '正在规划研究路径', evidence: '正在检索和整理证据', synthesis: '正在跨文献综合写作', writing: '正在按 Writing DNA 写作', document: '正在生成 Word 与引用审计', analyze: '正在定位可改写痕迹', clean: '正在改写白名单命中项', apply: '正在应用改写并输出文件', generate: '正在生成汇报', deck_outline: '正在生成可编辑提纲', deck_render: '正在渲染并审计 PPTX' }[stage] || stage || '等待处理')
 const percentage = (value) => Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : ''
 const isStalled = (task) => task.status === 'running' && ['ocr', 'parsing'].includes(task.stage) && Date.now() - new Date(task.updated_at || task.created_at).getTime() > 120000
 const requestCancel = async (task) => {
+  const importTask = ['import', 'reimport'].includes(task.name)
   try {
-    await ElMessageBox.confirm('停止后会保留已经完成的页面缓存。下次重新解析时可复用缓存。', '取消任务', { type: 'warning', confirmButtonText: '停止任务' })
+    await ElMessageBox.confirm(importTask ? '停止后会保留已经完成的页面缓存。下次重新解析时可复用缓存。' : '停止后已完成的部分结果会保留，可稍后重新提交。', '取消任务', { type: 'warning', confirmButtonText: '停止任务' })
     cancellingId.value = task.task_id
     await cancelTask(task.task_id)
     await refreshTasks()
@@ -62,6 +65,14 @@ const requestRetry = async task => {
     ElMessage.success('已重新排队；完成的 OCR 页面会从缓存继续')
   } catch (error) { ElMessage.error(error.message || '任务无法重试') }
   finally { retryingId.value = '' }
+}
+const goWorkspace = (task) => {
+  visible.value = false
+  if (['study', 'study-overview'].includes(task.name)) return router.push({ path: '/study', query: task.result?.report_id ? { reportId: task.result.report_id } : { taskId: task.task_id } })
+  if (['deck', 'deck_outline', 'deck_render'].includes(task.name)) return router.push({ path: '/literature-workbench', query: task.book_id ? { bookId: task.book_id } : {} })
+  if (task.book_id) return router.push(`/reader/${task.book_id}`)
+  if (task.name === 'deep') return router.push('/study')
+  return router.push('/writing')
 }
 const openTask = (task) => {
   visible.value = false

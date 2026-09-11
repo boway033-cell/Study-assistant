@@ -211,7 +211,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { renderMarkdown } from '../utils/markdown'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -219,6 +219,9 @@ import MindMap from '../components/MindMap.vue'
 import KnowledgeScopeSelector from '../components/KnowledgeScopeSelector.vue'
 import { knowledgeBooks, knowledgeBookIds, loadKnowledgeBooks } from '../stores/knowledgeScope'
 defineProps({ embedded: { type: Boolean, default: false } })
+// 组件卸载后中断手写轮询，避免离开页面仍请求甚至弹窗
+let unmounted = false
+onUnmounted(() => { unmounted = true })
 import {
   getKnowledgeTree, createKnowledgeNode, updateKnowledgeNode,
   deleteKnowledgeNode, moveKnowledgeNode, getKnowledgeSource,
@@ -455,6 +458,7 @@ const expandNode = async () => {
     ElMessage.success('AI 正在展开…')
     for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 2000))
+      if (unmounted) return
       const t = await getTask(resp.task_id)
       if (t.status === 'done') {
         const suggestions=t.result?.suggestions||[]
@@ -487,7 +491,17 @@ const loadSource = async () => {
   }
 }
 
-const allowDrop = () => true
+// 拖拽目标不能是自身或自己的子孙：否则会把父节点拖进自己的子树，形成无根环。
+// el-tree 的 allow-drop 签名是 (draggingNode, dropNode, type)，这里对三类落点
+// （prev/inner/next）统一做环检测，其余一律放行以保持原有行为。
+const allowDrop = (draggingNode, dropNode) => {
+  if (!draggingNode || !dropNode) return true
+  if (draggingNode === dropNode || draggingNode.data?.id === dropNode.data?.id) return false
+  for (let cur = dropNode.parent; cur; cur = cur.parent) {
+    if (cur === draggingNode || cur.data?.id === draggingNode.data?.id) return false
+  }
+  return true
+}
 
 const subtreeSize = data => 1 + (data.children || []).reduce((sum, child) => sum + subtreeSize(child), 0)
 const bookShortName = id => {
@@ -549,6 +563,7 @@ const doAiGenerate = async () => {
     // 轮询任务
     for (let i = 0; i < 120; i++) {
       await new Promise((r) => setTimeout(r, 1500))
+      if (unmounted) return
       const t = await getTask(resp.task_id)
       aiStage.value = t.stage === 'ai' ? (t.message || '分析中…') : t.stage
       if (t.status === 'done') {
@@ -575,7 +590,9 @@ const doAiGenerate = async () => {
 const openImport = () => { importBook.value = [...scopeBookIds.value]; showImport.value = true }
 const openAi = () => { aiBook.value = [...scopeBookIds.value]; showAi.value = true }
 const onScopeChange = async () => { current.value=null; source.value={}; await loadTree() }
-watch(scopeBookIds, onScopeChange, { deep: true })
+// scopeBookIds 是整数 ID 数组且每次整体替换（setKnowledgeScope 赋新数组），
+// 引用比较即可感知变化，deep 遍历纯属无谓开销。
+watch(scopeBookIds, onScopeChange)
 onMounted(async () => { await loadKnowledgeBooks(); await loadTree() })
 </script>
 
@@ -590,7 +607,9 @@ onMounted(async () => { await loadKnowledgeBooks(); await loadTree() })
 .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .book-badge { flex:none; margin-left:6px; padding:1px 6px; border:1px solid #decdb7; border-radius:8px; background:#faf3e8; color:#8a623c; font-size:10px; }
 .tree-actions { display: none; gap: 2px; flex-shrink: 0; }
-:deep(.el-tree-node__content:hover) .tree-actions { display: inline-flex; }
+/* 鼠标悬停或键盘焦点落在行内时都显示操作按钮，避免只能靠 hover 触发 */
+:deep(.el-tree-node__content:hover) .tree-actions,
+:deep(.el-tree-node__content:focus-within) .tree-actions { display: inline-flex; }
 .tree-drag-tip { margin-top: 10px; font-size: 12px; color: var(--el-text-color-placeholder); }
 .mindmap-wrap { min-height: 480px; }
 .form-tip { color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px; }

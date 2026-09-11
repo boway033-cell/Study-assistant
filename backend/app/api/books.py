@@ -818,11 +818,11 @@ def get_book_file(book_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/books/{book_id}/rendered-file")
-def get_rendered_book_file(book_id: int, db: Session = Depends(get_db)):
+async def get_rendered_book_file(book_id: int, db: Session = Depends(get_db)):
     """DOCX/PPTX 的高保真原版 PDF；首次访问按需渲染，之后按哈希缓存。"""
     from fastapi.responses import FileResponse
     from backend.app.core.config import settings as _settings
-    from backend.app.services.office_render import render_office_pdf
+    from backend.app.services.office_render import render_office_pdf_async
 
     book = db.get(Book, book_id)
     if not book:
@@ -831,7 +831,7 @@ def get_rendered_book_file(book_id: int, db: Session = Depends(get_db)):
         path = _settings.uploads_dir / book.file_path
     elif book.file_type in {"docx", "pptx"}:
         try:
-            path = render_office_pdf(_settings.uploads_dir / book.file_path, book.file_type, book.file_hash)
+            path = await render_office_pdf_async(_settings.uploads_dir / book.file_path, book.file_type, book.file_hash)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             raise HTTPException(503, f"原版渲染暂不可用：{exc}") from exc
     else:

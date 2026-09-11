@@ -171,7 +171,8 @@ const exportXml = () => {
   a.href = url
   a.download = 'diagram.drawio.xml'
   a.click()
-  URL.revokeObjectURL(url)
+  // 同步 revoke 会被部分浏览器判定为取消下载；延迟回收。
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 const downloadSvg = () => {
@@ -181,7 +182,8 @@ const downloadSvg = () => {
   a.href = url
   a.download = 'diagram.svg'
   a.click()
-  URL.revokeObjectURL(url)
+  // 同步 revoke 会被部分浏览器判定为取消下载；延迟回收。
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 const clearDiagram = () => {

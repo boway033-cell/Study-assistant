@@ -512,3 +512,21 @@ class WritingOutput(Base):
     output_file_path: Mapped[str | None] = mapped_column(String(500))
     audit_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class ChatSession(Base):
+    """多轮交互会话持久化（思维训练 / 绘图改图）。
+
+    这两类会话此前存在模块级 dict 里（study.py 的 _sessions、draw.py 的 _draw_sessions），
+    服务一重启就报 404「会话不存在或已过期」，用户无感知地丢掉整段多轮历史。
+    这里按 kind 分池，state_json 保存该类会话的全部业务字段。
+    """
+
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # train / draw
+    book_ids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    state_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

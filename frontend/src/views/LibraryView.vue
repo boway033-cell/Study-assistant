@@ -39,7 +39,7 @@
               <div class="header-title">
                 <div>
                   <span>{{ currentShelfName }}</span>
-                  <small>{{ filteredBooks.length }} 篇</small>
+                  <small>已加载 {{ filteredBooks.length }} / 共 {{ filteredTotal }} 篇</small>
                 </div>
                 <el-tag v-if="activeFilterCount" size="small" effect="plain">{{ activeFilterCount }} 项筛选</el-tag>
               </div>
@@ -384,7 +384,9 @@ const toggleAllFiltered = (checked) => {
     : selectedBookIds.value.filter(id => !visibleIds.includes(id))
 }
 
+let listSeq = 0
 const loadBooks = async (reset = true) => {
+  const seq = ++listSeq
   loading.value = true
   try {
     const page = reset ? 1 : libraryPage.value + 1
@@ -399,17 +401,20 @@ const loadBooks = async (reset = true) => {
       category: libraryCategory.value || undefined,
       sort_by: sortBy.value,
     })
+    if (seq !== listSeq) return
     books.value = reset ? resp.items : [...books.value, ...resp.items]
     libraryPage.value = page
     filteredTotal.value = resp.total
     if (resp.stats) libraryStats.value = resp.stats
-    // 提取唯一分类列表
+    // 当前书架下已见过的分类集合：重置（切书架/筛选/排序）时清空，加载更多时合并去重，不跨书架污染
+    if (reset) categories.value = []
     const cats = [...new Set(resp.items.map((b) => b.category).filter(Boolean))]
-    categories.value = cats
+    categories.value = [...new Set([...categories.value, ...cats])].sort()
   } catch (e) {
+    if (seq !== listSeq) return
     ElMessage.error(`无法加载资料库：${e.message}。请确认本地服务已经启动。`)
   } finally {
-    loading.value = false
+    if (seq === listSeq) loading.value = false
   }
 }
 let librarySearchTimer
@@ -794,7 +799,7 @@ onBeforeUnmount(() => {
 .drag-handle { width: 15px; flex: none; color: #c4bbb0; font-size: 17px; line-height: 1; cursor: not-allowed; user-select: none; }
 .drag-handle.enabled { color: #82603c; cursor: grab; }
 .paper-row:active .drag-handle.enabled { cursor: grabbing; }
-.star { padding: 0; border: 0; background: transparent; cursor: pointer; color: #c8c2b7; font-size: 18px; }
+.star { padding: 0; border: 0; background: transparent; cursor: pointer; color: #c8c2b7; font-size: 18px; min-width: 40px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; }
 .star.active { color: #c08a3e; }
 .paper-title { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-family: var(--study-font-reading); font-size: 15px; font-weight: 600; color: var(--el-text-color-primary); line-height: 1.5; overflow-wrap: anywhere; }
 .paper-meta { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -99,6 +99,11 @@
   --study-text-primary: #333333;
   --study-text-secondary: #6E6E60;
   --study-text-muted: #7D786C;
+  /* —— 赭石语义 token：收敛散落的近似赭石色，避免主题 token 形同虚设 —— */
+  --study-ink-strong: #6F4721;
+  --study-ink: #8B5A2B;
+  --study-ink-soft: #B98A58;
+  --study-accent: #A35C42;
   --bailu-text-deep: #F5F0E8;      /* 侧边栏/页头浅色标题 */
   --bailu-accent: #C2A285;          /* 侧边栏强调（暖赭） */
   --bailu-main-text: #333333;       /* 主内容深色文字 */
@@ -237,6 +242,15 @@ button:disabled {
   button:hover,
   button:active {
     transform: none !important;
+  }
+  /* 关闭装饰性动画；保留表达进度的 loading 旋转 */
+  .logo-dew,
+  .dew-dot {
+    animation: none !important;
+  }
+  /* 生成光标保留（仍表示"正在生成"），仅停止闪烁 */
+  .streaming::after {
+    animation: none !important;
   }
 }
 .el-radio-button__inner,

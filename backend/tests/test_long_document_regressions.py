@@ -146,6 +146,149 @@ def test_interrupted_prose_keeps_partial_draft_without_replaying():
     assert saved[-1] == '已经写出的文章'
 
 
+def test_first_token_watchdog_fits_inside_outer_timeout():
+    """首字看门狗 × 重试次数 + 退避必须小于外层 asyncio.timeout。
+
+    这两个数字是耦合的：只调大看门狗而不动重试次数，最后一次尝试会被外层
+    超时直接砍掉，反而把已经收到的草稿一起丢掉（D10 的成因）。
+    """
+    import inspect
+    import re
+
+    from backend.app.api import study
+    source = inspect.getsource(study._stream_answer)
+    attempts = int(re.search(r"for attempt in range\((\d+)\)", source).group(1))
+    outer = int(re.search(r"asyncio\.timeout\((\d+)\)", source).group(1))
+    backoff = 2 * (1 + 2)  # await asyncio.sleep(2 * (attempt + 1)) 在 3 次尝试下的总和
+    assert study.FIRST_TOKEN_TIMEOUT * attempts + backoff < outer, \
+        "看门狗 × 重试 + 退避 已超出外层超时，最后一次尝试会被直接取消"
+
+
+def test_stream_answer_tolerates_slow_first_token(monkeypatch):
+    """首字慢但最终有内容时不得判超时——实测该模型首字常态 60–90 秒。"""
+    import asyncio
+
+    from backend.app.api import study
+    monkeypatch.setattr(study, 'FIRST_TOKEN_TIMEOUT', 5)
+
+    class SlowProvider:
+        async def stream_chat(self, messages):
+            await asyncio.sleep(1.5)
+            yield '慢慢来的正文'
+
+    assert asyncio.run(study._stream_answer(SlowProvider(), [], '写作失败')) == '慢慢来的正文'
+
+
+def test_stream_answer_uses_the_current_watchdog_limit_in_its_message(monkeypatch):
+    """超时文案必须跟着常量走，否则日志会误导排查方向。"""
+    import asyncio
+
+    import pytest
+
+    from backend.app.api import study
+    monkeypatch.setattr(study, 'FIRST_TOKEN_TIMEOUT', 1)
+
+    class HungProvider:
+        async def stream_chat(self, messages):
+            await asyncio.sleep(30)
+            yield 'x'
+
+    with pytest.raises(RuntimeError, match='模型连续1秒无任何响应'):
+        asyncio.run(study._stream_answer(HungProvider(), [], '写作失败'))
+
+
+def test_stream_answer_waits_through_reasoning_only_phase(monkeypatch):
+    """思考型模型先长时间只推 reasoning 增量、正文为零，期间绝不能判超时。
+
+    实测活动模型（qwen3.8-max-0902）会先流式思考 131 秒才吐第一个正文字，
+    期间 SSE 一直在推 reasoning_content。旧实现只看 answer 是否增长，
+    于是在思考阶段误报「连续120秒未返回内容」——长报告反复失败的真正根因。
+    """
+    import asyncio
+    import time
+
+    from backend.app.api import study
+    monkeypatch.setattr(study, 'FIRST_TOKEN_TIMEOUT', 1)
+
+    class ThinkingProvider:
+        def __init__(self):
+            self.last_delta_at = 0.0
+            self.reasoning_chars = 0
+
+        async def stream_chat(self, messages):
+            self.last_delta_at = time.monotonic()
+            for _ in range(30):  # 约 3 秒纯思考：端点持续推帧，但不产出正文
+                await asyncio.sleep(0.1)
+                self.last_delta_at = time.monotonic()
+                self.reasoning_chars += 10
+            yield '思考完之后才出现的正文'
+
+    seen = []
+    prose = '思考完之后才出现的正文'
+    assert asyncio.run(study._stream_answer(ThinkingProvider(), [], '写作失败',
+                                            on_progress=seen.append)) == prose
+    assert seen.count(0) >= 1, '思考阶段必须仍在推进进度，否则界面看起来就是卡死'
+    assert seen[-1] == len(prose)
+    assert all(count in (0, len(prose)) for count in seen), '进度里的字数只能是正文长度'
+
+
+def test_reasoning_only_frames_are_not_treated_as_output(monkeypatch):
+    """思考帧不得被当成「已产出」，否则 RoutedProvider 会拒绝降级。
+
+    RoutedProvider 用 emitted 判断能否切换到备用模型；若把 reasoning 增量
+    当作输出透出，主通道思考到一半失败就会直接抛错、堵死降级链。
+    """
+    import asyncio
+
+    from backend.app.services.llm import LLMProvider, RoutedProvider
+
+    class ThinkingThenDead(LLMProvider):
+        def __init__(self):
+            self.last_delta_at = 0.0
+            self.reasoning_chars = 0
+
+        async def stream_chat(self, messages):
+            import time
+            self.last_delta_at = time.monotonic()
+            self.reasoning_chars += 500  # 思考过，但一帧正文都没产出
+            if False:
+                yield  # 保持异步生成器语义：思考帧不外泄，连接随后断开
+            raise RuntimeError('thinking-only channel went down')
+
+    monkeypatch.setattr("backend.app.services.llm._record_usage", lambda *args, **kwargs: None)
+
+    class Backup(LLMProvider):
+        name = 'backup'
+
+        async def stream_chat(self, messages):
+            yield '备用通道的正文'
+
+    routed = RoutedProvider([ThinkingThenDead(), Backup()], 'research')
+
+    async def collect():
+        return [value async for value in routed.stream_chat([{'role': 'user', 'content': 'q'}])]
+
+    assert asyncio.run(collect()) == ['备用通道的正文']
+
+
+def test_routed_provider_exposes_heartbeat_of_active_channel(monkeypatch):
+    """看门狗要能透过路由层看到心跳，否则降级链路上修复不生效。"""
+    from backend.app.services.llm import LLMProvider, RoutedProvider
+
+    class Fake(LLMProvider):
+        def __init__(self):
+            self.last_delta_at = 0.0
+
+        async def stream_chat(self, messages):
+            yield 'x'
+
+    primary = Fake()
+    routed = RoutedProvider([primary, Fake()], 'research')
+    assert routed.last_delta_at == 0.0
+    primary.last_delta_at = 12345.0
+    assert routed.last_delta_at == 12345.0, '路由层必须透传当前通道的存活时间'
+
+
 def test_file_hash_cache_reuses_content_until_file_changes(tmp_path):
     from backend.app.services.parser.ocr import _file_hash, _file_hash_cached
     path = tmp_path / 'sample.pdf'

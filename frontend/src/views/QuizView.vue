@@ -116,9 +116,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listQuizzes, attemptQuiz, selfGrade, listBooks, getBook, generateQuizzes, getTask, clearBookQuizzes } from '../api'
+
+// 组件卸载后中断手写轮询，避免离开页面仍请求甚至弹窗
+let unmounted = false
+onUnmounted(() => { unmounted = true })
 
 const quizzes = ref([])
 const loading = ref(false)
@@ -215,6 +219,7 @@ const doGenerate = async () => {
     genStage.value = 'AI 分析教材中…'
     for (let i = 0; i < 180; i++) {
       await new Promise((r) => setTimeout(r, 1500))
+      if (unmounted) return
       const t = await getTask(resp.task_id)
       genProgress.value = Math.round((t.progress || 0) * 100)
       genStage.value = t.stage === '生成题目' ? (t.message || '生成题目中…') : (t.message || t.stage || '')

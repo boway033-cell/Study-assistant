@@ -10,7 +10,8 @@
           </el-select>
           <el-divider />
           <div class="history-title">历史记录</div>
-          <div v-for="h in history" :key="h.id" class="history-item" @click="viewHistory(h)">
+          <div v-for="h in history" :key="h.id" class="history-item" role="button" tabindex="0"
+            @click="viewHistory(h)" @keydown.enter.prevent="viewHistory(h)" @keydown.space.prevent="viewHistory(h)">
             <div class="history-q">{{ h.question }}</div>
             <div class="history-time">{{ formatTime(h.created_at) }} · {{ h.model }}</div>
           </div>
@@ -31,8 +32,8 @@
             <div v-for="(m, i) in messages" :key="i" :class="['msg', m.role]">
               <div class="msg-label">{{ m.role === 'user' ? '我' : 'AI' }}</div>
               <div class="msg-content">
-                <div v-if="m.streaming" class="streaming" v-html="sanitizeHtml(m.content)" />
-                <div v-else>{{ m.content }}</div>
+                <div v-if="m.streaming" class="streaming">{{ m.content }}</div>
+                <div v-else v-html="sanitizeHtml(m.content)"></div>
                 <div v-if="m.sources?.length" class="sources">
                   <el-tag v-for="(s, j) in m.sources" :key="j" size="small" type="info"
                     :effect="activeSourceIndex === i && activeSourceIdx === j ? 'dark' : 'plain'"
@@ -51,6 +52,7 @@
               placeholder="输入你的问题，Enter 发送（Shift+Enter 换行）"
               @keydown.enter.exact.prevent="send"
             />
+            <el-button v-if="sending" @click="stopStream" style="margin-left: 8px">停止生成</el-button>
             <el-button type="primary" :loading="sending" @click="send" style="margin-left: 8px">
               {{ sending ? '生成中' : '发送' }}
             </el-button>
@@ -87,7 +89,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { listBooks, chatStream, chatHistory, getChat, getChunkOriginal, getBook, bookFileUrl } from '../api'
@@ -108,6 +110,8 @@ const historyPage = ref(1)
 const historyTotal = ref(0)
 const historyLoading = ref(false)
 const msgBox = ref(null)
+// 当前流式请求的取消控制器；停止生成 / 卸载页面时 abort
+const streamAbort = ref(null)
 
 // 右侧原文面板状态
 const source = ref({})
@@ -196,6 +200,8 @@ const send = async () => {
   question.value = ''
   sending.value = true
   scrollBottom()
+  const controller = new AbortController()
+  streamAbort.value = controller
   try {
     await chatStream({ book_id: bookId.value || null, question: q }, (event, data) => {
       if (event === 'token') {
@@ -217,13 +223,23 @@ const send = async () => {
         aiMsg.value.content = '⚠️ ' + data.message
         aiMsg.value.streaming = false
       }
-    })
+    }, { signal: controller.signal })
   } catch (e) {
-    aiMsg.value.content = '⚠️ 请求失败：' + e.message
-    aiMsg.value.streaming = false
+    if (controller.signal.aborted) {
+      // 用户主动停止：保留已生成内容，仅结束流式态
+      aiMsg.value.streaming = false
+    } else {
+      aiMsg.value.content = '⚠️ 请求失败：' + e.message
+      aiMsg.value.streaming = false
+    }
   } finally {
     sending.value = false
+    streamAbort.value = null
   }
+}
+
+const stopStream = () => {
+  streamAbort.value?.abort()
 }
 
 const loadHistory = async (page = 1, append = false) => {
@@ -271,6 +287,8 @@ onMounted(async () => {
   } catch { /* ignore */ }
   loadHistory()
 })
+
+onBeforeUnmount(() => { streamAbort.value?.abort() })
 </script>
 
 <style scoped>
@@ -301,6 +319,7 @@ onMounted(async () => {
 .history-title { font-weight: 600; margin-bottom: 8px; color: var(--el-text-color-primary); }
 .history-item { padding: 8px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; }
 .history-item:hover { background: var(--el-fill-color-lighter); }
+.history-item:focus-visible { outline: 2px solid var(--study-ink-soft, #B98A58); outline-offset: 1px; }
 .history-q { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-time { font-size: 11px; color: var(--el-text-color-placeholder); }
 .history-more{width:100%;min-height:36px}

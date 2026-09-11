@@ -63,6 +63,7 @@
 
       <div ref="scroller" class="pr-body" :class="'pr-mode-' + mode"
         @scroll="onScroll" @mouseup="onMouseUp" @mousedown="onMouseDown" @wheel="onWheel">
+        <div v-if="mode === 'scroll'" class="pr-spacer" :style="{ height: windowSpacers.top + 'px' }" />
         <div v-for="p in renderPageList" :key="p" class="pr-page" :data-page="p"
           :style="{ width: pageWidthPx(p) + 'px', height: pageH(p) + 'px' }">
           <canvas :ref="(el) => setCanvasRef(p, el)" class="pr-canvas" />
@@ -77,6 +78,7 @@
             :class="'pr-hl-' + st.markType"
             :style="st.style" :title="st.ann.text || ''" />
         </div>
+        <div v-if="mode === 'scroll'" class="pr-spacer" :style="{ height: windowSpacers.bottom + 'px' }" />
         <div v-if="loading" class="pr-loading" v-loading="true" element-loading-text="正在渲染原文…" />
         <div v-if="errorMsg" class="pr-error">⚠️ {{ errorMsg }}</div>
       </div>
@@ -199,7 +201,17 @@ const syncTocViewport = (event) => {
   if (event.matches && !tocPanelTouched.value) showTocPanel.value = false
 }
 
-// 非连续模式只保留当前页/跨页 DOM，避免数百页空 canvas 常驻内存。
+// 连续模式只渲染可视窗口附近的页，其余用占位 spacer 撑出滚动高度（见 windowSpacers）。
+const windowRange = ref({ start: 1, end: 1 })
+const windowSpacers = computed(() => {
+  if (mode.value !== 'scroll' || !numPages.value) return { top: 0, bottom: 0 }
+  const { start, end } = windowRange.value
+  let top = 0
+  for (let i = 1; i < start; i++) top += pageH(i) + PAGE_GAP
+  let bottom = 0
+  for (let i = end + 1; i <= numPages.value; i++) bottom += pageH(i) + PAGE_GAP
+  return { top, bottom }
+})
 const renderPageList = computed(() => {
   if (!numPages.value) return []
   if (mode.value === 'double') {
@@ -209,7 +221,10 @@ const renderPageList = computed(() => {
     return list
   }
   if (mode.value === 'single') return [page.value]
-  return pageList.value
+  const { start, end } = windowRange.value
+  const list = []
+  for (let p = start; p <= end; p++) list.push(p)
+  return list
 })
 const mode = ref('scroll')
 const baseHeights = {}   // scale=1 时的页高缓存（缩放不重算）
@@ -307,7 +322,10 @@ const loadPdf = async () => {
   if (!props.src) return
   loading.value = true
   errorMsg.value = ''
-  if (pdfDoc) { try { pdfDoc.destroy() } catch {} pdfDoc = null }
+  if (pdfDoc) {
+    for (const p of Object.keys(rendered.value)) cleanupPageProxy(Number(p))
+    try { pdfDoc.destroy() } catch {} pdfDoc = null
+  }
   try {
     loadingTask = pdfjsLib.getDocument({
       url: props.src, disableAutoFetch: true,
@@ -414,12 +432,15 @@ const visibleRange = () => {
 const renderVisible = async () => {
   if (!numPages.value) return
   const r = visibleRange()
+  windowRange.value = r
   const want = new Set()
   for (let p = r.start; p <= r.end; p++) want.add(p)
   wantedPages = want
   for (const p of Object.keys(rendered.value)) {
     if (!want.has(Number(p))) clearPage(Number(p))
   }
+  // 窗口变更后等 DOM 补上新增页的 canvas，再渲染，否则 canvasRef 尚未挂载会直接返回。
+  await nextTick()
   const generation = renderGeneration
   // 单队列逐页渲染，避免复杂扫描页同时占用数个 20–30MB canvas 并卡死主线程。
   const prioritized = [...want].sort((a, b) => Math.abs(a - page.value) - Math.abs(b - page.value))
@@ -465,7 +486,7 @@ const renderPage = async (p, generation = renderGeneration) => {
     await withTimeout(task.promise, 20000, `第 ${p} 页渲染超时`, () => task.cancel())
     if (generation !== renderGeneration || pageRenderTokens[p] !== token) return
     delete renderTasks[p]
-    rendered.value[p] = true
+    rendered.value[p] = { pageProxy: pdfPage }
     delete pageErrors.value[p]
     pageRendering.value[p] = false
     // 页面图像优先呈现；文字层与按需 OCR 在后台补齐，不再阻塞首屏或下一页。
@@ -547,7 +568,16 @@ const ensureCurrentOcrLayer = () => {
   }
 }
 
-const clearPage = (p) => {
+// 释放已渲染页的 PDFPageProxy（operatorList 与字体），避免离开可视区后长期占用内存。
+const cleanupPageProxy = (p) => {
+  const proxy = rendered.value[p]?.pageProxy
+  if (proxy && typeof proxy.cleanup === 'function') {
+    try { proxy.cleanup() } catch {}
+  }
+}
+
+const clearPage = (p, opts = {}) => {
+  const doCleanup = opts.cleanup !== false
   if (renderTasks[p]) { try { renderTasks[p].cancel() } catch {} delete renderTasks[p] }
   pendingRenders.delete(p)
   delete pageRenderTokens[p]
@@ -557,6 +587,7 @@ const clearPage = (p) => {
   const tl = textRefs[p]
   if (tl) tl.innerHTML = ''
   delete ocrStates.value[p]
+  if (doCleanup) cleanupPageProxy(p)
   delete rendered.value[p]
 }
 
@@ -645,7 +676,8 @@ const applyScale = (nextScale) => {
   const anchor = (scroller.value.scrollTop + scroller.value.clientHeight / 2) / oldScale
   scale.value = Math.min(2.5, Math.max(0.5, Math.round(nextScale * 100) / 100))
   renderGeneration++
-  for (const p of Object.keys(rendered.value)) clearPage(Number(p))
+  // 缩放仅重置画布尺寸，保留 pageProxy 缓存以免重新解析整页。
+  for (const p of Object.keys(rendered.value)) clearPage(Number(p), { cleanup: false })
   for (const task of Object.values(renderTasks)) { try { task.cancel() } catch {} }
   renderTasks = {}
   clearTimeout(zoomTimer)
@@ -677,6 +709,16 @@ const fitPage = () => {
   applyScale(Math.max(0.5, Math.min(2, Math.min(w / bw, h / bh))))
 }
 
+// 父组件未用 :key 强制重建时（ChatView 引用面板 / OriginalViewer / DocReader），
+// src 变化必须重建文档，否则阅读器会停留在上一本。
+watch(() => props.src, (next, prev) => { if (next && next !== prev) loadPdf() })
+
+// 同一文档内换目标页（如同一本书的另一条引用）：只跳页，不拖着重载整本文档。
+watch(() => props.initialPage, (next, prev) => {
+  if (props.useSavedPos || !pdfDoc || !next || next === prev) return
+  scrollToPage(next, false)
+})
+
 watch(mode, (nv) => {
   if (nv === 'double' && scroller.value) {
     const w = scroller.value.clientWidth - 40
@@ -697,30 +739,36 @@ let saveTimer = null
 const savePosDebounced = () => { clearTimeout(saveTimer); saveTimer = setTimeout(savePos, 800) }
 
 // ===== 标注 =====
-const hlStyles = (p) => {
-  const out = []
+// annotations 变化时一次性建成 Map<page, styles[]>，让 hlStyles(p) 退化为 O(1) 查表，
+// 避免每页遍历全量标注并重复 JSON.parse（原 annotationSegments 内部 parse）。
+const hlIndex = computed(() => {
+  const m = new Map()
   for (const a of annotations.value) {
-    const segment = annotationSegments(a).find(s => Number(s.page) === Number(p))
-    if (!segment) continue
-    const rects = segment.rects || []
-    for (const r of rects) {
-      if (![r.x, r.y, r.w, r.h].every(Number.isFinite) || r.w <= 0 || r.h <= 0) continue
-      out.push({
-        id: a.id,
-        ann: a,
-        markType: a.mark_type || 'highlight',
-        style: {
-          left: (r.x * 100) + '%',
-          top: (((a.mark_type || 'highlight') === 'underline' ? r.y + r.h : r.y) * 100) + '%',
-          width: (r.w * 100) + '%',
-          height: (r.h * 100) + '%',
-          '--mark-color': a.color || COLORS[0],
-        },
-      })
+    const segments = annotationSegments(a)
+    for (const seg of segments) {
+      const pg = Number(seg.page)
+      if (!Number.isFinite(pg)) continue
+      for (const r of (seg.rects || [])) {
+        if (![r.x, r.y, r.w, r.h].every(Number.isFinite) || r.w <= 0 || r.h <= 0) continue
+        const arr = m.get(pg) || []
+        arr.push({
+          id: a.id,
+          ann: a,
+          markType: a.mark_type || 'highlight',
+          style: {
+            left: (r.x * 100) + '%',
+            top: (((a.mark_type || 'highlight') === 'underline' ? r.y + r.h : r.y) * 100) + '%',
+            width: (r.w * 100) + '%',
+            height: (r.h * 100) + '%',
+            '--mark-color': a.color || COLORS[0],
+          },
+        })
+      }
     }
   }
-  return out
-}
+  return m
+})
+const hlStyles = (p) => hlIndex.value.get(Number(p)) || []
 
 const loadAnnotations = async () => {
   if (!props.bookId) return
@@ -931,7 +979,8 @@ const exportAnns = () => {
   a.href = url
   a.download = (bookTitle || 'reader') + '-标注.md'
   a.click()
-  URL.revokeObjectURL(url)
+  // 同步 revoke 会被部分浏览器判定为取消下载；延迟回收，交给浏览器先取走 blob。
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 // ===== AI 增强（可选）=====

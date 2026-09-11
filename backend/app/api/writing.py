@@ -9,16 +9,17 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.models import (Book, Chunk, EvidenceCard, KnowledgeNote, StudyReport,
                                 WritingDnaProfile, WritingDnaRevision, WritingOutput)
-from backend.app.services.writing_lab import (apply_docx_changes, apply_text_changes,
-    clean_blocks, content_fingerprint, create_word_output, distill_profile_task, docx_blocks,
-    generate_literature_review, imitate, output_path, text_blocks, validate_corpus)
+from backend.app.services.writing_lab import (ai_flavor_violations, apply_docx_changes,
+    apply_text_changes, clean_blocks, content_fingerprint, create_word_output,
+    distill_profile_task, docx_blocks, generate_literature_review, imitate, output_path,
+    text_blocks, validate_corpus)
 from backend.app.worker.tasks import submit
 
 router = APIRouter(prefix="/api/writing", tags=["writing"])
@@ -182,6 +183,20 @@ def _safe_writing_file(folder: str, filename: str | None) -> Path | None:
     return path if path.parent == base else None
 
 
+def _task_book_id(db: Session, candidates: list[int] | None = None) -> int:
+    """后台任务需要一个真实 book_id。
+
+    `import_tasks.book_id` 是到 `books.id` 的外键，而 SQLite 连接层开了
+    `PRAGMA foreign_keys=ON`（core/database.py:23），传 0 会让 `_persist`
+    静默失败（tasks.py:89 吞异常），任务就只剩进程内存、重启后无法恢复。
+    因此先按给定候选找有效的书，找不到再退回书库里最小的 book id。
+    """
+    for book_id in (candidates or []):
+        if book_id and db.get(Book, book_id):
+            return book_id
+    return db.scalar(select(func.min(Book.id))) or 0
+
+
 def _replace_word_output(row: WritingOutput, text: str) -> None:
     destination = _safe_writing_file("outputs", row.output_file_path)
     if destination is None:
@@ -280,16 +295,35 @@ def refine_profile(profile_id: int, req: ProfileRefineReq, db: Session = Depends
             "next_version": row.current_version + 1, "pruned_book_ids": pruned}
 
 
-@router.post("/profiles/{profile_id}/imitate")
-async def imitate_with_profile(profile_id: int, req: ImitateReq, db: Session = Depends(get_db)):
+async def _imitate_task(record, payload: dict) -> dict:
+    from backend.app.core.database import SessionLocal
+    from backend.app.worker.tasks import update_progress
+
+    db = SessionLocal()
     try:
-        row = await imitate(db, profile_id, req.topic, req.genre, req.length, req.brief,
-                            req.knowledge_note_ids, req.evidence_card_ids, req.report_ids)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    path = output_path(); create_word_output(row.title, row.output_text, path)
-    row.output_file_path = path.name; db.commit(); db.refresh(row)
-    return _output(row)
+        update_progress(record, 0.06, "evidence", "正在整理已选知识对象与语料校准样本...")
+        update_progress(record, 0.25, "writing", "正在按 Writing DNA 撰写初稿（长文可能需要几分钟）...")
+        row = await imitate(db, payload["profile_id"], payload["topic"], payload["genre"],
+                            payload["length"], payload["brief"], payload["knowledge_note_ids"],
+                            payload["evidence_card_ids"], payload["report_ids"])
+        update_progress(record, 0.9, "document", "正在生成可编辑 Word 与引用审计...")
+        path = output_path(); create_word_output(row.title, row.output_text, path)
+        row.output_file_path = path.name; db.commit(); db.refresh(row)
+        update_progress(record, 1.0, "done", "独立新作已生成")
+        return {"output_id": row.id}
+    finally:
+        db.close()
+
+
+@router.post("/profiles/{profile_id}/imitate", status_code=202)
+def imitate_with_profile(profile_id: int, req: ImitateReq, db: Session = Depends(get_db)):
+    profile = db.get(WritingDnaProfile, profile_id)
+    if not profile:
+        raise HTTPException(404, "Writing DNA 项目不存在")
+    payload = {"profile_id": profile_id, **req.model_dump()}
+    task = submit("imitate", lambda record: _imitate_task(record, payload),
+                  book_id=_task_book_id(db, _loads(profile.book_ids_json, [])))
+    return {"task_id": task.id}
 
 
 async def _literature_review_task(record, payload: dict) -> dict:
@@ -322,19 +356,35 @@ def literature_review(req: LiteratureReviewReq):
     return {"task_id": task.id}
 
 
-@router.post("/clean-text")
-async def clean_text(req: CleanTextReq, db: Session = Depends(get_db)):
+async def _clean_text_task(record, payload: dict) -> dict:
+    from backend.app.core.database import SessionLocal
+    from backend.app.worker.tasks import update_progress
+
+    db = SessionLocal()
     try:
-        changes, audit = await clean_blocks(db, text_blocks(req.text), req.profile_id)
-        cleaned = apply_text_changes(req.text, changes)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    row = WritingOutput(profile_id=req.profile_id, kind="ai_tone", title=req.title,
-                        input_type="text", source_text=req.text, output_text=cleaned,
-                        audit_json=json.dumps({**audit, "changes": changes}, ensure_ascii=False))
-    path = output_path(); create_word_output(req.title, cleaned, path); row.output_file_path = path.name
-    db.add(row); db.commit(); db.refresh(row)
-    return _output(row)
+        update_progress(record, 0.1, "analyze", "正在定位 13 类可改写痕迹...")
+        changes, audit = await clean_blocks(db, text_blocks(payload["text"]), payload.get("profile_id"))
+        update_progress(record, 0.8, "apply", "正在应用白名单改写并生成 Word...")
+        cleaned = apply_text_changes(payload["text"], changes)
+        audit["remaining_violations"] = ai_flavor_violations(cleaned)
+        row = WritingOutput(profile_id=payload.get("profile_id"), kind="ai_tone", title=payload["title"],
+                            input_type="text", source_text=payload["text"], output_text=cleaned,
+                            audit_json=json.dumps({**audit, "changes": changes}, ensure_ascii=False))
+        path = output_path(); create_word_output(payload["title"], cleaned, path)
+        row.output_file_path = path.name
+        db.add(row); db.commit(); db.refresh(row)
+        update_progress(record, 1.0, "done", "去 AI 味候选改写已生成")
+        return {"output_id": row.id}
+    finally:
+        db.close()
+
+
+@router.post("/clean-text", status_code=202)
+def clean_text(req: CleanTextReq, db: Session = Depends(get_db)):
+    payload = req.model_dump()
+    task = submit("clean-text", lambda record: _clean_text_task(record, payload),
+                  book_id=_task_book_id(db))
+    return {"task_id": task.id}
 
 
 async def _save_docx(file: UploadFile) -> Path:
@@ -356,35 +406,67 @@ async def _save_docx(file: UploadFile) -> Path:
     return path
 
 
-@router.post("/clean-docx")
-async def clean_docx(file: UploadFile = File(...), profile_id: int | None = Form(default=None),
-                     db: Session = Depends(get_db)):
-    source = await _save_docx(file)
+async def _clean_docx_task(record, payload: dict) -> dict:
+    from backend.app.core.database import SessionLocal
+    from backend.app.worker.tasks import update_progress
+
+    # 请求已提前返回 202，上传的原稿必须由任务自己负责生命周期。
+    # 成功时保留（review_output 要靠它回放改动以保住原格式），失败时清理。
+    source = Path(payload["source_path"])
+    db = SessionLocal()
     try:
+        update_progress(record, 0.1, "analyze", "正在解析 Word 段落与表格...")
         document, blocks, refs = docx_blocks(source)
         if not blocks:
-            raise HTTPException(422, "Word 文档没有可分析文字")
-        changes, audit = await clean_blocks(db, blocks, profile_id)
+            raise ValueError("Word 文档没有可分析文字")
+        update_progress(record, 0.3, "clean", "正在定位 13 类可改写痕迹...")
+        changes, audit = await clean_blocks(db, blocks, payload.get("profile_id"))
+        update_progress(record, 0.8, "apply", "正在应用改写并输出 Word...")
         applied = apply_docx_changes(document, refs, changes)
         destination = output_path(); document.save(destination)
         output_text = "\n\n".join(refs[block["id"]].text for block in blocks)
-        row = WritingOutput(profile_id=profile_id, kind="ai_tone", title=Path(file.filename or "稿件").stem,
+        audit["remaining_violations"] = ai_flavor_violations(output_text)
+        row = WritingOutput(profile_id=payload.get("profile_id"), kind="ai_tone", title=payload["title"],
                             input_type="docx", source_text=None, output_text=output_text,
                             source_file_path=source.name, output_file_path=destination.name,
                             audit_json=json.dumps({**audit, "changes": changes, "applied": applied,
                                                    "paragraph_blocks": len(blocks)}, ensure_ascii=False))
         db.add(row); db.commit(); db.refresh(row)
-        return _output(row)
+        update_progress(record, 1.0, "done", "Word 候选改写已生成")
+        return {"output_id": row.id}
     except Exception:
         if source.exists():
             source.unlink(missing_ok=True)
         raise
+    finally:
+        db.close()
+
+
+@router.post("/clean-docx", status_code=202)
+async def clean_docx(file: UploadFile = File(...), profile_id: int | None = Form(default=None),
+                     db: Session = Depends(get_db)):
+    source = await _save_docx(file)
+    payload = {"source_path": str(source), "title": Path(file.filename or "稿件").stem,
+               "profile_id": profile_id}
+    try:
+        task = submit("clean-docx", lambda record: _clean_docx_task(record, payload),
+                      book_id=_task_book_id(db))
+    except Exception:
+        source.unlink(missing_ok=True)
+        raise
+    return {"task_id": task.id}
 
 
 @router.get("/outputs")
-def list_outputs(page: int = 1, page_size: int = 20, exclude_official: bool = False, db: Session = Depends(get_db)):
+def list_outputs(page: int = 1, page_size: int = 20, exclude_official: bool = False,
+                 kind: str | None = None, db: Session = Depends(get_db)):
     safe_page = max(1, page); safe_size = min(max(page_size, 1), 100)
-    condition = WritingOutput.kind != "official_document" if exclude_official else True
+    conditions = []
+    if exclude_official:
+        conditions.append(WritingOutput.kind != "official_document")
+    if kind:
+        conditions.append(WritingOutput.kind == kind)
+    condition = and_(*conditions) if conditions else True
     total = db.scalar(select(func.count()).select_from(WritingOutput).where(condition)) or 0
     rows = db.scalars(select(WritingOutput).where(condition).order_by(WritingOutput.created_at.desc())
                       .offset((safe_page - 1) * safe_size).limit(safe_size)).all()

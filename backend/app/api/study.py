@@ -13,13 +13,15 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
 from backend.app.models import Book, Chapter, Chunk, EvidenceCard, KnowledgeNote, StudyReport
+from backend.app.services.chat_sessions import delete_session, load_session, save_session
 from backend.app.services.llm import LLMRouter, load_llm_config
 
 router = APIRouter(prefix="/api/study", tags=["study"])
 
 
-# ---------- 会话（内存态，单用户）----------
-_sessions: dict[str, dict] = {}
+# ---------- 会话（落库持久化，单用户）----------
+# 多轮训练状态存在 chat_sessions 表（services/chat_sessions.py）；此前放在模块级 dict，
+# 重启即报 404，用户会丢掉整段多轮历史。
 
 
 def _book_context(db: Session, book_ids: list[int] | None, limit_per_book: int = 4000) -> str:
@@ -45,6 +47,7 @@ class StudyOverviewReq(BaseModel):
     writing_style: Literal["analytical_essay", "structured_report"] = "analytical_essay"
     extension_level: Literal["grounded", "exploratory"] = "exploratory"
     target_length: int = Field(default=3000, ge=800, le=12000)
+    profile_id: int | None = None
 
 
 _MODE_GUIDANCE = {
@@ -53,6 +56,17 @@ _MODE_GUIDANCE = {
     "critical": "区分原始材料、作者解释与模型推断；检查证据强度、替代解释、反例、方法限制和因果外推。",
     "gap": "梳理已有共识与分歧，识别材料尚未回答的问题、证据缺口和可继续研究的方向，避免把未知包装成结论。",
 }
+
+
+# 端点静默看门狗：只用来发现「连接卡死」，不是性能预算，也不是首字预算。
+# 2026-09-11 实测当前活动模型（DashScope 兼容模式 qwen3.8-max-0902）原始 SSE：
+#   首帧 reasoning_content 2.2s 到达 → 流式思考到 133.5s → 首帧正文才出现，
+#   单次 306s 输出 12855 字正文（另有 7355 字 reasoning 被丢弃）。
+# 即「正文首字」与端点是否活着完全无关：思考型模型会先长时间只吐 reasoning 增量。
+# 因此存活判据只能用 provider.last_delta_at（任何一帧，含思考帧），
+# 绝不能用「answer 是否增长」——那正是长报告反复报「连续120秒未返回内容」的根因。
+# 上界受外层 asyncio.timeout(900) 约束：3 次尝试 × 240s + 退避 6s = 726s < 900s。
+FIRST_TOKEN_TIMEOUT = 240
 
 
 async def _stream_answer(provider, messages: list[dict], error_prefix: str, on_progress=None, on_text=None) -> str:
@@ -79,8 +93,15 @@ async def _stream_answer(provider, messages: list[dict], error_prefix: str, on_p
                                     break
                                 if on_progress:
                                     on_progress(len(answer))
-                                if time.monotonic() - started >= 120:
-                                    raise TimeoutError('模型连续120秒未返回内容')
+                                if time.monotonic() - started >= FIRST_TOKEN_TIMEOUT:
+                                    # 端点还在推帧（思考增量也算）就只是「模型在思考」，重置窗口继续等；
+                                    # 完全没有帧才算连接卡死。
+                                    alive_at = getattr(provider, 'last_delta_at', 0.0)
+                                    if time.monotonic() - alive_at < FIRST_TOKEN_TIMEOUT:
+                                        started = alive_at
+                                    else:
+                                        raise TimeoutError(
+                                            f'模型连续{FIRST_TOKEN_TIMEOUT}秒无任何响应（既无正文也无思考增量）')
                             delta = pending.result()
                         except StopAsyncIteration:
                             break
@@ -117,6 +138,17 @@ async def _stream_answer(provider, messages: list[dict], error_prefix: str, on_p
             last_err = str(exc)
         await asyncio.sleep(2 * (attempt + 1))
     raise RuntimeError(f"{error_prefix}：{last_err}")
+
+
+def _writing_stage(provider, label: str, received: int) -> str:
+    """思考型模型产出正文前会长时间只吐推理增量，给用户一个「端点还活着」的可见信号。
+
+    否则界面会长时间停在「已接收 0 字」，用户无法区分「正在深度推理」与「已经卡死」。
+    """
+    if received:
+        return label
+    thinking = getattr(provider, "reasoning_chars", 0)
+    return f"{label}：模型正在推理（已思考 {thinking} 字）" if thinking else label
 
 
 def _normalize_plan(value, mode: str) -> dict:
@@ -261,12 +293,16 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                        chapter_ids: list[int] | None = None, note_ids: list[int] | None = None,
                        research_mode: str = "adaptive", reasoning_depth: str = "deep",
                        writing_style: str = "analytical_essay", extension_level: str = "exploratory",
-                       target_length: int = 3000) -> dict:
+                       target_length: int = 3000, profile_id: int | None = None) -> dict:
     from backend.app.core.database import SessionLocal
     from backend.app.worker.tasks import update_progress
 
     db = SessionLocal()
     try:
+        # Writing DNA（可选）：只校准表达与结构习惯，不作为事实来源
+        from backend.app.services.writing_lab import (AI_TONE_OUTPUT_BANS, ai_flavor_violations,
+                                                      dna_style_context)
+        dna_context, dna_version = dna_style_context(db, profile_id) if profile_id else ("", None)
         update_progress(record, 0.15, "overview", "正在汇总文献内容...")
         scope = set(book_ids)
         requested_chapters = list(chapter_ids or [])
@@ -393,7 +429,7 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                     record,
                     min(0.45, 0.32 + 0.13 * min(chars / 1800, 1)),
                     "research-plan",
-                    f"正在形成研究路径（已接收 {chars} 字）...",
+                    _writing_stage(provider, f"正在形成研究路径（已接收 {chars} 字）", chars) + "...",
                 ),
             )
             plan = _normalize_plan(parse_json_response(raw_plan), research_mode)
@@ -474,6 +510,8 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                 f"写作形态：{'连贯分析文章' if writing_style == 'analytical_essay' else '结构化研究报告'}；"
                 f"推演自由度：{'允许有标识的探索性延伸' if extension_level == 'exploratory' else '以直接证据解释为主'}；"
                 f"目标长度：约 {target_length} 字。\n"
+                + (f"【Writing DNA：只约束表达与结构习惯，不得作为事实来源】\n{dna_context}\n" if dna_context else "")
+                + AI_TONE_OUTPUT_BANS + "\n\n"
                 f"可引用材料：\n{evidence_context[:48000]}"
             )},
         ]
@@ -482,6 +520,10 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
             update_progress(record, record.progress, 'synthesis',
                             f'正在写作，已保存 {len(text)} 字草稿', force=True)
 
+        # 长短报告的分界保持 4500：这里区分的是「成文方式」（单次综合 vs 分段成文），
+        # 与首字延迟无关——实测首字延迟只跟模型/端点有关，跟提示词长度无关（见 FIRST_TOKEN_TIMEOUT）。
+        # 长报告分段的目的是避免把整篇正文塞进一个受输出上限约束的大 JSON，
+        # 并让每段都能独立保存草稿；失败重试也因此是逐段的。
         if long_reading or target_length > 4500:
             # Long prose is not wrapped in one fragile, output-limit-sized JSON.
             # Write bounded sections and retain every completed section on disk.
@@ -503,7 +545,7 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                 piece = await _stream_answer(provider, section_prompt, '分段成文失败',
                     on_progress=lambda chars: update_progress(record,
                         .70 + .24 * (index + min(chars / max(target_length // count, 1), .95)) / count,
-                        'synthesis', f'正在写作第 {index + 1}/{count} 段'),
+                        'synthesis', _writing_stage(provider, f'正在写作第 {index + 1}/{count} 段', chars)),
                     on_text=lambda text: save_draft(preceding + '\n\n' + text))
                 pieces.append(piece)
             report_text = '\n\n'.join(pieces)
@@ -514,9 +556,16 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                      '{"claims":[{"claim":"主张","source_refs":["材料中的原始锚点"],'
                      '"status":"supported|partial|needs_review|unsupported",'
                      '"synthesis_relation":"consensus|complementary|conflict|single_source|unresolved",'
-                     '"reason":"判断理由","counterpoint":"反例或限制"}],"open_questions":[]}。'
-                     '最多12项，不补造来源，不把模型的分批笔记当直接引语。'},
-                    {'role': 'user', 'content': f'文章：\n{report_text}\n证据笔记：\n{evidence_context}'},
+                     '"reason":"判断理由","counterpoint":"反例或限制"}],"open_questions":[],'
+                     '"hypotheses":[{"statement":"候选假设",'
+                     '"claim_type":"descriptive|associational|predictive|causal|mechanistic",'
+                     '"source_refs":["材料中的原始锚点"],"rival_explanations":["竞争性解释"],'
+                     '"falsifier":"什么结果会挑战它","boundary_conditions":"适用边界"}]}。'
+                     'claims 最多12项，不补造来源，不把模型的分批笔记当直接引语。'
+                     'hypotheses 始终只是 candidate；仅在 gap 模式或材料确有冲突/空白时给出，最多6项，'
+                     '每项必须带竞争性解释与可证伪条件，否则返回空数组。'},
+                    {'role': 'user', 'content': f'研读方式：{research_mode}\n'
+                     f'文章：\n{report_text}\n证据笔记：\n{evidence_context}'},
                 ], '主张审计失败', on_progress=lambda _: update_progress(
                     record, .95, 'synthesis', '正文已保存，正在核对来源与主张'))
                 from backend.app.services.llm import parse_json_response
@@ -537,7 +586,7 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                     record,
                     min(0.94, 0.7 + 0.24 * min(chars / max(target_length * 1.35, 1600), 1)),
                     "synthesis",
-                    f"AI 正在组织论证与写作（已接收 {chars} 字）...",
+                    _writing_stage(provider, f"AI 正在组织论证与写作（已接收 {chars} 字）", chars) + "...",
                 ),
             )
 
@@ -562,6 +611,7 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
         report_content, citation_notes = readable_citations(
             report_content, valid_anchors=allowed_refs, labels=citation_labels,
         )
+        tone_violations = ai_flavor_violations(report_content)
         # 持久化报告及其选择范围/核验主张，不复制原文附件。
         from backend.app.models import StudyReport
         report = StudyReport(
@@ -571,6 +621,8 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                 "research_mode": research_mode, "reasoning_depth": reasoning_depth,
                 "writing_style": writing_style, "extension_level": extension_level,
                 "target_length": target_length,
+                "dna_profile_id": profile_id, "dna_version": dna_version,
+                "ai_tone_violations": tone_violations,
                 "reading_coverage": coverage,
                 "citation_notes": citation_notes,
                 "research_plan": plan, "open_questions": open_questions,
@@ -599,10 +651,15 @@ def study_overview(req: StudyOverviewReq, db: Session = Depends(get_db)):
         raise HTTPException(422, "请至少选择一本研读文献")
     if not req.focus.strip():
         raise HTTPException(422, "请先写明研究问题")
+    if req.profile_id is not None:
+        from backend.app.models import WritingDnaProfile
+        dna_profile = db.get(WritingDnaProfile, req.profile_id)
+        if not dna_profile or dna_profile.status != "ready":
+            raise HTTPException(400, "所选 Writing DNA 尚未就绪")
     record = submit("study-overview", lambda rec: run_overview(
         rec, req.book_ids, req.focus, req.framework, req.chapter_ids, req.note_ids,
         req.research_mode, req.reasoning_depth, req.writing_style, req.extension_level,
-        req.target_length,
+        req.target_length, req.profile_id,
     ), book_id=req.book_ids[0])
     return {"task_id": record.id}
 
@@ -805,15 +862,14 @@ async def train_start(req: TrainStartReq, db: Session = Depends(get_db)):
     if not context:
         raise HTTPException(400, "没有可用的文献")
     sid = uuid.uuid4().hex[:12]
-    # 防御：会话内存上限，避免无限轮/反复开新会话累积内存（低内存底线）
-    while len(_sessions) >= 100:
-        _sessions.pop(next(iter(_sessions)), None)
-    _sessions[sid] = {
+    sess = {
         "mode": req.mode, "topic": req.topic, "book_ids": req.book_ids or [],
         "context": context, "history": [], "round": 0, "done": False,
     }
     provider = LLMRouter.get("auto", cfg)
-    first = await _gen_turn(provider, _sessions[sid], None)
+    first = await _gen_turn(provider, sess, None)
+    # 开场轮结束后落库：重启后 train_ask 仍能续上，不再报 404。
+    save_session(db, sid, "train", sess, sess["book_ids"])
     return {"session_id": sid, "message": first, "round": 0, "done": False}
 
 
@@ -826,12 +882,13 @@ class TrainAskReq(BaseModel):
 async def train_ask(req: TrainAskReq, db: Session = Depends(get_db)):
     cfg = load_llm_config(db, "research")
     provider = LLMRouter.get("auto", cfg)
-    sess = _sessions.get(req.session_id)
+    sess = load_session(db, req.session_id, "train")
     if not sess:
-        raise HTTPException(404, "会话不存在或已过期（重启后端后会话丢失）")
-    if sess["done"]:
+        raise HTTPException(404, "会话不存在或已过期（超过 7 天未继续的会话会被清理）")
+    if sess.get("done"):
         raise HTTPException(400, "训练已结束，请开启新会话")
     msg = await _gen_turn(provider, sess, req.answer)
+    save_session(db, req.session_id, "train", sess, sess.get("book_ids") or [])
     return {"session_id": req.session_id, "message": msg, "round": sess["round"], "done": sess["done"]}
 
 
@@ -840,9 +897,9 @@ class TrainEndReq(BaseModel):
 
 
 @router.post("/train/end", status_code=204)
-def train_end(req: TrainEndReq):
-    """结束训练并释放会话内存。"""
-    _sessions.pop(req.session_id, None)
+def train_end(req: TrainEndReq, db: Session = Depends(get_db)):
+    """结束训练并删除会话记录。"""
+    delete_session(db, req.session_id, "train")
 
 
 async def _gen_turn(provider, sess: dict, user_answer: str | None):

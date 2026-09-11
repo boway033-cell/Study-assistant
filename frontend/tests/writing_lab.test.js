@@ -27,9 +27,27 @@ test('writing is a discoverable first-class workspace with versioned DNA and DOC
   assert.match(router, /path: '\/writing'/)
   assert.match(workbench, /router\.push\('\/writing'\)/)
   assert.match(drawer, /持续完善/)
-  assert.match(drawer, /独立仿写与输出/)
+  assert.match(drawer, /独立仿写/)
   assert.match(drawer, /导入 Word 并输出 Word/)
   assert.match(drawer, /规则 \{\{/)
+})
+
+test('writing workspace keeps four orthogonal entries and one output archive', () => {
+  assert.match(drawer, /<el-tab-pane label="写作 DNA" name="dna">/)
+  assert.match(drawer, /<el-tab-pane label="写作生成" name="generate">/)
+  assert.match(drawer, /<el-tab-pane label="去 AI 味" name="clean">/)
+  assert.match(drawer, /<el-tab-pane label="写作输出" name="outputs">/)
+  assert.equal((drawer.match(/<el-tab-pane /g) || []).length, 4)
+  // 资产管理不再内嵌生成入口
+  assert.doesNotMatch(drawer, /imitate-panel/)
+  // 去 AI 味按完整 DNA（语言+逻辑+整合）判断，不再只提语言 DNA
+  assert.match(drawer, /以语言、逻辑与整合层判断机械痕迹/)
+  assert.doesNotMatch(drawer, /使用某个语言 DNA 判断原语体/)
+  // 生成端不再重复提供与独立标签重复的开关
+  assert.doesNotMatch(drawer, /去 AI 味生成约束/)
+  // 输出端可按类型筛选，且生成/清洗结果统一落到写作输出
+  assert.match(drawer, /kind:outputFilter\.value/)
+  assert.match(drawer, /openInOutputs/)
 })
 
 test('writing outputs support corpus correction, version comparison, editing, and human review', () => {
@@ -45,7 +63,6 @@ test('multi-document review is a first-class closed-corpus writing workflow', ()
   assert.match(drawer, /多文献综述/)
   assert.match(drawer, /至少选择 2 篇/)
   assert.match(drawer, /Writing DNA/)
-  assert.match(drawer, /去 AI 味生成约束/)
   assert.match(drawer, /不是系统综述/)
   assert.match(drawer, /createLiteratureReview/)
   assert.match(drawer, /v-model\.number="reviewForm\.length"/)

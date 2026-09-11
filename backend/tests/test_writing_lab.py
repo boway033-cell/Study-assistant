@@ -1,19 +1,28 @@
 """写作实验室的硬边界、信息守恒与 Word 格式测试。"""
+import asyncio
+import inspect
 import json
+import re
 from pathlib import Path
 
 import docx
 import pytest
 from sqlalchemy import select
 
-from backend.app.api.writing import OutputReviewReq, OutputUpdateReq, review_output, update_output
+from ai_tone_cases import DETECTOR_CASES, RULE_CASES
+from backend.app.api.writing import (OutputReviewReq, OutputUpdateReq, list_outputs, review_output,
+                                     update_output)
 from backend.app.core.config import settings
 from backend.app.core.database import SessionLocal
 from backend.app.models import WritingOutput
+from backend.app.services import writing_lab
 from backend.app.services.writing_lab import (
+    AI_TONE_VIOLATION_PATTERNS,
     _replace_across_runs,
     _validate_replacement,
+    ai_flavor_violations,
     apply_text_changes,
+    clean_blocks,
     create_word_output,
     text_blocks,
     validate_corpus,
@@ -22,6 +31,21 @@ from backend.app.services.writing_lab import (
     build_literature_review_prompt,
 )
 from backend.app.services.writing_citations import readable_citations
+
+
+def test_writing_output_archive_is_single_entry_point_with_kind_filter():
+    """写作输出是唯一归档端：默认排除公文，且可按类型筛选。"""
+    db = SessionLocal()
+    try:
+        everything = list_outputs(1, 100, True, None, db)
+        assert all(row["kind"] != "official_document" for row in everything["items"])
+        assert set(row["kind"] for row in everything["items"]).issubset(
+            {"imitation", "literature_review", "ai_tone"})
+        tone_only = list_outputs(1, 100, True, "ai_tone", db)
+        assert all(row["kind"] == "ai_tone" for row in tone_only["items"])
+        assert tone_only["total"] <= everything["total"]
+    finally:
+        db.close()
 
 
 def test_writing_dna_rejects_fewer_than_twenty_articles():
@@ -327,3 +351,146 @@ def test_docx_review_replays_selected_changes_from_original_format():
         assert saved.paragraphs[0].runs[-1].italic is True
     finally:
         db.close()
+
+
+def test_ai_flavor_postposed_attr_detects_targeted_patterns():
+    """「禁止定语后置」必须命中 D9 四类真实句式与原有「，……的。」形态。"""
+    hits = ai_flavor_violations(
+        "治理的有效性，其根源在于制度设计。"
+        "责任分配的效率，其决定因素是考核方式。"
+        "这项工作的结果，关键在于执行力度。"
+        "该政策的成败，取决于基层配合。"
+        "结果，取决于执行的。"
+    )
+    assert hits.get("postposed_attr"), "应检测到定语后置违规"
+    snippets = " ".join(hits["postposed_attr"])
+    assert "其根源在于" in snippets, "未命中「X的Y，其根源在于Z」"
+    assert "其决定因素是" in snippets, "未命中「X的Y，其决定因素是Z」"
+    assert "关键在于" in snippets, "未命中「X的Y，关键在于Z」"
+    assert "取决于" in snippets, "未命中「X的Y，取决于Z」"
+    assert "取决于执行的" in snippets, "未保留原「，……的。」形态"
+
+
+def test_ai_flavor_postposed_attr_skips_judgment_sentences():
+    """「是……的」正常判断句不得被误报为定语后置。"""
+    for sentence in ("其结果是稳定的。", "数据是可靠的。", "治理改革的结果是稳定的。"):
+        violations = ai_flavor_violations(sentence)
+        assert not violations.get("postposed_attr"), f"不应误报判断句：{sentence}"
+
+
+# ---------------------------------------------------------------------------
+# AI 味禁令测试网：正例 / 反例的唯一真源在 ai_tone_cases.py，
+# 以下元测试保证「规则声明」与「用例」不会再各自漂移（D9 静默失效的根因）。
+# ---------------------------------------------------------------------------
+
+
+def _prompt_rule_ids() -> set[int]:
+    """从 AI_TONE_RULES 文本里解析出实际声明的规则编号。"""
+    return {int(value) for value in
+            re.findall(r"(?:^|[；\n])\s*(\d{1,2})\s(?=\S)", writing_lab.AI_TONE_RULES, re.M)}
+
+
+@pytest.mark.parametrize("detector", sorted(DETECTOR_CASES))
+def test_ai_flavor_detector_positive_and_negative(detector):
+    """四个检测器都必须做到：正例命中、反例不误报。"""
+    for text in DETECTOR_CASES[detector]["positive"]:
+        hits = ai_flavor_violations(text)
+        assert hits.get(detector), f"{detector} 应命中：{text}"
+    for text in DETECTOR_CASES[detector]["negative"]:
+        hits = ai_flavor_violations(text)
+        assert not hits.get(detector), f"{detector} 不应误报：{text}"
+
+
+def test_ai_flavor_detector_keys_stay_in_sync():
+    """fixture 的检测器 key 必须与代码里的检测器全集完全一致（双向）。"""
+    expected = set(AI_TONE_VIOLATION_PATTERNS) | {"postposed_attr", "repeated_example_pairs"}
+    assert set(DETECTOR_CASES) == expected, "fixture 与 ai_flavor_violations 的 key 集合不一致"
+
+
+def test_whitelist_rule_cases_cover_every_declared_rule():
+    """白名单声明的每个规则编号都必须有正反例，且不得出现多余编号。"""
+    assert _prompt_rule_ids() == set(RULE_CASES), "AI_TONE_RULES 的规则编号与用例不一致"
+    for rule_id, case in RULE_CASES.items():
+        # new 允许为空串（该规则就是「删去这个成分」），其余字段不得为空。
+        for field in ("text", "old", "negative"):
+            assert str(case.get(field) or "") != "", f"规则 {rule_id} 缺少 {field}"
+        assert case.get("new") is not None, f"规则 {rule_id} 缺少 new"
+        assert case["old"] in case["text"], f"规则 {rule_id} 的 old 不是 text 的精确子串"
+
+
+def test_clean_blocks_rule_bound_matches_declared_rules():
+    """clean_blocks 里硬编码的规则编号上界必须等于白名单实际条数。
+
+    上界写死在 `rule > 13` 的判定里：新增规则却忘了改这里，新规则会被整体静默丢弃。
+    """
+    bound = re.search(r"rule > (\d+)", inspect.getsource(clean_blocks))
+    assert bound, "未找到 clean_blocks 的规则编号上界判定"
+    assert int(bound.group(1)) == max(RULE_CASES), "规则编号上界与白名单条数不一致"
+
+
+class _StubProvider:
+    """把固定 JSON 当作模型输出，用来验证白名单改写的接线，不依赖真实 LLM。"""
+
+    def __init__(self, payload: dict):
+        self.payload = payload
+
+    async def stream_chat(self, messages):
+        yield json.dumps(self.payload, ensure_ascii=False)
+
+
+def _patch_stub_llm(monkeypatch, payload: dict) -> None:
+    monkeypatch.setattr(writing_lab, "load_llm_config", lambda *args, **kwargs: {})
+    monkeypatch.setattr(writing_lab.LLMRouter, "get", lambda *args, **kwargs: _StubProvider(payload))
+
+
+@pytest.mark.parametrize("rule_id", sorted(RULE_CASES))
+def test_clean_blocks_accepts_each_whitelist_rule(rule_id, monkeypatch):
+    """13 条白名单规则逐条打通：改动被接受、规则编号被回报。"""
+    case = RULE_CASES[rule_id]
+    _patch_stub_llm(monkeypatch, {"changes": [
+        {"id": "p0", "old": case["old"], "new": case["new"], "rule_ids": [rule_id]},
+    ]})
+    accepted, audit = asyncio.run(clean_blocks(None, [{"id": "p0", "text": case["text"]}], None))
+    assert accepted == [{"id": "p0", "old": case["old"], "new": case["new"], "rule_ids": [rule_id]}]
+    assert audit["rules"] == [rule_id]
+    assert audit["rejected"] == []
+
+
+def test_clean_blocks_rejects_out_of_range_rule_id(monkeypatch):
+    """白名单以外的规则编号必须被拒绝，不能悄悄通过。"""
+    _patch_stub_llm(monkeypatch, {"changes": [
+        {"id": "p0", "old": "说白了，", "new": "", "rule_ids": [99]},
+    ]})
+    accepted, audit = asyncio.run(
+        clean_blocks(None, [{"id": "p0", "text": "说白了，结论就是样本量不足。"}], None))
+    assert accepted == []
+    assert audit["rejected"], "越界规则编号应进入 rejected"
+
+
+def test_clean_blocks_rejects_change_that_loses_protected_information(monkeypatch):
+    """改写必须保持数字与限定词不变，否则拒绝（信息守恒闸门）。"""
+    _patch_stub_llm(monkeypatch, {"changes": [
+        {"id": "p0", "old": "团队把检索耗时从 120ms 降到 80ms", "new": "团队显著优化了检索性能", "rule_ids": [8]},
+    ]})
+    accepted, audit = asyncio.run(
+        clean_blocks(None, [{"id": "p0", "text": "团队把检索耗时从 120ms 降到 80ms。"}], None))
+    assert accepted == []
+    assert audit["rejected"], "丢失数字的改写应进入 rejected"
+
+
+@pytest.mark.parametrize("path", [
+    "/api/writing/literature-review",
+    "/api/writing/clean-text",
+    "/api/writing/clean-docx",
+    "/api/writing/profiles/{profile_id}/imitate",
+])
+def test_long_writing_endpoints_are_background_tasks(path):
+    """四个长任务端点必须都是 202 + task_id。
+
+    同步 → 202 是破坏性契约变更（前端必须同批发布）；这条断言用来防止
+    将来有人把某个端点改回同步，导致前端拿不到 task_id 而静默挂死。
+    """
+    from backend.app.api.writing import router
+    route = next((item for item in router.routes if getattr(item, "path", "") == path), None)
+    assert route is not None, f"未找到路由 {path}"
+    assert route.status_code == 202, f"{path} 应返回 202"

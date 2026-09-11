@@ -108,6 +108,11 @@ def resolve_model(model: str | None) -> str:
 
 class LLMProvider(ABC):
     name = "base"
+    # 端点最近一次推送（含思考增量）的时间戳。思考型模型会先流式吐 reasoning
+    # 增量、正文一个字都不出，此时连接其实是活的；调用方的首字看门狗必须靠
+    # 这个信号区分「模型在思考」与「连接卡死」，否则会在思考阶段误杀。
+    last_delta_at: float = 0.0
+    reasoning_chars: int = 0
 
     @abstractmethod
     async def stream_chat(self, messages: list[dict]) -> AsyncIterator[str]: ...
@@ -132,6 +137,8 @@ class OpenAIChatProvider(LLMProvider):
             raise RuntimeError(f"{self.display_name} 的 Base URL 或模型名未配置")
         if not self.api_key and not self.base_url.startswith(("http://localhost", "http://127.0.0.1")):
             raise RuntimeError(f"未配置 {self.display_name} API Key")
+        self.last_delta_at = time.monotonic()
+        self.reasoning_chars = 0
         async with httpx.AsyncClient(timeout=httpx.Timeout(300, connect=8)) as client:
             async with client.stream("POST", f"{self.base_url}/chat/completions",
                                      json={"model": self.model, "messages": messages, "stream": True},
@@ -145,10 +152,17 @@ class OpenAIChatProvider(LLMProvider):
                     raw = line[5:].strip()
                     if raw == "[DONE]":
                         break
+                    # 任何一帧（含思考增量）都算端点存活，与是否产出正文无关。
+                    self.last_delta_at = time.monotonic()
                     try:
-                        delta = json.loads(raw).get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        delta_obj = json.loads(raw).get("choices", [{}])[0].get("delta", {}) or {}
                     except (ValueError, TypeError, IndexError):
                         continue
+                    # 思考型模型（如通义 Qwen3 系）先吐 reasoning_content 再吐 content。
+                    # 只统计不落库：既给进度文案一个「还在思考」的可见信号，
+                    # 又不把隐性推理过程留进任何输出。
+                    self.reasoning_chars += len(str(delta_obj.get("reasoning_content") or ""))
+                    delta = delta_obj.get("content") or ""
                     if delta:
                         yield delta
 
@@ -158,11 +172,13 @@ class OpenAIChatProvider(LLMProvider):
         try:
             # 只测 GET /models 会漏掉「模型未开通 / 模型名写错」这类真实故障：
             # 出现过 /models 返回 200、设置页显示已连接，而 chat 请求一律 400 的情况。
-            # 这里直接发一次最小真实对话，收到首个增量即视为可用。
+            # 这里直接发一次最小真实对话，收到首个正文增量即视为可用。
+            # 注意：思考型模型的首帧是 reasoning_content，不能拿它当「已返回内容」。
             out = ""
             async for delta in self.stream_chat([{"role": "user", "content": "只回复两个字：正常"}]):
                 out += delta
-                break
+                if out.strip():
+                    break
             if out.strip():
                 return True, f"已连接（{self.display_name} · {self.model}）"
             return False, f"{self.display_name} 连接正常但未返回内容，请检查模型名"
@@ -201,6 +217,7 @@ class AnthropicMessagesProvider(LLMProvider):
                     raise RuntimeError(f"{self.display_name} 返回 {response.status_code}: {body}")
                 async for line in response.aiter_lines():
                     if line.startswith("data:"):
+                        self.last_delta_at = time.monotonic()
                         try:
                             text = json.loads(line[5:].strip()).get("delta", {}).get("text", "")
                         except (ValueError, TypeError):
@@ -245,6 +262,7 @@ class GoogleGenerateProvider(LLMProvider):
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
+                    self.last_delta_at = time.monotonic()
                     try:
                         parts = json.loads(line[5:].strip()).get("candidates", [{}])[0].get("content", {}).get("parts", [])
                     except (ValueError, TypeError, IndexError):
@@ -311,6 +329,15 @@ class RoutedProvider(LLMProvider):
         self.name = providers[0].name
         self.model = getattr(providers[0], "model", "")
         self.display_name = getattr(providers[0], "display_name", self.name)
+
+    @property
+    def last_delta_at(self) -> float:  # type: ignore[override]
+        """当前实际在跑的子通道的存活时间；思考增量也算存活。"""
+        return max((getattr(p, "last_delta_at", 0.0) for p in self.providers), default=0.0)
+
+    @property
+    def reasoning_chars(self) -> int:  # type: ignore[override]
+        return sum(getattr(p, "reasoning_chars", 0) for p in self.providers)
 
     async def stream_chat(self, messages: list[dict]) -> AsyncIterator[str]:
         input_chars = sum(len(str(message.get("content", ""))) for message in messages)

@@ -35,6 +35,48 @@ def test_scoped_note_inbox_and_tree_deletion_preserve_highlight():
         db.delete(book); db.commit(); db.close()
 
 
+def test_note_inbox_search_semantics_after_sql_pushdown():
+    """`/knowledge/notes` 的过滤下推到 SQL 后，检索行为必须与旧的全量 Python 子串过滤一致。
+
+    锁住三个易被误判的边界：跨字段带空格的搜索词、LIKE 通配符须按字面量处理、
+    非 note 类型不得进入收件箱。
+    """
+    from backend.app.api.knowledge import list_knowledge_notes
+    from backend.app.core.database import SessionLocal
+    from backend.app.models import Annotation, Book, KnowledgeNode
+
+    db = SessionLocal()
+    book = Book(title=f"pushdown-{uuid4().hex}", file_path="pushdown.pdf", file_type="pdf", status="ready")
+    db.add(book); db.commit(); db.refresh(book)
+    try:
+        db.add_all([
+            KnowledgeNode(node_type="note", title="研究方法", note="需要继续核对样本量", book_id=book.id),
+            KnowledgeNode(node_type="note", title="50% 覆盖率", note=None, book_id=book.id),
+            KnowledgeNode(node_type="section", title="研究方法", note="越界", book_id=book.id),
+            Annotation(book_id=book.id, page=3, rect_json="[]", text="原文证据", note="需要继续核对"),
+        ])
+        db.commit()
+
+        def titles(q):
+            return sorted(item["title"] for item in list_knowledge_notes([book.id], q, db)["items"])
+
+        # 关键词同时命中 note 与标注两种来源
+        assert list_knowledge_notes([book.id], "需要继续核对", db)["total"] == 2
+        # 跨字段带空格：拼接串语义（旧实现同样命中）
+        assert titles("研究方法 需要继续核对") == ["研究方法"]
+        # % 与 _ 必须按字面量处理，不得被当作 LIKE 通配符
+        assert titles("50%") == ["50% 覆盖率"]
+        assert titles("50%x") == []
+        # 非 note 类型不得进入收件箱
+        assert titles("研究方法") == ["研究方法"]
+        # 纯空白等价于无过滤
+        assert list_knowledge_notes([book.id], "  ", db)["total"] == list_knowledge_notes([book.id], None, db)["total"]
+    finally:
+        db.query(Annotation).filter(Annotation.book_id == book.id).delete(synchronize_session=False)
+        db.query(KnowledgeNode).filter(KnowledgeNode.book_id == book.id).delete(synchronize_session=False)
+        db.delete(book); db.commit(); db.close()
+
+
 def test_study_overview_rejects_implicit_all_scope():
     from backend.app.api.study import StudyOverviewReq, study_overview
     from backend.app.core.database import SessionLocal

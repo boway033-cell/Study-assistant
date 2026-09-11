@@ -62,21 +62,27 @@ def _parse_pdf(p: Path) -> ParseResult:
         p, prefer_pdftext=settings.pdf_text_backend.lower() == "pdftext"
     )
     doc = fitz.open(p)
-    result = ParseResult(
-        total_pages=doc.page_count,
-        pages=structured.page_texts(),
-        structured=structured,
-    )
+    try:
+        result = ParseResult(
+            total_pages=doc.page_count,
+            pages=structured.page_texts(),
+            structured=structured,
+        )
 
-    # 1. 书签目录
-    raw_toc = doc.get_toc(simple=True)  # [(level, title, page), ...]
-    for level, title, page in raw_toc:
-        title = title.strip()
-        if title:
-            result.toc.append(TocItem(title=title, level=level, page=page))
+        # 1. 书签目录
+        raw_toc = doc.get_toc(simple=True)  # [(level, title, page), ...]
+        for level, title, page in raw_toc:
+            title = title.strip()
+            if title:
+                result.toc.append(TocItem(title=title, level=level, page=page))
 
-    doc.close()
-    return result
+        return result
+    finally:
+        # 异常路径同样必须关闭：句柄泄漏会锁住 uploads 里的 PDF（Windows 下尤其明显）。
+        try:
+            doc.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ---------- DOCX ----------

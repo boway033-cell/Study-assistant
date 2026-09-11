@@ -3,21 +3,78 @@ import axios from 'axios'
 const http = axios.create({ baseURL: '/api', timeout: 60000 })
 const repeatedParams = { indexes: null }
 
-// 统一错误提示
+// 语义化超时档位：不同接口的合理等待时间差异极大（列表读 60s、AI 生成 6min、批量上传 10min），
+// 集中在此定义，新接口按语义取用，避免每处各写一个魔法数字。
+export const TIMEOUT = {
+  read: 60000,     // 常规读写（默认档，与 axios 实例一致）
+  write: 120000,   // 需要落库/落盘的单次写操作
+  ai: 360000,      // 单次 AI 生成（写作、去 AI 味、绘图）
+  longAi: 600000,  // 多阶段 AI 生成（多文献综述、Word 去 AI 味）
+  upload: 600000,  // 批量上传与解析入库
+}
+
+// 乐观重试：仅对幂等的读请求生效，且只重试一次。本地服务重启或短暂繁忙时
+// 少一次失败往返，对写请求一律不重试（避免重复提交）。
+const RETRYABLE_STATUS = new Set([429, 502, 503, 504])
+const SAFE_METHODS = new Set(['get', 'head'])
+
+const normalizeError = (err) => {
+  const detail = err.response?.data?.detail
+  const status = err.response?.status
+  let msg
+  if (Array.isArray(detail)) {
+    msg = detail.map(item => item?.msg || item?.message || String(item)).join('；')
+  } else if (detail && typeof detail === 'object') {
+    // 对象详情只取白名单字段，绝不整体 stringify 上屏
+    const picked = detail.msg || detail.message || (typeof detail.detail === 'string' ? detail.detail : undefined)
+    msg = picked || '请求失败，请稍后重试'
+  } else {
+    msg = detail || err.message || '请求失败，请稍后重试'
+  }
+  const error = new Error(msg)
+  // 无响应（断网/服务未启动）同样可重试；429/5xx 可重试。
+  error.retryable = !status || status >= 500 || status === 429
+  if (status) error.status = status
+  return error
+}
+
+// 统一错误提示 + 幂等读请求的单次重试
 http.interceptors.response.use(
   (res) => res.data,
-  (err) => {
-    const detail = err.response?.data?.detail
-    const msg = Array.isArray(detail)
-      ? detail.map(item => item?.msg || String(item)).join('；')
-      : typeof detail === 'object' && detail
-        ? detail.msg || JSON.stringify(detail)
-        : detail || err.message || '请求失败'
-    return Promise.reject(new Error(msg))
+  async (err) => {
+    const config = err.config || {}
+    const status = err.response?.status
+    const method = (config.method || 'get').toLowerCase()
+    const canRetry = config.retry !== false
+      && !config.__retried
+      && SAFE_METHODS.has(method)
+      && !config.signal?.aborted
+      && (!err.response || RETRYABLE_STATUS.has(status))
+    if (canRetry) {
+      config.__retried = true
+      await new Promise(resolve => setTimeout(resolve, 300))
+      if (!config.signal?.aborted) return http.request(config)
+    }
+    return Promise.reject(normalizeError(err))
   }
 )
 
 export default http
+
+// 通用请求适配层：不同形态的接口（普通读写 / AI 长任务 / 表单上传 / 重复参数）
+// 统一从这里取用，保证超时、参数序列化与错误规范化的行为一致。
+const repeated = { paramsSerializer: repeatedParams }
+export const api = {
+  get: (url, params, config = {}) => http.get(url, { params, ...repeated, ...config }),
+  post: (url, data, config = {}) => http.post(url, data, config),
+  put: (url, data, config = {}) => http.put(url, data, config),
+  patch: (url, data, config = {}) => http.patch(url, data, config),
+  del: (url, config = {}) => http.delete(url, config),
+  // AI 长任务：POST + 长超时（写作生成、去 AI 味、综述）
+  task: (url, data, timeout = TIMEOUT.ai) => http.post(url, data, { timeout }),
+  // 表单上传：multipart + 超长超时（批量导入、Word 处理）
+  upload: (url, form, timeout = TIMEOUT.upload) => http.post(url, form, { timeout }),
+}
 
 export const subscribeTask = (taskId, onUpdate, options = {}) => new Promise((resolve, reject) => {
   let source = null
@@ -87,12 +144,12 @@ export const getBook = (id) => http.get(`/books/${id}`)
 export const uploadBook = (file) => {
   const form = new FormData()
   form.append('file', file)
-  return http.post('/books/upload', form, { timeout: 120000 })
+  return http.post('/books/upload', form, { timeout: TIMEOUT.write })
 }
 export const uploadBookBatch = (files) => {
   const form = new FormData()
   for (const f of files) form.append('files', f)
-  return http.post('/books/upload-batch', form, { timeout: 600000 })
+  return http.post('/books/upload-batch', form, { timeout: TIMEOUT.upload })
 }
 export const deleteBook = (id) => http.delete(`/books/${id}`)
 export const reparseBook = (id) => http.post(`/books/${id}/reparse`)
@@ -121,13 +178,17 @@ export const updateArchiveProfile = (bookId, data) => http.patch(`/books/${bookI
 export const getSourceMap = (bookId) => http.get(`/books/${bookId}/source-map`)
 
 // ===== 问答 =====
-export const chatStream = async (body, onEvent) => {
+export const chatStream = async (body, onEvent, options = {}) => {
   const resp = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: options.signal,
   })
-  if (!resp.ok) throw new Error('请求失败')
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => null)
+    throw new Error(detail?.detail || '请求失败')
+  }
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -273,10 +334,10 @@ export const getWritingProfile = (id) => http.get(`/writing/profiles/${id}`)
 export const createWritingProfile = (data) => http.post('/writing/profiles', data)
 export const refineWritingProfile = (id, data) => http.post(`/writing/profiles/${id}/refine`, data)
 export const deleteWritingProfile = (id) => http.delete(`/writing/profiles/${id}`)
-export const imitateWriting = (id, data) => http.post(`/writing/profiles/${id}/imitate`, data, { timeout: 360000 })
-export const createLiteratureReview = (data) => http.post('/writing/literature-review', data, { timeout: 600000 })
-export const cleanAiToneText = (data) => http.post('/writing/clean-text', data, { timeout: 360000 })
-export const cleanAiToneDocx = (file, profileId) => { const form=new FormData(); form.append('file',file); if(profileId) form.append('profile_id',profileId); return http.post('/writing/clean-docx',form,{timeout:600000}) }
+export const imitateWriting = (id, data) => http.post(`/writing/profiles/${id}/imitate`, data, { timeout: TIMEOUT.ai })
+export const createLiteratureReview = (data) => http.post('/writing/literature-review', data, { timeout: TIMEOUT.longAi })
+export const cleanAiToneText = (data) => http.post('/writing/clean-text', data, { timeout: TIMEOUT.ai })
+export const cleanAiToneDocx = (file, profileId) => { const form=new FormData(); form.append('file',file); if(profileId) form.append('profile_id',profileId); return http.post('/writing/clean-docx',form,{timeout:TIMEOUT.longAi}) }
 export const listWritingOutputs = (params = {}) => http.get('/writing/outputs', { params })
 export const getWritingOutput = (id) => http.get(`/writing/outputs/${id}`)
 export const updateWritingOutput = (id, data) => http.patch(`/writing/outputs/${id}`, data)

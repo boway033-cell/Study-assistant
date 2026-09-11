@@ -4,7 +4,7 @@
 
 **把散落的 PDF、Word 与 PPT 变成可阅读、可检索、可核验、可继续写作的个人知识系统。**
 
-[![Release](https://img.shields.io/badge/release-v2.2.0-8B5A2B.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v2.3.0-8B5A2B.svg)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions)
@@ -116,7 +116,7 @@ Study Assistant 服务于一条完整的个人研究链：
 
 最短路径（Windows）：
 
-1. 从 [GitHub Releases](https://github.com/boway033-cell/Study-assistant/releases/latest) 下载 `study-assistant-v2.2.0.zip` 并完整解压。
+1. 从 [GitHub Releases](https://github.com/boway033-cell/Study-assistant/releases/latest) 下载 `study-assistant-v2.3.0.zip` 并完整解压。
 2. 安装 64 位 Python 3.12+，在项目目录打开 PowerShell。
 3. 运行下列命令创建环境并安装依赖：
 

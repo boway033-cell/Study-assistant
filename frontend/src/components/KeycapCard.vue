@@ -139,8 +139,8 @@ watch(() => [props.disabled, props.loading, uiPreferences.keycapButtons, reduceM
   font: 600 52px ui-monospace, 'Cascadia Code', Consolas, monospace;
 }
 .keycap-counter { position: absolute; top: calc(100% + 10px); left: 0; width: 100%; color: #71717a; font: 11px ui-monospace, Consolas, monospace; text-align: center; }
-.keycap-compact { --key-radius: 8px; width: auto; height: 35px; margin: 0; }
-.keycap-compact .keycap-face { width: auto; height: 32px; padding: 3px; }
+.keycap-compact { --key-radius: 8px; width: auto; height: 40px; margin: 0; }
+.keycap-compact .keycap-face { width: auto; height: 37px; padding: 3px; }
 .keycap-compact .keycap-dish { width: auto; padding: 0 9px; border-radius: 5px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .07); font: 500 12px var(--study-font-ui); white-space: nowrap; }
 .keycap-compact .keycap-shadow-rest { box-shadow: 0 3px 7px rgba(0, 0, 0, .10); }
 .keycap-warm { --key-face: #f5f0e8; --key-dish: #faf6ef; --key-border: #d4c9b8; --key-side: #c2a285; --key-ink: #6f4721; }

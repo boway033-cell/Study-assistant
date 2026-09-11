@@ -444,21 +444,28 @@ def _detect_duplicates(db, book_id: int, pages: list[str]) -> None:
     new_hash = _simhash(full_text)
     # 与其他 ready 书籍比对
     others = db.scalars(select(Book).where(Book.status == "ready", Book.id != book_id)).all()
-    for other in others:
-        # 重算对方的 simhash（简化：每次都算，数据量小）
-        other_pages = []
+    other_ids = [other.id for other in others]
+    if other_ids:
         from backend.app.models import Chunk
+        # 一次批量查询前 20 块（chunk_index < 20 等价于按 chunk_index 排序取前 20），
+        # 在 Python 内按 book_id 分组后再算 SimHash，消除逐本查询的 N+1。
         chunks = db.scalars(
-            select(Chunk).where(Chunk.book_id == other.id).order_by(Chunk.chunk_index).limit(20)
+            select(Chunk).where(Chunk.book_id.in_(other_ids), Chunk.chunk_index < 20)
+            .order_by(Chunk.book_id, Chunk.chunk_index)
         ).all()
-        other_text = " ".join(c.content[:200] for c in chunks)[:2000]
-        if not other_text.strip():
-            continue
-        other_hash = _simhash(other_text)
-        dist = _hamming_distance(new_hash, other_hash)
-        # 64 位 Hamming 距离 <= 10 视为高度相似（约 84%+ 相似度）
-        if dist <= 10:
-            book = db.get(Book, book_id)
-            if book:
-                book.duplicate_of = other.id
-            return
+        chunks_by_book: dict[int, list] = {}
+        for ch in chunks:
+            chunks_by_book.setdefault(ch.book_id, []).append(ch)
+        for other in others:
+            book_chunks = chunks_by_book.get(other.id, [])
+            other_text = " ".join(c.content[:200] for c in book_chunks)[:2000]
+            if not other_text.strip():
+                continue
+            other_hash = _simhash(other_text)
+            dist = _hamming_distance(new_hash, other_hash)
+            # 64 位 Hamming 距离 <= 10 视为高度相似（约 84%+ 相似度）
+            if dist <= 10:
+                book = db.get(Book, book_id)
+                if book:
+                    book.duplicate_of = other.id
+                return

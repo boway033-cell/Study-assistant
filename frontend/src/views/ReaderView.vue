@@ -62,8 +62,8 @@
             </button>
           </template>
           <template v-else>
-            <button v-for="i in 16" :key="i" class="toc-link" @click="jumpArtifact(i - 1)">
-              <span>{{ String(i).padStart(2, '0') }}</span>
+            <button v-for="h in artifactHeadings" :key="h.index" class="toc-link" @click="jumpArtifact(h.index)">
+              <span>{{ String(h.index + 1).padStart(2, '0') }}</span>
             </button>
           </template>
           <div class="source-summary">
@@ -192,8 +192,9 @@
         </div>
       </div>
       <template #footer>
+        <el-button v-if="tocRebuilding && rebuildTaskId" size="small" type="danger" plain :loading="rebuildCancelling" @click="stopRebuild">停止解析</el-button>
         <el-button @click="tocEditorOpen = false">取消</el-button>
-        <el-button type="primary" :loading="tocSaving" @click="saveTocEditor">保存并重建来源映射</el-button>
+        <el-button type="primary" :loading="tocSaving" :disabled="tocRebuilding" @click="saveTocEditor">保存并重建来源映射</el-button>
       </template>
     </el-dialog>
   </div>
@@ -245,6 +246,8 @@ const tocEditorOpen = ref(false)
 const tocEditorLoading = ref(false)
 const tocSaving = ref(false)
 const tocRebuilding = ref(false), tocRebuildMessage = ref('正在读取目录数据…')
+const rebuildTaskId = ref('')        // 进行中的重识别（解析）任务 id，用于内联取消
+const rebuildCancelling = ref(false)
 const tocAudit = ref({ items: [], issues: [], summary: {} })
 const tocDraft = ref([])
 const tocRevisions = ref([])
@@ -289,6 +292,17 @@ const tocPreviewUrl = computed(() => {
   return `${base}#page=${selectedToc.value.start_page}&zoom=page-width`
 })
 const artifactText = computed(() => mode.value === 'card' ? deepData.value.paper_card : deepData.value.markdown)
+// 卡片/文档地图的跳转索引改为由「已渲染的标题」实测得出，替代原先写死的 16 个占位
+// （超过 16 节的内容此前无法跳转）。索引语义与 jumpArtifact 一致：0 基。
+const artifactHeadings = ref([])
+const collectArtifactHeadings = () => {
+  const selector = mode.value === 'card' ? 'h2' : 'h2,h3,h4'
+  const nodes = artifactContent.value?.querySelectorAll(selector) || []
+  const next = [...nodes].map((el, index) => ({ index, title: (el.textContent || '').trim() }))
+  if (next.length !== artifactHeadings.value.length) artifactHeadings.value = next
+}
+// 内容或视图模式变化后重新采集；nextTick 保证 v-html 已落 DOM。
+watch([artifactText, mode], () => { nextTick(collectArtifactHeadings) }, { immediate: true })
 const artifactStyle = computed(() => ({ '--reading-font-size': `${fontSize.value}px`, '--reading-max-width': wideText.value ? '1080px' : '820px' }))
 
 watch(fontSize, v => localStorage.setItem('readerFontSize', String(v)))
@@ -593,8 +607,10 @@ const rebuildCurrentToc = async () => {
     await ElMessageBox.confirm('将根据本书已保存的正文与 OCR 坐标重新生成目录，保留可恢复的旧目录修订。本窗口未保存的修改会被替换。', '重新识别本书目录', { confirmButtonText: '重新识别', cancelButtonText: '取消' })
     tocRebuilding.value = true
     const response = await rebuildBookToc(bookId)
+    rebuildTaskId.value = response.task_id
     notifyTaskSubmitted()
     const task = await subscribeTask(response.task_id, next => { tocRebuildMessage.value = next.message || '正在重识别目录…' }, { signal: rebuildAbort.signal })
+    if (task.status === 'cancelled') { ElMessage.info('已停止解析，保留已有目录'); return }
     if (task.status !== 'done') throw new Error(task.error || task.message || '重识别未完成')
     if (task.result?.status !== 'rebuilt') return ElMessage.warning(task.result?.reason || '缺少可用目录证据')
     if (book.value?.id !== bookId) return
@@ -602,7 +618,19 @@ const rebuildCurrentToc = async () => {
     await applyTocResultInPlace({ chapters: detail.chapters, audit })
     ElMessage.success('目录已原位更新，可在修订记录中恢复旧版本')
   } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message || String(e)) }
-  finally { tocRebuilding.value = false }
+  finally { tocRebuilding.value = false; rebuildTaskId.value = '' }
+}
+
+// 内联取消进行中的解析（重识别）任务；复用现有 rebuildAbort / onUnmounted 约束。
+const stopRebuild = async () => {
+  if (!rebuildTaskId.value) return
+  rebuildCancelling.value = true
+  const id = rebuildTaskId.value
+  try {
+    await cancelTask(id)
+    tocRebuildMessage.value = '正在停止解析，保留已完成结果…'
+  } catch (e) { ElMessage.error(e.message) }
+  finally { rebuildCancelling.value = false }
 }
 const restoreRevision = async (revision) => {
   try {

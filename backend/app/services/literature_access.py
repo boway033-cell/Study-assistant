@@ -21,6 +21,10 @@ MAX_PDF_BYTES = 200 * 1024 * 1024
 MAX_HTML_BYTES = 2 * 1024 * 1024
 
 
+class LiteratureNetworkError(ValueError):
+    """网络层异常（httpx）的领域化包装，便于上层按 400/502/503 区分处理。"""
+
+
 @dataclass
 class AccessCandidate:
     provider: str
@@ -92,21 +96,24 @@ def discover_pdf_links(page_url: str, source: str) -> list[str]:
 async def _read_probe(client: httpx.AsyncClient, url: str, limit: int = MAX_HTML_BYTES) -> tuple[str, str, bytes]:
     current = validate_public_https_url(url)
     for _ in range(6):
-        async with client.stream("GET", current, headers={"Range": f"bytes=0-{limit - 1}"}) as resp:
-            if resp.status_code in {301, 302, 303, 307, 308}:
-                location = resp.headers.get("location")
-                if not location:
-                    raise ValueError("资源重定向缺少地址")
-                current = validate_public_https_url(urljoin(current, location))
-                continue
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "").split(";", 1)[0].lower()
-            data = bytearray()
-            async for chunk in resp.aiter_bytes(64 * 1024):
-                data.extend(chunk)
-                if len(data) >= limit:
-                    break
-            return current, content_type, bytes(data[:limit])
+        try:
+            async with client.stream("GET", current, headers={"Range": f"bytes=0-{limit - 1}"}) as resp:
+                if resp.status_code in {301, 302, 303, 307, 308}:
+                    location = resp.headers.get("location")
+                    if not location:
+                        raise ValueError("资源重定向缺少地址")
+                    current = validate_public_https_url(urljoin(current, location))
+                    continue
+                resp.raise_for_status()
+                content_type = resp.headers.get("content-type", "").split(";", 1)[0].lower()
+                data = bytearray()
+                async for chunk in resp.aiter_bytes(64 * 1024):
+                    data.extend(chunk)
+                    if len(data) >= limit:
+                        break
+                return current, content_type, bytes(data[:limit])
+        except httpx.HTTPError as exc:
+            raise LiteratureNetworkError("获取文献失败，请稍后重试") from exc
     raise ValueError("资源重定向次数过多")
 
 
@@ -168,13 +175,16 @@ async def resolve_candidates(query: str, unpaywall_email: str = "") -> list[Acce
     if doi.lower().startswith("doi:"): doi = doi[4:].strip()
     if doi.startswith("10.") and "/" in doi and unpaywall_email:
         url = f"https://api.unpaywall.org/v2/{quote(doi, safe='')}?email={quote(unpaywall_email)}"
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                data = resp.json(); best = data.get("best_oa_location") or {}
-                pdf_url = best.get("url_for_pdf")
-                if pdf_url:
-                    candidates.append(AccessCandidate("unpaywall", "open_access", validate_public_https_url(pdf_url), "Unpaywall 开放全文"))
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(url)
+        except httpx.HTTPError as exc:
+            raise LiteratureNetworkError("获取文献失败，请稍后重试") from exc
+        if resp.status_code == 200:
+            data = resp.json(); best = data.get("best_oa_location") or {}
+            pdf_url = best.get("url_for_pdf")
+            if pdf_url:
+                candidates.append(AccessCandidate("unpaywall", "open_access", validate_public_https_url(pdf_url), "Unpaywall 开放全文"))
     # Stable ordering and deduplication make provider expansion predictable.
     unique = {}
     for item in candidates: unique.setdefault(item.url, item)
@@ -186,19 +196,22 @@ async def download_verified_pdf(url: str, destination: Path) -> dict:
     data = bytearray(); content_type = ""
     async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=8), follow_redirects=False,
                                  headers={"User-Agent": "StudyAssistant/1.0 lawful-open-access"}) as client:
-        for _ in range(6):
-            async with client.stream("GET", current) as resp:
-                if resp.status_code in {301, 302, 303, 307, 308}:
-                    location = resp.headers.get("location")
-                    if not location: raise ValueError("资源重定向缺少地址")
-                    current = validate_public_https_url(urljoin(current, location)); continue
-                resp.raise_for_status(); content_type = resp.headers.get("content-type", "").split(";", 1)[0].lower()
-                async for chunk in resp.aiter_bytes(1024 * 1024):
-                    data.extend(chunk)
-                    if len(data) > MAX_PDF_BYTES: raise ValueError("PDF 超过 200MB 限制")
-                break
-        else:
-            raise ValueError("资源重定向次数过多")
+        try:
+            for _ in range(6):
+                async with client.stream("GET", current) as resp:
+                    if resp.status_code in {301, 302, 303, 307, 308}:
+                        location = resp.headers.get("location")
+                        if not location: raise ValueError("资源重定向缺少地址")
+                        current = validate_public_https_url(urljoin(current, location)); continue
+                    resp.raise_for_status(); content_type = resp.headers.get("content-type", "").split(";", 1)[0].lower()
+                    async for chunk in resp.aiter_bytes(1024 * 1024):
+                        data.extend(chunk)
+                        if len(data) > MAX_PDF_BYTES: raise ValueError("PDF 超过 200MB 限制")
+                    break
+            else:
+                raise ValueError("资源重定向次数过多")
+        except httpx.HTTPError as exc:
+            raise LiteratureNetworkError("获取文献失败，请稍后重试") from exc
     if not bytes(data[:1024]).lstrip().startswith(b"%PDF-"):
         raise ValueError("获取结果不是 PDF，可能是登录页或错误页面")
     destination.parent.mkdir(parents=True, exist_ok=True); destination.write_bytes(data)

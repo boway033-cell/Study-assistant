@@ -11,7 +11,12 @@
 > **第四批已修（2026-09-09）**：P1 第 11、12、13 项（SimHash 部分）。11 ✅ 重解析提交即清 FTS｜12 ✅ `TaskCancelled` 独立分支（pending 而非 failed）｜13 ✅ 词哈希改 BLAKE2b。备份在 `.workbuddy/backups/2026-09-09-p1/`，后端 186 项测试通过。
 > **后续不再修的原因**：16（`office_render` 全局锁 + subprocess）要把渲染搬进任务队列才治本，杀 Office 进程会误伤用户自己打开的文档；13 的查询部分与 9（`records` 全表载入）都只是规模相关的性能项，单人本地库的数据量下收益有限；6（双队列同 event loop）属架构改造。
 
-**剩余未修 P1**：9（records 全表载入后过滤分页）、13 前半（去重按书逐个查 chunks）、16（`office_render` 全局锁持锁跑 subprocess）；6（双队列挂同一 event loop）属架构改造，单列。
+> **第五批已修（2026-09-11）**：P1 剩余全部条目已修完。后端：9 ✅ `records` 过滤下推 SQL + 每源 `ORDER BY created_at DESC LIMIT page*page_size` + 独立 `COUNT` 求精确 total｜13 前半 ✅ 去重改一次批量取 chunks（`book_id IN (...) AND chunk_index < 20`）后内存分组｜16 ✅ `Popen` + `communicate(timeout)`，超时仅 `taskkill /T` 本模块自己拉起的进程树，渲染移入独立单线程执行器，`books.py` 端点改 `async`｜17 ✅ 新增 `LiteratureNetworkError`，网络错误 503 / 未预期 500 不再回显 `str(exc)`、不再泄漏路径。前端：21 ✅ 连续模式窗口化渲染（只渲染可视区 ±1 页，其余用等高度 spacer 撑滚动高度）+ `hlStyles` 改 `Map<page, styles[]>` 一次预索引（O(N×M) → O(M)）｜23 ✅ 三处手写轮询加卸载中止｜24 ✅ 流式改为纯文本渲染 + 终态一次性 sanitize，新增「停止生成」并支持 abort｜25 ✅ 分类下拉改合并去重（切书架时重置）｜26 ✅ 列表请求加序号丢弃旧响应｜27 ✅ 组件 ref 替代全局选择器 + `onerror`/兜底 revoke｜28 ✅ 错误详情白名单化，不再 stringify 对象上屏｜29 ✅ `PDFPageProxy.cleanup()` 随页面离开可视区/卸载/切书释放，缩放路径保留 proxy 缓存。契约：30 ✅ 任务中心对所有重任务给「重新解析」或「回到原工作区」明确出路｜31 ✅ 仿写/去 AI 味（文本/Word）改 `202 + submit` 任务化 + `subscribeTask`｜32 ✅ `StudyView`/`WritingLabDrawer` 正文补 76ch｜33 ✅ `WritingLabDrawer` 字号全部 token 化（0 处硬编码）｜34 ✅ 赭石系收敛为 `--study-ink-strong/--study-ink/--study-ink-soft/--study-accent`｜35 ✅ `submittedTaskId` 消费并订阅进度｜36 ✅ 覆盖/云端发送补确认｜37 ✅ `prefers-reduced-motion` 补 `animation` 降级（含生成光标）｜38 ✅ 目录重识别加「停止解析」内联取消。
+> 备份在 `.workbuddy/backups/2026-09-11-p1-final/`。
+> 验证：后端 **222 passed / 1 skipped**；前端单测 **44 passed**；`vite build` 通过；真实 Chromium 走查 468 页文档确认连续模式 DOM 仅渲染 2–3 个页节点、滚动时窗口正确滑动（107→234→467）、跳页 300 精确落位（scrollTop 298404 vs 期望 298415）、单页/双页模式各 1/2 节点、无控制台错误。
+
+**剩余未修**：仅 6（`_worker(_queue)` 与 `_worker(_interactive_queue)` 挂同一 event loop，导致同步阻塞调用互相冻结）属架构改造，单列；及 P2 中的「组件拆分」（见上文 P2 小节，其余 P2 条目已于第六批修完）。
+> 原「剩余未修 P1」：9（records 全表载入后过滤分页）、13 前半（去重按书逐个查 chunks）、16（`office_render` 全局锁持锁跑 subprocess）；6（双队列挂同一 event loop）属架构改造，单列。
 范围：后端 `backend/app`（23,727 行 Python）、前端 `frontend/src`（8,261 行）、`backend/tests` + `frontend/tests`、产品契约文档。
 方式：三个方向并行全量扫描 + 对全部 P0 条目逐条回到源码复核（已修正子代理报告中 1 处不准确论断）。
 
@@ -97,17 +102,32 @@
 
 ## P2 — 可维护性
 
-- `PdfReader.vue` 1177 / `LibraryView.vue` 908 / `ReaderView.vue` 781 / `KnowledgeView.vue` 607 行，适合按「目录工作台 / AI 面板 / 书架树 / 标注面板」拆分。
-- `services/service_registry.py` 是死代码：`get()` 零调用方，所有 API 仍直接 import 服务层。
-- `api/study.py:589-590` `except Exception as e: raise` 无意义，与 `deep.py:200-207` 形成两套错误处理风格。
-- `worker/tasks.py:84-85` `_persist` 全吞异常 → 重启恢复、进度、取消状态可能无声丢失。
-- `KnowledgeView.vue:490` `allowDrop = () => true`，无环检测，可把父节点拖进自己的子孙。
-- `KnowledgeView.vue:578`、`StudyView.vue:259` 对纯 ID 数组用 `deep: true` watch。
-- `ReaderView.vue:59` `v-for="i in 16"` 硬编码证据卡片数，超过 16 节无法跳转。
-- `PdfReader.vue:929`、`DrawView.vue:169-184` `a.click()` 后同步 `revokeObjectURL`，部分浏览器会取消下载。
-- 键盘不可达：`MindMap.vue:19` SVG `<g>` 无 tabindex/role；`KnowledgeView.vue:592` 树操作仅 `:hover` 显示；`ChatView.vue:13` 历史条目是可点 div。
-- `KeycapCard.vue:142` 35px、`LibraryView.vue:89` 收藏按钮无 min-height，低于 40px 触控标准。
-- `parser/__init__.py:64` `fitz.open` 到 `:77 doc.close()` 之间无 try/finally，异常即泄漏句柄（Windows 下锁住 uploads 里的 PDF）。
+> **第六批已修（2026-09-11，/notes + P2 批次）**：除「组件拆分」与「service_registry 死代码」外全部修完。
+> - `/api/knowledge/notes` ✅ `book_ids`/`q` 过滤下推 SQL（拼接串语义 + LIKE 通配符转义，与旧 Python 子串过滤 13/13 用例等价），新增 `test_note_inbox_search_semantics_after_sql_pushdown` 锁契约。
+> - `parser/__init__.py` ✅ `fitz` 句柄 `try/finally`，异常路径不再锁住 uploads 的 PDF。
+> - `worker/tasks.py` ✅ `_persist` 失败改记 `logger.warning(exc_info)`，不再无声丢失。
+> - `KnowledgeView` ✅ `allowDrop` 环检测（目标为自身/子孙一律禁止）；两处对 ID 数组的 `deep:true` watch 去除（store 为整体替换赋值，引用比较即可感知）。
+> - `ReaderView` ✅ `v-for 16` 改为由已渲染标题实测的 `artifactHeadings`，超出 16 节可跳转。
+> - `PdfReader`/`DrawView`（3 处）✅ `a.click()` 后延迟 1s `revokeObjectURL`，不再被部分浏览器判定为取消下载。
+> - 键盘可达 3 处 ✅：`MindMap` 节点 `role=button`+`tabindex`+Enter/Space+焦点环；知识树操作按钮补 `:focus-within` 显示；`ChatView` 历史条目可 Tab + Enter 触发。
+> - 触控尺寸 2 处 ✅：`KeycapCard` compact 35→40px；`LibraryView` 收藏按钮 40×40。
+> - 同批 API 链路优化：前端 `api/index.js` 语义化超时档 + 通用 `api` 适配器 + 幂等读请求单次重试；后端 SQLite PRAGMA 调优（`synchronous=NORMAL`/`busy_timeout=15000`/`cache_size=32MB`/`mmap_size=256MB`/`temp_store=MEMORY`，实测全部生效）；JSON 响应 GZip（实测 `/api/books` 48,686B→6,834B，**7.1×**，SSE 已被 Starlette 默认排除不受影响）。
+> 验证：后端 **229 passed / 1 skipped**；前端单测 **44 passed**；10 个改动文件语法门禁全过；隔离实例(8011)实测 gzip/notes 通过。
+> 备份在 `.workbuddy/backups/2026-09-11-p2/`。
+
+**剩余未修**：组件拆分（`PdfReader`/`LibraryView`/`ReaderView`/`KnowledgeView`）属大重构，建议单独立项；`service_registry.get()` 仍零调用（`init/shutdown` 在 lifespan 中使用，文件本身非死代码）；`/api/knowledge/records` 的新增分页参数若被直接位置调用存在 `Query` 对象陷阱（当前无调用方，属潜在而非现实问题）。
+
+- `PdfReader.vue` 1177 / `LibraryView.vue` 908 / `ReaderView.vue` 781 / `KnowledgeView.vue` 607 行，适合按「目录工作台 / AI 面板 / 书架树 / 标注面板」拆分。→ 剩余，建议单独立项
+- `services/service_registry.py` 的 `get()` 零调用方。→ 剩余（`init`/`shutdown` 为 lifespan 所用，不能整文件删除）
+- ~~`api/study.py:589-590` `except Exception as e: raise` 无意义~~ → 已在早前批次消解（现行代码为 `TaskCancelled` 透传 + 统一回滚）
+- ~~`worker/tasks.py:84-85` `_persist` 全吞异常~~ → ✅ 已记日志
+- ~~`KnowledgeView.vue:490` `allowDrop = () => true`，无环检测~~ → ✅ 已修
+- ~~`KnowledgeView.vue:578`、`StudyView.vue:259` 对纯 ID 数组用 `deep: true` watch~~ → ✅ 已修
+- ~~`ReaderView.vue:59` `v-for="i in 16"` 硬编码证据卡片数~~ → ✅ 已修
+- ~~`PdfReader.vue:929`、`DrawView.vue:169-184` `a.click()` 后同步 `revokeObjectURL`~~ → ✅ 已修
+- ~~键盘不可达：`MindMap.vue:19` / `KnowledgeView.vue:592` / `ChatView.vue:13`~~ → ✅ 已修
+- ~~`KeycapCard.vue:142` 35px、`LibraryView.vue:89` 收藏按钮无 min-height~~ → ✅ 已修
+- ~~`parser/__init__.py:64` `fitz.open` 无 try/finally~~ → ✅ 已修
 
 ---
 

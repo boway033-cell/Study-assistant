@@ -9,7 +9,7 @@ const navigation = readFileSync(resolve(here, '../src/components/AppNavigation.v
 const app = readFileSync(resolve(here, '../src/App.vue'), 'utf8')
 
 test('sidebar presents one guided knowledge workflow before secondary capabilities', () => {
-  for (const label of ['01</i> 资料入库', '02</i> 研读与沉淀', '03</i> 写作', '04</i> PPTX 汇报']) {
+  for (const label of ['01</i> 资料入库', '02</i> 研读与沉淀', '03</i> 写作', '04</i> 文献汇报']) {
     assert.match(navigation, new RegExp(label))
   }
   assert.match(navigation, /当前路径/)

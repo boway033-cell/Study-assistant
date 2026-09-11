@@ -12,12 +12,14 @@
     </div>
     <div class="mm-canvas" ref="scroller" @mousedown="onPanStart" @mousemove="onPanMove" @mouseup="onPanEnd" @mouseleave="onPanEnd" @wheel="onWheel">
       <div class="mm-inner" :style="{ transform: 'scale(' + scale + ')' }">
-        <svg :width="svgW" :height="svgH" class="mm-svg">
+        <svg ref="svgEl" :width="svgW" :height="svgH" class="mm-svg">
           <g v-for="n in flatNodes" :key="'line-' + n.id">
             <path v-for="c in n.children" :key="'p-' + c.id" :d="linkPath(n, c)" class="mm-link" />
           </g>
           <g v-for="n in flatNodes" :key="'node-' + n.id"
-            :transform="'translate(' + n.x + ', ' + n.y + ')'" class="mm-node" @click="emit('select', n)">
+            :transform="'translate(' + n.x + ', ' + n.y + ')'" class="mm-node" role="button" tabindex="0"
+            :aria-label="n.title" @click="emit('select', n)"
+            @keydown.enter.prevent="emit('select', n)" @keydown.space.prevent="emit('select', n)">
             <title>{{ n.title }}</title>
             <rect :width="n.w" :height="n.h" rx="8" ry="8"
               :class="['mm-rect', 'mm-depth-' + n.depth, 'mm-m-' + (n.mastery || 'unknown'), { selected: n.id === selectedId }]" />
@@ -55,6 +57,7 @@ const NODE_W = computed(() => Math.max(92, Math.min(210, maxTitleLen.value * 14 
 
 const scale = ref(0.9)
 const scroller = ref(null)
+const svgEl = ref(null)
 let panning = false
 let panStart = { x: 0, y: 0, sl: 0, st: 0 }
 
@@ -147,11 +150,13 @@ const onPanMove = (e) => {
 const onPanEnd = () => { panning = false }
 
 const exportPng = () => {
-  const svg = document.querySelector('.mm-svg')
+  const svg = svgEl.value
   if (!svg) return
   const xml = new XMLSerializer().serializeToString(svg)
   const svgBlob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' })
   const url = URL.createObjectURL(svgBlob)
+  let revoked = false
+  const revoke = () => { if (revoked) return; revoked = true; URL.revokeObjectURL(url) }
   const img = new Image()
   img.onload = () => {
     const canvas = document.createElement('canvas')
@@ -161,12 +166,15 @@ const exportPng = () => {
     ctx.fillStyle = '#F5F0E8'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-    URL.revokeObjectURL(url)
     const a = document.createElement('a')
     a.href = canvas.toDataURL('image/png')
     a.download = '知识导图.png'
     a.click()
+    revoke()
   }
+  img.onerror = () => { revoke() }
+  // 兜底：极端情况下 onload/onerror 均未触发时释放，避免 blob URL 泄漏
+  setTimeout(revoke, 10000)
   img.src = url
 }
 </script>
@@ -191,6 +199,10 @@ const exportPng = () => {
 .mm-link { fill: none; stroke: #C2A285; stroke-width: 1.5; }
 .mm-rect { stroke: #D4C9B8; stroke-width: 1; cursor: pointer; }
 .mm-rect.selected { stroke: #8B5A2B; stroke-width: 2.5; }
+/* 键盘可达：Tab 聚焦时给出可见焦点环（节点本身是 <g>，无原生 focus 样式） */
+.mm-node:focus { outline: none; }
+.mm-node:focus-visible .mm-rect { stroke: var(--study-ink, #8B5A2B); stroke-width: 3; }
+.mm-node:focus-visible { outline: 2px solid var(--study-ink-soft, #B98A58); outline-offset: 2px; }
 .mm-depth-0 { fill: #8B5A2B; }
 .mm-depth-1 { fill: #5F8D5F; }
 .mm-depth-2 { fill: #EDE5D8; }

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -243,7 +244,7 @@ async def lifespan(_app: FastAPI):
         pass
 
 
-app = FastAPI(title="Study assistant", version="2.2.0", lifespan=lifespan)
+app = FastAPI(title="Study assistant", version="2.3.0", lifespan=lifespan)
 
 
 class SPAStaticFiles(StaticFiles):
@@ -277,6 +278,11 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=False,
 )
+
+# 响应压缩：JSON 列表/报告类响应（/api/books、/api/knowledge/records、/api/study/reports…）
+# 常在数百 KB 量级，gzip 可明显缩短传输时间。Starlette 1.6 的 GZipMiddleware 默认排除
+# text/event-stream，因此不会破坏任务 SSE 推送与 /api/chat 的流式输出。
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 @app.middleware("http")

@@ -22,7 +22,10 @@ test('visible pages render sequentially under a smaller pixel budget', () => {
 })
 
 test('page pixels are shown before the optional text and OCR layer finishes', () => {
-  const painted = reader.indexOf('rendered.value[p] = true')
+  // 标记"已渲染"的赋值形态会随实现变化（当前同时记录 pageProxy 以便 cleanup），
+  // 这里只断言"赋值发生在文字层渲染之前"这一行为契约，不锁定字面量。
+  const paintedMatch = reader.match(/rendered\.value\[p\] = [^\n]+/)
+  const painted = paintedMatch ? paintedMatch.index : -1
   const textLayer = reader.indexOf('void renderTextLayer(p, pdfPage, vp, generation, token)')
   assert.ok(painted > 0 && textLayer > painted)
   assert.match(reader, /const pendingRenders = new Map\(\)/)

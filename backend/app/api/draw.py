@@ -1,15 +1,18 @@
 """AI drawing API: natural language -> draw.io compatible XML"""
 from __future__ import annotations
+import json
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from backend.app.core.database import get_db
+from backend.app.services.chat_sessions import (delete_session, list_sessions, load_session,
+                                                row_state, save_session)
 from backend.app.services.llm import LLMRouter, load_llm_config
 
 router = APIRouter(prefix="/api/draw", tags=["draw"])
-_draw_sessions: dict[str, dict] = {}
+# 绘图的改图会话状态存在 chat_sessions 表（kind='draw'）；此前是模块级 dict，重启即 404。
 
 SYSTEM_PROMPT = (
     "You are a professional diagram generation assistant. "
@@ -77,21 +80,20 @@ async def generate_diagram(req: DrawGenerateReq, db: Session = Depends(get_db)):
         raise HTTPException(500, f"AI generation failed: {e}")
     xml = _extract_xml(answer)
     sid = uuid.uuid4().hex[:12]
-    while len(_draw_sessions) >= 20:
-        _draw_sessions.pop(next(iter(_draw_sessions)), None)
-    _draw_sessions[sid] = {
+    state = {
         "xml": xml,
         "history": [{"role": "user", "content": req.description}],
         "book_ids": scope,
         "created_at": datetime.now().isoformat(),
     }
+    save_session(db, sid, "draw", state, scope)
     return DrawSessionResp(session_id=sid, xml=xml, message="Diagram generated")
 
 
 @router.post("/modify", response_model=DrawSessionResp)
 async def modify_diagram(req: DrawModifyReq, db: Session = Depends(get_db)):
     """Modify diagram via multi-turn dialogue."""
-    sess = _draw_sessions.get(req.session_id)
+    sess = load_session(db, req.session_id, "draw")
     if not sess:
         raise HTTPException(404, "Drawing session not found")
     cfg = load_llm_config(db, "utility")
@@ -112,35 +114,38 @@ async def modify_diagram(req: DrawModifyReq, db: Session = Depends(get_db)):
     xml = _extract_xml(answer)
     sess["xml"] = xml
     sess["history"].append({"role": "user", "content": req.request})
+    save_session(db, req.session_id, "draw", sess, sess.get("book_ids") or [])
     return DrawSessionResp(session_id=req.session_id, xml=xml, message="Diagram updated")
 
 
 @router.get("/sessions")
-def list_draw_sessions():
+def list_draw_sessions(db: Session = Depends(get_db)):
     """List current drawing sessions."""
     return {
         "sessions": [
-            {"id": sid, "created_at": s["created_at"], "preview": s["xml"][:200],
-             "book_ids": s.get("book_ids", [])}
-            for sid, s in _draw_sessions.items()
+            {"id": row.id,
+             "created_at": row.created_at.isoformat() if row.created_at else None,
+             "preview": str(row_state(row).get("xml") or "")[:200],
+             "book_ids": json.loads(row.book_ids_json or "[]")}
+            for row in list_sessions(db, "draw")
         ]
     }
 
 
 @router.get("/sessions/{session_id}")
-def get_draw_session(session_id: str):
+def get_draw_session(session_id: str, db: Session = Depends(get_db)):
     """Get a drawing session XML."""
-    sess = _draw_sessions.get(session_id)
+    sess = load_session(db, session_id, "draw")
     if not sess:
         raise HTTPException(404, "Session not found")
-    return {"session_id": session_id, "xml": sess["xml"], "history": sess.get("history", []),
+    return {"session_id": session_id, "xml": sess.get("xml", ""), "history": sess.get("history", []),
             "book_ids": sess.get("book_ids", [])}
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
-def delete_draw_session(session_id: str):
+def delete_draw_session(session_id: str, db: Session = Depends(get_db)):
     """Delete a drawing session."""
-    _draw_sessions.pop(session_id, None)
+    delete_session(db, session_id, "draw")
 
 
 def _extract_xml(text: str) -> str:

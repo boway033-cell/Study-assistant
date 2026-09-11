@@ -56,6 +56,11 @@
             <div class="output-spec"><b>默认输出</b><span>中文可编辑 PPTX</span><span>术语保持一致</span><span>逐页演讲者备注</span><span>真实渲染与溢出检查</span></div>
             <el-button class="generate" type="primary" size="large" :loading="generating" :disabled="!form.book_id || !knowledgeKeys.length" @click="generate">从已选知识对象生成提纲</el-button>
             <p class="generate-tip">AI 只使用所选来源；资料不足时保留缺口，不补写未经支持的结论。</p>
+            <section v-if="deckTask.active" class="deck-task-monitor" aria-live="polite">
+              <header><b>{{ deckTask.kind === 'render' ? 'PPTX 生成进度' : '提纲生成进度' }}</b></header>
+              <el-progress :percentage="deckTask.progress" :indeterminate="deckTask.progress === 0" :stroke-width="8" />
+              <p>{{ deckTask.stage }}</p>
+            </section>
             </section>
           </el-card>
         </div>
@@ -110,7 +115,7 @@
     <el-drawer v-model="recordsDrawer" title="输出记录" size="min(1080px,96vw)" append-to-body>
         <el-card shadow="never" class="history records-card">
           <template #header><div class="card-head"><div><b>汇报任务与输出</b><small>提纲、审计、预览和下载集中管理</small></div><el-button plain size="small" @click="loadDecks">刷新状态</el-button></div></template>
-          <el-table :data="decks" empty-text="还没有汇报任务，请先在“研究任务”中生成提纲">
+          <el-table :data="decks" empty-text="还没有汇报任务，请先在“文献汇报”中生成提纲">
             <el-table-column prop="title" label="文献汇报" min-width="280" />
             <el-table-column label="叙事类型" width="130"><template #default="{row}">{{ typeLabel(row.paper_type) }}</template></el-table-column>
             <el-table-column label="当前阶段" width="110"><template #default="{row}"><el-tag :type="row.status==='done'?'success':row.status==='failed'?'danger':'warning'">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
@@ -121,7 +126,7 @@
         </el-card>
     </el-drawer>
 
-    <el-dialog v-model="outlineVisible" title="PPTX 提纲审阅" width="min(1320px,96vw)" destroy-on-close>
+    <el-dialog v-model="outlineVisible" title="文献汇报提纲审阅" width="min(1320px,96vw)" destroy-on-close>
       <el-alert v-if="editingDeck?.source_freshness && editingDeck.source_freshness.status!=='fresh'" :type="editingDeck.source_freshness.status==='unknown'?'info':'warning'" :closable="false" :title="editingDeck.source_freshness.message" class="freshness-alert" />
       <div v-if="editingDeck" class="outline-toolbar">
         <div><b>内容覆盖 {{ percent(editingDeck.qa?.coverage?.content_coverage) }}</b><small>结构覆盖 {{ percent(editingDeck.qa?.coverage?.structure_coverage) }} · {{ editingDeck.qa?.coverage?.covered_groups || 0 }}/{{ editingDeck.qa?.coverage?.total_groups || 0 }} 个来源组</small></div>
@@ -151,7 +156,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StudyCommandBar from '../components/StudyCommandBar.vue'
@@ -170,6 +175,8 @@ const books = ref([]); const chapters = ref([]); const chapterTree = ref(); cons
 const booksLoading = ref(false)
 const generating = ref(false); const resolving = ref(false); const candidates = ref([]); const accessSearched = ref(false); const importingUrl = ref(''); const savingConfig = ref(false)
 const submittedTaskId = ref('')
+const deckTask = ref({ active: false, kind: '', taskId: '', progress: 0, stage: '', status: '' })
+const deckAbort = new AbortController()
 const parseStoredList = (key) => { try { const value=JSON.parse(sessionStorage.getItem(key)||'[]'); return Array.isArray(value)?value.map(Number).filter(Number.isInteger):[] } catch { return [] } }
 const transferredBookIds = parseStoredList('deckSourceBookIds')
 const transferredChapterIds = ref(parseStoredList('deckSourceChapterIds'))
@@ -221,11 +228,30 @@ const loadResources = async () => { resources.value = form.value.book_id ? await
 const loadKnowledgeOptions = async () => { knowledgeLoading.value=true;try{const ids=[...new Set([form.value.book_id,...form.value.source_book_ids].filter(Boolean))];const [records,reports]=await Promise.all([listKnowledgeRecords({book_ids:ids,record_types:['note','evidence'],page_size:100}),studyReports(1,50)]);const values=(records.items||[]).map(item=>({value:`${item.record_type}:${item.id}`,label:`${item.record_type==='note'?'笔记':'证据卡'}｜${item.title}`}));const reportValues=(reports.items||[]).filter(item=>(item.book_ids||[]).every(id=>ids.includes(id))).map(item=>({value:`report:${item.id}`,label:`批判性审查｜${item.focus||'综合研读'}`}));knowledgeOptions.value=[...reportValues,...values];knowledgeKeys.value=knowledgeKeys.value.filter(key=>knowledgeOptions.value.some(item=>item.value===key));form.value.source_report_id=Number(knowledgeKeys.value.find(key=>key.startsWith('report:'))?.split(':')[1])||null}finally{knowledgeLoading.value=false} }
 const loadBook = async () => { if (!form.value.book_id) return; try { const [b] = await Promise.all([getBook(form.value.book_id), loadResources(), loadKnowledgeOptions()]); chapters.value = b.chapters || []; checkedChapterCount.value = 0; form.value.resource_ids = form.value.resource_ids.filter(id => resources.value.some(r => r.id === id)); await loadDecks() } catch(e) { ElMessage.error(`无法加载文献范围：${e.message}。请返回资料库确认解析已经完成。`) } }
 const loadDecks = async () => { const response = await listPresentations(form.value.book_id); decks.value = response.items || [] }
+// 消费 submittedTaskId：订阅进度，成功后刷新产出列表，失败给出错误；离开页面时 abort。
+const followDeckTask = async (taskId, kind) => {
+  deckTask.value = { active: true, kind, taskId, progress: 0, stage: '提交中…', status: '' }
+  try {
+    const task = await subscribeTask(taskId, next => {
+      deckTask.value.progress = Math.round((next.progress || 0) * 100)
+      deckTask.value.stage = next.message || next.stage || '处理中'
+    }, { signal: deckAbort.signal })
+    if (task.status === 'cancelled') { ElMessage.info('已停止任务'); return }
+    if (task.status === 'failed') throw new Error(task.error || task.message || '任务未完成')
+    await loadDecks()
+    ElMessage.success(kind === 'render' ? 'PPTX 已生成，可在“输出记录”中预览与下载' : '提纲已生成，请在“输出记录”中审阅')
+  } catch (error) {
+    if (error?.name === 'AbortError') return
+    ElMessage.error(`生成失败：${error.message}`)
+  } finally {
+    deckTask.value.active = false
+  }
+}
 const generate = async () => {
   if (!form.value.book_id) return ElMessage.warning('请先选择主文献，再限定章节或选段')
   if (!knowledgeKeys.value.length) return ElMessage.warning('请至少选择一个知识对象作为 PPTX 取材来源')
   generating.value = true
-  try { const noteIds=[],evidenceIds=[],reportIds=[];for(const key of knowledgeKeys.value){const [type,id]=key.split(':');if(type==='note')noteIds.push(Number(id));else if(type==='evidence')evidenceIds.push(Number(id));else if(type==='report')reportIds.push(Number(id))}form.value.source_report_id=reportIds[0]||null;const chapterIds=[...new Set([...(chapterTree.value?.getCheckedKeys() || []),...transferredChapterIds.value])]; const r = await createPresentationOutline({...form.value, knowledge_note_ids:noteIds, evidence_card_ids:evidenceIds, report_ids:reportIds, source_book_ids:[...new Set([form.value.book_id,...form.value.source_book_ids])], chapter_ids:chapterIds, chunk_ids: []}); submittedTaskId.value=r.task_id; notifyTaskSubmitted(); ElMessage.success(`提纲已进入任务中心；当前内容覆盖约 ${percent(r.coverage?.content_coverage)}`)
+  try { const noteIds=[],evidenceIds=[],reportIds=[];for(const key of knowledgeKeys.value){const [type,id]=key.split(':');if(type==='note')noteIds.push(Number(id));else if(type==='evidence')evidenceIds.push(Number(id));else if(type==='report')reportIds.push(Number(id))}form.value.source_report_id=reportIds[0]||null;const chapterIds=[...new Set([...(chapterTree.value?.getCheckedKeys() || []),...transferredChapterIds.value])]; const r = await createPresentationOutline({...form.value, knowledge_note_ids:noteIds, evidence_card_ids:evidenceIds, report_ids:reportIds, source_book_ids:[...new Set([form.value.book_id,...form.value.source_book_ids])], chapter_ids:chapterIds, chunk_ids: []}); submittedTaskId.value=r.task_id; notifyTaskSubmitted(); followDeckTask(r.task_id,'outline'); ElMessage.success(`提纲已进入任务中心；当前内容覆盖约 ${percent(r.coverage?.content_coverage)}`)
     await loadDecks()
   } catch(e){ElMessage.error(`提纲没有生成：${e.message}。当前选择会保留，可调整范围或模型设置后重试。`)} finally { generating.value=false }
 }
@@ -248,6 +274,7 @@ const browserCandidate = async (c) => { try{const r=await openBrowserHandoff({..
 const handoff = async () => { if(access.value.include_si===null) return ElMessage.warning('请选择是否需要补充材料'); try{const r=await openLibraryHandoff(access.value); window.open(r.url,'_blank','noopener'); ElMessage.info(`${r.instruction}；若没有新页面，请允许浏览器弹窗后重试。`)}catch(e){ElMessage.error(`馆藏入口不可用：${e.message}。请在右侧检查 HTTPS 入口设置。`)} }
 const saveConfig = async () => { savingConfig.value=true; try{await updateLiteratureConfig(config.value); ElMessage.success('馆藏入口与开放服务设置已保存')}catch(e){ElMessage.error(`入口没有保存：${e.message}`)}finally{savingConfig.value=false} }
 onMounted(async()=>{ try{const [,c]=await Promise.all([searchBookOptions(''),getLiteratureConfig()]); config.value=c; if(form.value.book_id) await loadBook(); else await loadDecks()}catch(e){ElMessage.error(e.message)} })
+onUnmounted(() => deckAbort.abort())
 </script>
 
 <style scoped>

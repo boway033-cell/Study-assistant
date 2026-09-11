@@ -27,11 +27,11 @@
       </el-menu-item>
       <el-menu-item index="/writing" class="journey-item">
         <el-icon><EditPen /></el-icon>
-        <template #title><span class="journey-copy"><b><i>03</i> 写作工作台</b><small>研究写作 · 公文写作</small></span></template>
+        <template #title><span class="journey-copy"><b><i>03</i> 写作工作台</b><small>出文章（正文 + Word）</small></span></template>
       </el-menu-item>
       <el-menu-item index="/literature-workbench" class="journey-item">
         <el-icon><Tickets /></el-icon>
-        <template #title><span class="journey-copy"><b><i>04</i> PPTX 汇报</b><small>把研究证据组织成演示</small></span></template>
+        <template #title><span class="journey-copy"><b><i>04</i> 文献汇报</b><small>出演示（提纲 + PPTX）</small></span></template>
       </el-menu-item>
 
       <div v-if="!collapsed" class="menu-divider"><span>按需展开</span></div>
@@ -75,8 +75,8 @@ const defaultOpeneds = computed(() => activeGroup.value ? [activeGroup.value] : 
 const guide = computed(() => {
   if (route.path === '/library' || route.path.startsWith('/reader/')) return { title: '从资料开始', description: '先导入并确认解析就绪，再进入研读。' }
   if (route.path === '/knowledge-hub' || route.path === '/chat') return { title: '把原文变成知识', description: '提取笔记、证据与可回查的研究结论。' }
-  if (route.path === '/writing') return { title: '从知识对象写作', description: '选择已有笔记或证据，保留来源链。' }
-  if (route.path === '/literature-workbench') return { title: '组织研究汇报', description: '从已选知识对象生成可追溯的 PPTX。' }
+  if (route.path === '/writing') return { title: '从知识对象写成文章', description: '选笔记/证据，用 Writing DNA 校准表达，产出正文与 Word。' }
+  if (route.path === '/literature-workbench') return { title: '把研究证据做成汇报', description: '先审提纲与来源，再产出可编辑的 PPTX。' }
   if (route.path === '/knowledge-health' || route.path === '/stats') return { title: '维护知识库质量', description: '先治理解析、来源和引用问题。' }
   return { title: '按需使用辅助能力', description: '核心资料与研究成果仍保存在知识库。' }
 })
