@@ -102,7 +102,14 @@ def touch_ocr_engine() -> None:
 
 @contextmanager
 def ocr_engine_session():
-    """一段"正在使用引擎"的区间（整个 OCR 任务），期间禁止释放模型。"""
+    """一段"正在使用引擎"的区间（整个 OCR 任务），期间禁止释放模型。
+
+    并发语义：进入本区间（`_OCR_ENGINE_ACTIVE += 1`）与 `release_ocr_engine()`
+    的"能否释放"判定共用 `_OCR_LIFECYCLE_LOCK`，所以两者严格串行化：
+    - 会话先进入 → 释放方一定看到 `_OCR_ENGINE_ACTIVE > 0`，拒绝释放；
+    - 释放先完成 → 会话随后取引擎，最多多一次冷加载，不会拿到已销毁实例。
+    引擎引用（`_rapid_engine` / `_RAPID_POOL`）必须在会话内获取，这是该保证成立的前提。
+    """
     global _OCR_ENGINE_ACTIVE
     touch_ocr_engine()
     with _OCR_LIFECYCLE_LOCK:
@@ -162,7 +169,14 @@ def schedule_ocr_engine_release(idle_seconds: float | None = None):
 
 
 def shutdown_ocr_runtime() -> None:
-    """进程/应用退出时的统一清理：取消定时器 → 释放模型 → 关闭共享执行器。"""
+    """进程/应用退出时的统一清理：取消定时器 → 释放模型 → 关闭共享执行器。
+
+    幂等：重复调用（lifespan 退出 + atexit 双路径）都是无副作用的空操作。
+    注意本函数**不能**保证"立即退出"：共享执行器的工作线程是非 daemon 的
+    ThreadPoolExecutor 线程，解释器退出时 concurrent.futures 注册的
+    `_python_exit`（`threading._register_atexit`）仍会 join 它；`wait=False`
+    只停止当前调用方的等待，无法终止正在执行的本地推理。详见方案文档 §5.8。
+    """
     _cancel_scheduled_release()
     try:
         release_ocr_engine(force=True)
@@ -294,8 +308,13 @@ def _run_with_timeout(callable_, timeout_seconds: int, page_no: int, on_wait=Non
 
     executor=None 时临时创建私有执行器并在收尾关闭（向后兼容旧调用）；
     传入共享执行器时不会 shutdown，交给 shutdown_ocr_runtime 统一释放。
-    注意：timeout 只是看门狗，Python 不能真正终止本地 OCR 线程；
-    线程仍在跑时由 _OCR_ENGINE_STUCK 让后续页面快速失败而不是再空等一轮。
+    超时语义（务必不要过度解读）：timeout 停止的只是**本函数（调用方）的等待**，
+    Python 无法强制终止正在执行的本地 OCR 调用；线程仍在跑时由
+    `_OCR_ENGINE_STUCK` 让后续页面快速失败而不是再空等一轮。
+    执行器的 `shutdown(wait=False)` 同样只停止调用方等待：工作线程是
+    ThreadPoolExecutor 的非 daemon 线程，解释器退出时会被
+    concurrent.futures 的 `_python_exit` join，因此"最坏只等一个页面超时时长"
+    这类描述并不成立（见 docs/OCR_PERFORMANCE_OPTIMIZATION_PLAN.md §5.8）。
     """
     owns_executor = executor is None
     if owns_executor:
@@ -586,6 +605,9 @@ def _create_rapid_engine():
 def _get_rapid_engine():
     """缓存 RapidOCR 引擎实例（首次加载模型，之后复用；单 worker 串行路径用）。"""
     global _rapid_engine
+    # touch 必须在取单例锁之前：`_OCR_LIFECYCLE_LOCK → 单例锁` 是全局唯一锁序，
+    # 反过来（单例锁内再取生命周期锁）会和 release_ocr_engine 形成 AB-BA 死锁。
+    touch_ocr_engine()
     with _OCR_INIT_LOCK:
         return _initialize_rapid_engine()
 
@@ -594,9 +616,6 @@ def _initialize_rapid_engine():
     global _rapid_engine
     if _rapid_engine is None:
         _rapid_engine = _create_rapid_engine()
-    else:
-        # 命中热引擎：取消待执行的空闲释放，连续导入不会中途丢模型。
-        touch_ocr_engine()
     return _rapid_engine
 
 
@@ -615,27 +634,53 @@ def get_rapid_pool(workers: int) -> list:
         return pool[:workers]
 
 
+def _clear_engine_references() -> bool:
+    """清空单例与 worker 池，返回是否真的持有过引用。
+
+    锁序固定为 `_OCR_LIFECYCLE_LOCK → _OCR_INIT_LOCK → _RAPID_POOL_LOCK`
+    （调用方必须已持生命周期锁）。全仓只有这一个嵌套方向，故不会死锁。
+    """
+    global _rapid_engine, _RAPID_POOL
+    with _OCR_INIT_LOCK:
+        had_engine = _rapid_engine is not None
+        _rapid_engine = None
+    with _RAPID_POOL_LOCK:
+        had_pool = _RAPID_POOL is not None
+        _RAPID_POOL = None
+    return had_engine or had_pool
+
+
 def release_ocr_engine(*, force: bool = False) -> bool:
     """释放 OCR 模型（单例 + worker 池）；以少量下次冷启动换取更低的空闲内存。
 
-    返回是否真正释放。以下情况拒绝释放（force=True 可强制）：
-    - 仍有识别调用在进行（_OCR_ENGINE_ACTIVE > 0）；
-    - 看门狗超时后仍有线程持有引擎锁。
+    返回是否允许释放（True = 允许，引用已清空或本来就为空）。
+    "检查活动计数"与"清理引用"在同一把 `_OCR_LIFECYCLE_LOCK` 内完成，
+    因此与新任务的 `ocr_engine_session()` 严格互斥，不会释放正在被任务使用的实例。
+
+    拒绝释放（返回 False）的情况：
+    - 有 OCR 会话正在进行（`_OCR_ENGINE_ACTIVE > 0`）；
+    - 超时后仍有线程持有 `_OCR_ENGINE_LOCK`（串行路径的看门狗遗留）；
+    - `_OCR_ENGINE_STUCK` 已置位，即流水线里有 worker 的迟到调用尚未返回。
+
+    `force=True` 的并发语义：仅供明确的进程退出路径（`shutdown_ocr_runtime` /
+    atexit）使用。它跳过上述判定直接清引用，**不等待**在途调用结束；正在执行的
+    调用持有自己的实例引用，因此不会崩，但之后再次取引擎会重新加载模型。
+    正常任务收尾路径永远不要用 force。
     """
-    global _rapid_engine, _RAPID_POOL
-    # Python 无法强制终止正在运行的本地 OCR 线程。看门狗超时时保留同一引擎引用，
-    # 避免随后又加载第二份模型；原调用返回后，下一次正常收尾会负责释放。
-    if not force and (_OCR_ENGINE_ACTIVE > 0 or _OCR_ENGINE_LOCK.locked()):
-        return False
-    if _rapid_engine is None and _RAPID_POOL is None:
-        return True
-    _rapid_engine = None
-    _RAPID_POOL = None
-    try:
-        import gc
-        gc.collect()
-    except Exception:  # noqa: BLE001
-        pass
+    with _OCR_LIFECYCLE_LOCK:
+        if not force and (
+            _OCR_ENGINE_ACTIVE > 0
+            or _OCR_ENGINE_LOCK.locked()
+            or _OCR_ENGINE_STUCK.is_set()
+        ):
+            return False
+        had_references = _clear_engine_references()
+    if had_references:
+        try:
+            import gc
+            gc.collect()
+        except Exception:  # noqa: BLE001
+            pass
     return True
 
 
@@ -869,6 +914,52 @@ def _is_control_exception(exc: BaseException) -> bool:
     return isinstance(exc, OCRPageTimeout) or exc.__class__.__name__ == "TaskCancelled"
 
 
+def _settle_page_timeout_locked(page_no: int, worker_id: int, *,
+                                pending: set[int], in_flight: dict, failed_pages: dict,
+                                retired_workers: set[int], worker_stuck: set[int],
+                                workers: int) -> tuple[bool, bool]:
+    """（须已持 state_lock）原子结算一个超时页并退役其 worker。
+
+    在同一临界区内完成：再次确认 in_flight 记录仍属于该 worker → 删页 →
+    pending/failed_pages 结算 → 加入 retired_workers/worker_stuck → 置位
+    `_OCR_ENGINE_STUCK`。这是消除 TOCTOU 的关键：worker 的迟到调用只会在
+    本临界区之前（页已提交）或之后（页已结算且已退役）观察到一致状态，
+    不存在"页已结算但退役未登记 / STUCK 在迟到调用 clear 之后才 set"的中间态。
+
+    返回 (settled, no_usable_worker)：settled=False 表示该超时快照已过期
+    （页已自行提交/失败），调用方应跳过后续失败处理。
+    """
+    entry = in_flight.get(page_no)
+    if entry is None or entry[1] != worker_id:
+        return False, False  # 该页已自行提交/失败，超时快照过期
+    in_flight.pop(page_no, None)
+    if page_no not in pending:
+        return False, False  # 已结算（不应发生，防御）
+    pending.discard(page_no)
+    failed_pages[page_no] = "OCRPageTimeout"
+    retired_workers.add(worker_id)
+    worker_stuck.add(worker_id)
+    _OCR_ENGINE_STUCK.set()
+    return True, len(retired_workers) >= workers
+
+
+def _finish_worker_call_locked(page_no: int, worker_id: int, *,
+                               in_flight: dict, retired_workers: set[int],
+                               worker_stuck: set[int]) -> bool:
+    """（须已持 state_lock）worker 一次识别调用结束；返回该 worker 是否应退出线程。
+
+    与 `_settle_page_timeout_locked` 同处 state_lock 临界区，保证"迟到调用返回"
+    与"退役登记"串行化——worker 不会观察到"页已结算但退役未登记"的中间态。
+    `_OCR_ENGINE_STUCK` 只在**所有**卡死 worker 的调用都返回后才清除：
+    一个 worker 恢复不能替其他仍卡死的 worker 解除快速失败标记。
+    """
+    in_flight.pop(page_no, None)
+    worker_stuck.discard(worker_id)
+    if not worker_stuck:
+        _OCR_ENGINE_STUCK.clear()
+    return worker_id in retired_workers
+
+
 def _run_rapid_pipeline(p: Path, cache_dir: Path | None, missing_pages: set[int],
                         texts: list[str], total_pages: int, *,
                         on_progress=None, on_page_result=None, on_checkpoint=None,
@@ -882,7 +973,9 @@ def _run_rapid_pipeline(p: Path, cache_dir: Path | None, missing_pages: set[int]
     内存上界：OCR_RENDER_AHEAD 控制生产者超前页数，OCR_MAX_IMAGE_QUEUE 控制
     队列中未消费图像数量，两者都是有界的，不随总页数增长。
     超时语义：看门狗把连续 page_timeout_seconds 秒无结果的页标为失败（不写缓存），
-    只废弃对应 worker 实例；所有 worker 都卡死时才抛出 OCRPageTimeout（快速失败）。
+    并**真正退役**对应 worker——该 worker 的迟到调用返回/抛错后立即退出线程，
+    不再领取新页面，也不补建替代实例；其余健康 worker 继续处理剩余页面。
+    只有当所有 worker 都被退役（已无可用实例）时才抛出 OCRPageTimeout（快速失败）。
     归并：结果写入 texts[page_no-1]，按 1-based 页码对齐，与完成顺序无关。
     返回 {页码: 错误类别}。
     """
@@ -897,12 +990,18 @@ def _run_rapid_pipeline(p: Path, cache_dir: Path | None, missing_pages: set[int]
     image_queue: queue_mod.Queue = queue_mod.Queue(maxsize=max(1, int(queue_size)))
     errors: list[BaseException] = []
     errors_lock = threading.Lock()
-    state_lock = threading.Lock()          # 保护 pending / in_flight / failed_pages
+    # 唯一共享状态锁：pending / in_flight / failed_pages / retired_workers /
+    # worker_stuck，以及 `_OCR_ENGINE_STUCK` 的 set/clear 转换都在本锁临界区内完成。
+    # errors_lock 只在**未持有 state_lock** 时获取（见 `_record_error`），二者不嵌套，
+    # 因此不存在 state_lock ↔ 其他锁的 AB-BA 死锁。
+    state_lock = threading.Lock()
     pending: set[int] = set(missing_pages)
     in_flight: dict[int, tuple[float, int]] = {}
     failed_pages: dict[int, str] = {}
+    # worker 退役状态（由 state_lock 保护，与超时结算同一临界区，杜绝 TOCTOU）：
+    # retired_workers = 已被看门狗废弃、不再领页；worker_stuck = 已废弃且迟到调用未返回。
+    retired_workers: set[int] = set()
     worker_stuck: set[int] = set()
-    worker_stuck_lock = threading.Lock()
 
     def _record_error(exc: BaseException) -> None:
         with errors_lock:
@@ -984,6 +1083,8 @@ def _run_rapid_pipeline(p: Path, cache_dir: Path | None, missing_pages: set[int]
                     return
                 continue
             page_no, page_total, img = item
+            committed = False
+            should_retire = False
             with state_lock:
                 in_flight[page_no] = (time.monotonic(), worker_id)
             try:
@@ -997,9 +1098,11 @@ def _run_rapid_pipeline(p: Path, cache_dir: Path | None, missing_pages: set[int]
                     text = "\n".join(str(entry[1]) for entry in result)
                 else:
                     text = ""
+                # 以"从 in_flight 摘下自己"作为唯一提交点：与协调器的超时结算互斥。
+                # 已被看门狗结算的页，迟到的结果不得再写文本、版面或页缓存。
                 with state_lock:
-                    abandoned = page_no not in in_flight  # 已被看门狗按超时结算
-                if not abandoned:
+                    committed = in_flight.pop(page_no, None) is not None
+                if committed:
                     texts[page_no - 1] = text
                     _cache_rapid_layout(cache_dir, page_no, result or [],
                                         img.width, img.height)
@@ -1011,9 +1114,9 @@ def _run_rapid_pipeline(p: Path, cache_dir: Path | None, missing_pages: set[int]
                     _settle(page_no)
             except Exception as exc:  # noqa: BLE001
                 with state_lock:
-                    abandoned = page_no not in in_flight
-                if abandoned:
-                    pass  # 超时已被看门狗结算，迟到的结果直接丢弃，不写缓存
+                    claimed = in_flight.pop(page_no, None) is not None
+                if not (committed or claimed):
+                    pass  # 超时已由看门狗结算：迟到的错误同样丢弃，不写缓存
                 elif _is_control_exception(exc):
                     _record_error(exc)
                 elif continue_on_error:
@@ -1029,14 +1132,18 @@ def _run_rapid_pipeline(p: Path, cache_dir: Path | None, missing_pages: set[int]
                 img.close()
                 image_queue.task_done()
                 render_gate.release()
+                # 提交/放弃与退役判定在同一 state_lock 临界区内完成，与协调器的
+                # `_settle_page_timeout_locked` 串行化：迟到调用只会看到"已提交
+                # 成功"或"已结算且已退役"两种一致状态，不会观察到中间态。
+                # 被废弃的 worker 必须退出、不再领新页面，也不补建替代实例；
+                # 其引擎实例由空闲释放负责回收。
+                # 注意：退出判断放在 finally 之外执行，避免 return 吞掉在途异常。
                 with state_lock:
-                    in_flight.pop(page_no, None)
-                # 卡死的 worker 被看门狗废弃后，线程一旦真正结束就解除 STUCK
-                with worker_stuck_lock:
-                    if worker_id in worker_stuck:
-                        worker_stuck.discard(worker_id)
-                        if not worker_stuck:
-                            _OCR_ENGINE_STUCK.clear()
+                    should_retire = _finish_worker_call_locked(
+                        page_no, worker_id, in_flight=in_flight,
+                        retired_workers=retired_workers, worker_stuck=worker_stuck)
+            if should_retire:
+                return
 
     engines = get_rapid_pool(workers)
     producer_thread = threading.Thread(target=_producer, name="ocr-producer", daemon=True)
@@ -1066,21 +1173,21 @@ def _run_rapid_pipeline(p: Path, cache_dir: Path | None, missing_pages: set[int]
                 if now - started >= page_timeout_seconds
             ]
         for page_no, worker_id in expired:
+            # 结算 + 退役 + STUCK 置位在同一 state_lock 临界区内原子完成，
+            # 杜绝"页已结算但退役未登记 / STUCK 在迟到调用 clear 之后才 set"的 TOCTOU。
+            # `_report` / `_record_error` 在临界区外调用，不与 state_lock 嵌套。
             with state_lock:
-                if page_no not in pending:
-                    continue
-                in_flight.pop(page_no, None)
-                pending.discard(page_no)
-                failed_pages[page_no] = "OCRPageTimeout"
-            with worker_stuck_lock:
-                worker_stuck.add(worker_id)
-                all_stuck = len(worker_stuck) >= workers
-            # 与单页串行一致：超时引擎在线程真正结束前让后续任务快速失败
-            _OCR_ENGINE_STUCK.set()
+                settled, no_usable_worker = _settle_page_timeout_locked(
+                    page_no, worker_id, pending=pending, in_flight=in_flight,
+                    failed_pages=failed_pages, retired_workers=retired_workers,
+                    worker_stuck=worker_stuck, workers=workers)
+            if not settled:
+                continue  # 该页已自行提交/失败，超时快照过期
             if metrics is not None:
                 metrics.bump("failed")
             _report(page_no, total_pages, "", [], False)
-            if all_stuck or not continue_on_error:
+            # 没有可用 worker 时必须快速、明确地失败，而不是把剩余页面永久挂在 pending
+            if no_usable_worker or not continue_on_error:
                 _record_error(OCRPageTimeout(
                     f"PDF 第 {page_no} 页连续 {page_timeout_seconds} 秒没有 OCR 结果；"
                     f"已完成页面缓存会保留"
