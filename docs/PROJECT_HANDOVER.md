@@ -1,7 +1,20 @@
 # 项目交接文档 · Study assistant（学习助手）
 
 > **用途**：供新对话/新协作者快速接管项目。阅读本文件 + 启动项目即可继续开发。
-> **最后更新**：OCR 大文档稳定性与性能补齐（第一、二阶段 + 独立审查修正）与 216 页真实基准收口，默认保持 `OCR_WORKERS=1`；此前为审计 P1/P2 全量收口、API 链路提速（GZip + SQLite PRAGMA + SQL 下推）、阅读器窗口化渲染、写作工作台入口重组；当前版本 **v2.3.2**
+> **最后更新**：PDF 阅读器新增高亮/划线批注悬停卡，支持本人/AI 来源、重叠批注、无批注状态、边界定位与键盘/触屏降级；此前完成 OCR 大文档稳定性、性能与 216 页真实基准收口；当前版本 **v2.3.3**
+
+---
+
+## 2.3.3 开发快照（2026-09-13）
+
+本次为阅读器批注交互补丁，后端数据结构与 API 保持不变。
+
+- **悬停查看**：PDF 高亮和划线支持鼠标悬停显示批注卡；严格使用结构化 `origin` 区分“我的批注”和“AI 批注”，不从正文或批注字符串猜来源。
+- **内容规则**：无 note 时明确显示“仅高亮/仅划线”；同一 annotation 的多矩形与跨页分段去重；不同 annotation 重叠时全部展示。
+- **交互收口**：拖选保护、快速扫过竞态、离开命中区或整个阅读区、滚动、空白点击、`Esc`、删除后同步关闭均有回归保护。
+- **布局与降级**：卡片限制在正文滚动区、组件根节点与视口交集内；键盘 focus 和触屏点击可打开，来源标签不只依赖颜色。
+- **验收**：前端完整单元测试 79/79 通过，其中悬停专项 31 条；生产构建通过；候选构建已接入真实本地产品完成试用门禁。
+- **未纳入版本**：真实文献、数据库、页面级测试结果、浏览器缓存、`.workbuddy` 产物与本地试用构建备份。
 
 ---
 
@@ -529,7 +542,7 @@ GitHub 首页更新为当前四个核心工作区，特别说明研究报告的�
 
 ## 12. 开源发布状态
 
-- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布版本 v2.3.2）
+- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布版本 v2.3.3）
 - 许可证 MIT、PRIVACY.md、SECURITY.md、CHANGELOG.md、CONTRIBUTING.md、.gitattributes
 - CI（ci.yml）+ Release 自动打包（release.yml）
 - 分享给朋友：下载 Release 的 zip（含前端产物，不装 Node 也能用），或 git clone 后 `cd frontend && npm i && npm run build`
@@ -546,7 +559,7 @@ cd frontend && npm run build               # 改完前端构建（需 npm.cmd）
 
 # git 推送
 git push origin main
-git tag v2.3.2 && git push origin v2.3.2  # 触发 Release 自动打包
+git tag v2.3.3 && git push origin v2.3.3  # 触发 Release 自动打包
 
 # 关键文档
 docs/README.md  docs/产品文档.md  docs/PROJECT_HANDOVER.md
