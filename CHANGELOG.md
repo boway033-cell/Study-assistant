@@ -2,6 +2,32 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.3.2] - 2026-09-13
+
+补丁版本，范围仅限大文档 OCR 的稳定性、性能与发布元数据。
+
+### 修复（大文档 OCR 稳定性与并发正确性）
+
+- 页级任务调度补齐超时、取消与失败隔离：超时 worker **真正退役**——迟到调用返回或抛错即退出线程、不再领取新页、不补建实例；迟到结果不写文本、版面或页文本缓存。
+- 结算与退役**原子化**：原实现把「从 `in_flight` 删页并结算」与「把 worker 加入退役集合」拆在两个临界区，迟到 worker 可观察到「页已结算但退役未登记」的中间态而继续领页。现合并为单一临界区，删页、结算、退役与 `_OCR_ENGINE_STUCK.set()` 原子完成。
+- `_OCR_ENGINE_STUCK` 精确化：单个 worker 恢复不再误清其他仍卡死 worker 的标记，只有全部卡死 worker 的迟到调用返回后才解除。
+- 引擎生命周期竞态修复：会话进入与释放共用同一把生命周期锁，活动会话期间空闲定时器不得释放引擎，退出路径幂等。
+- OCR 进度单调化：并发上报以 `record.progress` 为下限，不再出现 UI 进度倒退。
+- 测试：新增超时退役、迟到结果丢弃、STUCK 精确语义、引擎生命周期与 OCR 进度单调的确定性用例（使用 `Barrier` / `Event`，不依赖随机 sleep）。
+
+### 优化（OCR 性能）
+
+- 第一阶段：任务级共享单 worker 执行器；引擎空闲延迟释放（默认 300s）；空白页检测写空缓存并跳过完整 OCR；分阶段性能指标；页缓存原子写。
+- 第二阶段：有限并发流水线（单生产者 + N worker + 协调器看门狗），独立引擎实例池、双内存上界、页级失败策略，结果按页码归并。
+- 默认配置：`OCR_WORKERS` 保持 1；2~4 属实验性配置，需自行基准确认后启用。
+
+### 基准与结论（216 页真实扫描件，2026-09-12）
+
+- 同一页面集合、DPI、空白页阈值与超时条件下串行实测：`OCR_WORKERS=1` 472.6s（27.4 页/分钟）；`=2` 570.3s（相对 1 为 0.83×）；`=3` 1019.6s（0.46×）。
+- 三轮 216 页识别文本逐页 SHA-256 完全一致，未发现多 worker 导致的正确性差异；无新增失败或超时。
+- 结论：当前 RapidOCR / ONNX Runtime 环境（ONNX 线程数参数不生效、单实例即打满 CPU）下多 worker 为负加速，**未达到 1.5× 提升目标，不启用多 worker**，默认保持 `OCR_WORKERS=1`。
+- 该基准未包含测试 PDF、页面级识别结果、缓存或 `.workbuddy` 产物；以上内容均未进入本版本。
+
 ## [Unreleased]
 
 ### 修复（高亮/划线批注渲染，2026-09-11）
@@ -11,8 +37,21 @@
 ### 优化（OCR 性能，2026-09-11）
 
 - 第一阶段（低风险）：任务级共享单 worker 执行器；OCR 引擎空闲延迟释放（默认 300s，`OCR_ENGINE_IDLE_SECONDS`）+ 退出清理；空白页检测写空缓存并跳过完整 OCR（`OCR_SKIP_BLANK_PAGES` / `OCR_BLANK_PAGE_THRESHOLD`）；分阶段性能指标（`OCR_METRICS_ENABLED`）；页缓存原子写。
-- 第二阶段（有限并发流水线）：`OCR_WORKERS=2` 单生产者 + N worker + 协调器看门狗；独立引擎实例池；`OCR_RENDER_AHEAD` / `OCR_MAX_IMAGE_QUEUE` 双内存上界；页级失败策略 `OCR_CONTINUE_ON_PAGE_ERROR`；结果按页码归并；`OCR_WORKERS=1` 串行回退。
+- 第二阶段（有限并发流水线）：`OCR_WORKERS`（默认 1 = 串行回退，2~4 实验性并发）单生产者 + N worker + 协调器看门狗；独立引擎实例池；`OCR_RENDER_AHEAD` / `OCR_MAX_IMAGE_QUEUE` 双内存上界；页级失败策略 `OCR_CONTINUE_ON_PAGE_ERROR`；结果按页码归并。
 - 修复第一阶段隐患：渲染图像所有权随 yield 转移（消费方负责 close）、全部命中缓存时不再加载模型、空闲定时器竞态加锁、指标计数加锁。
+
+### 修复（OCR 审查修正，2026-09-12）
+
+针对第一阶段/第二阶段实现的独立审查，定点修复并发与超时问题（不扩展功能）：
+
+- 超时 worker **真正退役**：被看门狗判超时后，迟到调用返回/抛错即退出线程、不再领新页、不补建实例；迟到结果不写文本/版面/页缓存；仅当所有 worker 都退役才快速抛 `OCRPageTimeout`。
+- 结算与退役**原子化（修复 TOCTOU）**：原实现把「从 in_flight 删页/结算」与「把 worker 加入 retired/worker_stuck」拆成两个临界区（`state_lock` 与 `worker_state_lock`），迟到 worker 可在两者之间观察到「页已结算但退役未登记」的中间态而继续领页，或先 clear STUCK 再被协调器 set 导致 STUCK 永久残留。现合并为单一 `state_lock`，抽出模块级 `_settle_page_timeout_locked` / `_finish_worker_call_locked`，删页、结算、退役、`_OCR_ENGINE_STUCK.set()` 在同一临界区内完成；`errors_lock` 只在未持 `state_lock` 时获取，无 AB-BA 死锁。
+- `_OCR_ENGINE_STUCK` 精确化：一个 worker 恢复不再误清其他仍卡死 worker 的标记，只有全部卡死 worker 的迟到调用返回后才解除。
+- 引擎生命周期竞态：`ocr_engine_session` 进入与 `release_ocr_engine` 判定/清理共用同一把生命周期锁；会话内非 force 拒绝释放；`force=True` 仅限退出路径；定时器 daemon、退出幂等。
+- OCR 进度单调化：`_OcrProgressReporter` 把计数、ETA 与进度写入原子化，以 `record.progress` 为下限，多 worker 乱序回调不再造成 UI 进度倒退。
+- 默认关闭未基准验证的双 worker：`OCR_WORKERS` 默认 2 → 1；2~4 仍为允许范围，标注实验性、需真实 100 页基准确认。
+- 退出等待说明修正：Python 无法强杀本地 OCR 线程，`shutdown(wait=False)` 不等于解释器退出永不等待（详见方案文档 §5.8）。
+- 验收记录如实：全量 `268 passed, 1 failed, 1 skipped`（唯一失败为 PPT 渲染的环境性 safe-delete 守卫，与 OCR 无关）；100 页真实扫描基准明确标记未完成。
 
 ### 修复（审计 P1 收尾与产品契约补齐，2026-09-11）
 

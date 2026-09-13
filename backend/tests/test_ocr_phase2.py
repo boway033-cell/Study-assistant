@@ -437,3 +437,292 @@ def test_workers_one_uses_serial_fallback_not_pipeline(cache_root, monkeypatch):
 
     assert called == []  # OCR_WORKERS=1 走串行路径，不碰流水线
     assert all(texts)
+
+
+# --------------------------------------------------------------------------- #
+# 5. 审查修正：超时 worker 退役 / STUCK 精确语义 / 生命周期竞态 / 进度单调
+# --------------------------------------------------------------------------- #
+def test_retired_worker_drops_late_result_and_stops_claiming(cache_root):
+    """超时 worker 必须真正退役：迟到结果不写文本/缓存，也不补建/重试该页。
+
+    行为按页号（marker）而非 worker 实例判定，故与线程调度无关、确定性可复现。
+    """
+    release_page1 = threading.Event()
+    pages_seen: list[int] = []
+
+    class GatedMarkerEngine:
+        def __init__(self):
+            self._lock = threading.Lock()
+
+        def __call__(self, image):
+            page_no = detect_page_marker(image)
+            with self._lock:
+                pages_seen.append(page_no)
+            if page_no == 1:
+                release_page1.wait(timeout=30.0)  # 第 1 页卡死，直到测试放行
+            rows = [[[[0, 0], [1, 0], [1, 1], [0, 1]], f"page-{page_no}", 0.93]]
+            return rows, []
+
+    pdf = build_pdf(cache_root / "retire.pdf", inked_pages={1, 2, 3, 4}, total=4,
+                    marker_offsets=True)
+    cache_dir = ocr._ocr_cache_dir(ocr._file_hash(pdf))
+
+    texts = run_ocr(pdf, cache_dir, GatedMarkerEngine(), workers=2,
+                    continue_on_error=True, page_numbers={1, 2, 3, 4},
+                    base_pages=["", "", "", ""], page_timeout_seconds=1, render_dpi=72)
+
+    # 超时页不写文本、不写缓存；其余页由健康 worker 完成
+    assert texts == ["", "page-2", "page-3", "page-4"]
+    assert not (cache_dir / "page_0001.txt").exists()
+    assert (cache_dir / "page_0002.txt").exists()
+    # 卡死 worker 的迟到调用尚未返回 → STUCK 仍置位（健康 worker 完成不解除它）
+    assert ocr._OCR_ENGINE_STUCK.is_set()
+    # 退役 worker 不补建、不重试：第 1 页只被识别一次
+    assert pages_seen.count(1) == 1
+
+    release_page1.set()  # 放行迟到调用
+    assert wait_until(lambda: not ocr._OCR_ENGINE_STUCK.is_set())
+    # 迟到结果仍不得写回（退役 worker 的提交被丢弃）
+    assert texts[0] == ""
+    assert not (cache_dir / "page_0001.txt").exists()
+
+
+def test_stuck_flag_clears_only_after_all_stuck_workers_return(cache_root):
+    """一个卡死 worker 恢复不能误清其他仍卡住的 worker 的 STUCK 标记。"""
+    gates = [threading.Event(), threading.Event()]
+    made = []
+
+    class GatedEngine:
+        def __init__(self, idx):
+            self.idx = idx
+            self.done = threading.Event()  # 该实例的识别调用真正返回
+
+        def __call__(self, image):
+            gates[self.idx].wait(timeout=30.0)  # 两个实例各自卡死
+            rows = [[[[0, 0], [1, 0], [1, 1], [0, 1]], f"e{self.idx}", 0.93]]
+            self.done.set()
+            return rows, []
+
+    def factory():
+        engine = GatedEngine(len(made))
+        made.append(engine)
+        return engine
+
+    pdf = build_pdf(cache_root / "stuck-all-gated.pdf", inked_pages={1, 2, 3}, total=3)
+    cache_dir = ocr._ocr_cache_dir(ocr._file_hash(pdf))
+
+    with pytest.raises(ocr.OCRPageTimeout):
+        run_ocr(pdf, cache_dir, None, factory=factory, workers=2,
+                continue_on_error=True, page_numbers={1, 2, 3},
+                base_pages=["", "", ""], page_timeout_seconds=1, render_dpi=72)
+
+    assert len(made) == 2
+    assert ocr._OCR_ENGINE_STUCK.is_set()
+
+    gates[0].set()                        # 仅一个卡死 worker 恢复
+    assert made[0].done.wait(timeout=5)    # 确定性等待其迟到调用返回（无 sleep）
+    assert ocr._OCR_ENGINE_STUCK.is_set()  # 另一个仍卡死，标记不得清除
+
+    gates[1].set()
+    assert wait_until(lambda: not ocr._OCR_ENGINE_STUCK.is_set())
+
+
+def test_release_ocr_engine_refuses_during_active_session(cache_root, monkeypatch):
+    """引擎生命周期竞态：会话内（ACTIVE>0）非 force 释放必须拒绝并保留实例。"""
+    made = []
+
+    def factory():
+        engine = FakeEngine()
+        made.append(engine)
+        return engine
+
+    monkeypatch.setattr(ocr, "_create_rapid_engine", factory)
+
+    with ocr.ocr_engine_session():
+        engine = ocr._get_rapid_engine()
+        assert ocr._rapid_engine is engine
+        # 会话内释放（非 force）→ 拒绝，实例仍在
+        assert ocr.release_ocr_engine() is False
+        assert ocr._rapid_engine is engine
+
+    # 会话结束后可释放
+    assert ocr.release_ocr_engine() is True
+    assert ocr._rapid_engine is None
+    assert len(made) == 1  # 全程只冷加载一次，没有因竞态重复加载
+
+
+def test_ocr_progress_reporter_is_monotonic_under_concurrency(monkeypatch):
+    """多 worker 乱序回调下，OCR 进度写入必须单调不回退（审查修正 #2）。"""
+    from backend.app.worker import import_task
+    from backend.app.worker.tasks import TaskRecord
+
+    record = TaskRecord(id="progress-test")
+    record.progress = 0.15
+    written: list[float] = []
+
+    def fake_update(r, progress, stage="", message="", *, force=False):
+        written.append(progress)
+        r.progress = progress
+
+    monkeypatch.setattr(import_task, "update_progress", fake_update)
+    reporter = import_task._OcrProgressReporter(record, weak_total=40)
+
+    def worker(offset):
+        for i in range(20):
+            reporter.progress(offset + i, 40, cached=(i % 3 == 0))
+
+    threads = [threading.Thread(target=worker, args=(o,)) for o in (0, 20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert written == sorted(written)  # 写入值单调非降，无 UI 倒退
+    assert record.progress == written[-1]
+    assert 0.15 <= record.progress <= 0.30
+
+
+# --------------------------------------------------------------------------- #
+# 6. 审查修正 #1：超时结算与退役的原子性（TOCTOU）+ 生命周期确定性测试
+# --------------------------------------------------------------------------- #
+def test_finish_worker_call_never_observes_settled_without_retired():
+    """结算与退役在单把锁下原子完成：并发 finish 看不到"已结算但未退役"的撕裂态。
+
+    用 Barrier 让 finish 在 settle 持锁期间就绪并阻塞在同一把锁上；二者共用
+    state_lock 时，finish 只能在 settle 的整个临界区（删页+结算+退役+STUCK）完成后
+    执行，观察到的是"已结算且已退役"的一致状态。旧实现把结算与退役拆成两把锁，
+    本断言会捕获那种中间态。
+    """
+    lock = threading.Lock()
+    pending = {1, 2}
+    in_flight = {1: (0.0, 0)}
+    failed_pages: dict[int, str] = {}
+    retired: set[int] = set()
+    stuck: set[int] = set()
+    ocr._OCR_ENGINE_STUCK.clear()
+
+    observed: dict = {}
+    barrier = threading.Barrier(2)
+
+    def finish():
+        barrier.wait()  # 与 settle 临界区并发开始
+        with lock:
+            observed["settled"] = (1 not in in_flight) and (1 not in pending)
+            observed["retired"] = 0 in retired
+            observed["should_retire"] = ocr._finish_worker_call_locked(
+                1, 0, in_flight=in_flight, retired_workers=retired, worker_stuck=stuck)
+
+    with lock:
+        t = threading.Thread(target=finish)
+        t.start()
+        barrier.wait()  # finish 已就绪，正阻塞在 lock 上
+        settled, no_usable = ocr._settle_page_timeout_locked(
+            1, 0, pending=pending, in_flight=in_flight, failed_pages=failed_pages,
+            retired_workers=retired, worker_stuck=stuck, workers=2)
+        assert settled is True
+        assert no_usable is False
+        assert 0 in retired and 0 in stuck
+        assert ocr._OCR_ENGINE_STUCK.is_set()
+    t.join()
+
+    # 一致状态：已结算 ⇒ 已退役，绝无"已结算但未退役"
+    assert observed["settled"] is True
+    assert observed["retired"] is True
+    assert observed["should_retire"] is True
+    assert not stuck                      # 唯一卡死 worker 的调用已返回
+    assert not ocr._OCR_ENGINE_STUCK.is_set()  # STUCK 不永久残留
+
+
+def test_settle_page_timeout_rechecks_stale_snapshot():
+    """过期超时快照不得误结算/误退役：页已自行提交时返回 settled=False。"""
+    pending = {1, 2}
+    in_flight: dict = {}  # 页已被 worker 自行提交（in_flight 无此页）
+    failed_pages: dict = {}
+    retired: set = set()
+    stuck: set = set()
+    ocr._OCR_ENGINE_STUCK.clear()
+
+    settled, no_usable = ocr._settle_page_timeout_locked(
+        1, 0, pending=pending, in_flight=in_flight, failed_pages=failed_pages,
+        retired_workers=retired, worker_stuck=stuck, workers=2)
+    assert settled is False
+    assert no_usable is False
+    assert 0 not in retired
+    assert 1 in pending
+    assert not ocr._OCR_ENGINE_STUCK.is_set()
+
+
+def test_idle_timer_does_not_release_engine_during_active_session(monkeypatch):
+    """活动 session 期间空闲定时器到期（_on_idle_timeout）不能释放引擎。"""
+    made = []
+
+    def factory():
+        engine = FakeEngine()
+        made.append(engine)
+        return engine
+
+    monkeypatch.setattr(ocr, "_create_rapid_engine", factory)
+
+    with ocr.ocr_engine_session():
+        engine = ocr._get_rapid_engine()
+        assert ocr._rapid_engine is engine
+        # 直接触发空闲定时器到点：会话内必须拒绝释放，实例保留
+        ocr._on_idle_timeout()
+        assert ocr._rapid_engine is engine
+        assert ocr._OCR_ENGINE_ACTIVE >= 1
+        # 重试一次仍不得释放
+        ocr._on_idle_timeout()
+        assert ocr._rapid_engine is engine
+
+    # 会话结束后可释放，全程只冷加载一次
+    assert ocr.release_ocr_engine() is True
+    assert ocr._rapid_engine is None
+    assert len(made) == 1
+
+
+def test_get_rapid_pool_concurrent_release_no_loss_or_duplicate(monkeypatch):
+    """会话内并发 release 与 get_rapid_pool：不丢失、不重复加载实例。"""
+    made = []
+    make_lock = threading.Lock()
+
+    def factory():
+        with make_lock:
+            engine = FakeEngine()
+            made.append(engine)
+            return engine
+
+    monkeypatch.setattr(ocr, "_create_rapid_engine", factory)
+
+    with ocr.ocr_engine_session():
+        pool = ocr.get_rapid_pool(2)
+        assert len(pool) == 2
+        outcomes: list[tuple[str, bool]] = []
+
+        def worker():
+            outcomes.append(("release", ocr.release_ocr_engine()))
+            outcomes.append(("pool", len(ocr.get_rapid_pool(2)) == 2))
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # 会话内所有 release 都被拒绝；池始终有 2 个实例
+        assert all(ok is False for kind, ok in outcomes if kind == "release")
+        assert all(ok for kind, ok in outcomes if kind == "pool")
+    assert len(made) == 2  # 全程只加载 2 个实例，无重复
+
+
+def test_shutdown_ocr_runtime_is_idempotent(monkeypatch):
+    """shutdown_ocr_runtime / release 多次调用保持幂等，不抛异常。"""
+    monkeypatch.setattr(ocr, "_create_rapid_engine", lambda: FakeEngine())
+    ocr.get_rapid_pool(2)  # 预加载一个池
+
+    for _ in range(3):
+        ocr.shutdown_ocr_runtime()  # 重复调用幂等
+
+    assert ocr._RAPID_POOL is None
+    assert ocr._rapid_engine is None
+    assert ocr.release_ocr_engine() is True          # 已空，返回允许
+    assert ocr.release_ocr_engine(force=True) is True  # force 幂等

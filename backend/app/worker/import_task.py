@@ -52,6 +52,60 @@ def save_upload(file_name: str, content: bytes) -> tuple[Path, str]:
     return dest, file_hash
 
 
+class _OcrProgressReporter:
+    """OCR 页级进度上报：计数、ETA 与进度写入必须在同一把锁内完成。
+
+    第二阶段起 `on_progress` 可能来自多个 OCR worker 线程（生产者的缓存命中页
+    也会上报），若"锁内计数、锁外写进度"，先取到序号的回调可能后写入，
+    造成 UI 进度倒退。这里把三件事原子化，并把写入值以 `record.progress`
+    为下限：与 checkpoint 回调（写回当前进度）并发时同样不会回退。
+    """
+
+    def __init__(self, record: TaskRecord, weak_total: int) -> None:
+        self._record = record
+        self._weak_total = max(1, int(weak_total))
+        self._started_at = time.monotonic()
+        self._lock = threading.Lock()
+        self._completed = 0
+        self._fresh_completed = 0
+
+    @property
+    def completed(self) -> int:
+        with self._lock:
+            return self._completed
+
+    def progress(self, page_no: int, total: int, cached: bool) -> None:
+        """一页 OCR 结束（含命中缓存与空白页），进度 0.15 → 0.30。"""
+        with self._lock:
+            self._completed += 1
+            if not cached:
+                self._fresh_completed += 1
+            done, fresh = self._completed, self._fresh_completed
+            frac = 0.15 + 0.15 * (done / self._weak_total)
+            tag = "（命中缓存）" if cached else ""
+            eta = ""
+            if fresh:
+                per_page = (time.monotonic() - self._started_at) / fresh
+                remaining_seconds = int(per_page * max(0, self._weak_total - done))
+                if remaining_seconds >= 60:
+                    eta = f" · 预计剩余约 {max(1, round(remaining_seconds / 60))} 分钟"
+            target = max(self._record.progress, min(frac, 0.30))
+            update_progress(
+                self._record, target, "ocr",
+                f"OCR {done}/{self._weak_total} · PDF 第 {page_no} 页{tag}{eta}",
+            )
+
+    def checkpoint(self, page_no: int, phase: str) -> None:
+        """页内检查点：同时是协作式取消检查（update_progress 在此抛 TaskCancelled）。"""
+        with self._lock:
+            label = "检查页缓存" if phase == "cache" else "识别中"
+            update_progress(
+                self._record, self._record.progress, "ocr",
+                f"OCR 第 {page_no} 页：{label}"
+                f"（单页 {settings.ocr_page_timeout_seconds} 秒无结果将停止）",
+            )
+
+
 async def run_import(record: TaskRecord, book_id: int) -> dict:
     """执行完整导入流水线。book 需已创建且 status=pending。"""
     db = SessionLocal()
@@ -90,37 +144,10 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                 ocr_used = True
                 update_progress(record, 0.15, "ocr", "检测到弱文本页，正在按页 OCR...")
                 # OCR 逐页回调：页级进度细化（0.15 → 0.30），支持断点续跑。
-                completed = 0
+                # 并发回调的计数与写入在 reporter 内原子完成，进度不会倒退。
                 weak_total = len(weak_pages)
-                fresh_completed = 0
+                ocr_reporter = _OcrProgressReporter(record, weak_total)
                 ocr_summary: dict | None = None
-                ocr_started_at = time.monotonic()
-                # 第二阶段：页进度回调可能来自多个 OCR worker 线程，计数必须原子化
-                ocr_progress_lock = threading.Lock()
-
-                def _ocr_progress(page_no: int, total: int, cached: bool) -> None:
-                    nonlocal completed, fresh_completed
-                    with ocr_progress_lock:
-                        completed += 1
-                        if not cached:
-                            fresh_completed += 1
-                        done, fresh = completed, fresh_completed
-                    frac = 0.15 + 0.15 * (done / max(weak_total, 1))
-                    tag = "（命中缓存）" if cached else ""
-                    eta = ""
-                    if fresh:
-                        per_page = (time.monotonic() - ocr_started_at) / fresh
-                        remaining_seconds = int(per_page * max(0, weak_total - done))
-                        if remaining_seconds >= 60:
-                            eta = f" · 预计剩余约 {max(1, round(remaining_seconds / 60))} 分钟"
-                    update_progress(record, min(frac, 0.30), "ocr",
-                                    f"OCR {done}/{weak_total} · PDF 第 {page_no} 页{tag}{eta}")
-
-                def _ocr_checkpoint(page_no: int, phase: str) -> None:
-                    # update_progress is also the cooperative cancellation checkpoint.
-                    label = "检查页缓存" if phase == "cache" else "识别中"
-                    update_progress(record, record.progress, "ocr",
-                                    f"OCR 第 {page_no} 页：{label}（单页 {settings.ocr_page_timeout_seconds} 秒无结果将停止）")
 
                 def _ocr_metrics(summary: dict) -> None:
                     """接收 OCR 结构化性能摘要（只有数值，正文/路径一律不落日志）。"""
@@ -136,10 +163,10 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                     result.pages = await asyncio.to_thread(
                         ocr_pdf,
                         file_path,
-                        on_progress=_ocr_progress,
+                        on_progress=ocr_reporter.progress,
                         page_numbers=weak_pages,
                         base_pages=result.pages,
-                        on_checkpoint=_ocr_checkpoint,
+                        on_checkpoint=ocr_reporter.checkpoint,
                         page_timeout_seconds=settings.ocr_page_timeout_seconds,
                         on_metrics=_ocr_metrics,
                     )
@@ -153,7 +180,7 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
                         failed_note = f"，失败 {pages_summary['failed']} 页（不写缓存，重跑会自动补识别）"
                     update_progress(
                         record, record.progress, "ocr",
-                        f"OCR 完成 {completed}/{weak_total} 页 · 平均 "
+                        f"OCR 完成 {ocr_reporter.completed}/{weak_total} 页 · 平均 "
                         f"{ocr_summary.get('avg_seconds_per_page', 0)} 秒/页"
                         f"（命中缓存 {pages_summary.get('cached', 0)} 页，"
                         f"空白跳过 {pages_summary.get('blank', 0)} 页{failed_note}）",

@@ -1,8 +1,8 @@
 # 大文档 OCR 性能优化开发方案
 
-更新日期：2026-09-11  
+更新日期：2026-09-13
 适用项目：Study Assistant  
-状态：第一、二阶段已完成（含真实测试结果，见 §4.5、§5.5）  
+状态：第一、二阶段已完成；216 页真实性能基准已验收（见 §5.4、§9.1）
 目标环境：Windows、本地 CPU OCR、RapidOCR + ONNX Runtime
 
 ## 1. 背景
@@ -17,7 +17,7 @@
 - 单页识别具有超时看门狗；
 - OCR、交互式 AI 和其他重型任务使用隔离队列。
 
-但大扫描文档仍然非常缓慢。当前运行环境有 24 个逻辑 CPU 核心，实际 OCR 后端为 RapidOCR + ONNX Runtime CPU，没有 GPU 执行器。OCR 页面仍然严格串行处理，因此总耗时基本随待识别页数线性增长。
+大扫描文档仍然耗时较长。当前运行环境有 24 个逻辑 CPU 核心，实际 OCR 后端为 RapidOCR + ONNX Runtime CPU，没有 GPU 执行器。系统已实现可选的有限并发流水线，但真实基准确认当前后端的单实例已使用大部分 CPU，多实例会争抢资源；因此默认仍采用单 worker，耗时基本随待识别页数线性增长。
 
 ## 2. 当前瓶颈
 
@@ -42,7 +42,7 @@
 ## 3. 设计原则
 
 - 不直接按 CPU 核心数创建 OCR 实例；RapidOCR 和 ONNX Runtime 自身也会使用多线程。
-- 默认从 2 个 OCR 工作实例开始，通过基准测试决定是否增加到 3 个。
+- 默认使用 1 个 OCR 工作实例；2~4 仅保留用于线程控制或推理后端变化后的诊断复测。
 - 页面图像队列必须有上限，禁止把整本文档渲染到内存。
 - 每完成一页立即写入缓存，任何失败都不能破坏已经完成的页面。
 - OCR 结果可乱序产生，但最终文本、结构数据和进度必须按页码归并。
@@ -53,7 +53,7 @@
 ## 4. 第一阶段：低风险优化
 
 预计工期：0.5～1 个开发日。  
-**实施状态：已完成（2026-09-11），第二～四阶段未开始。**
+**实施状态：已完成（2026-09-11）；第二阶段也已完成，第三、四阶段未开始。**
 
 ### 4.1 修改范围
 
@@ -150,8 +150,10 @@ safe-delete 会拦截 pytest 清理旧 basetemp 子目录的动作（trash 报 "
 
 - 超时时被放弃的本地 OCR 线程无法真正终止（Python 限制）；保留原有
   `_OCR_ENGINE_STUCK` 快速失败语义，共享执行器在被卡线程结束前先阻塞后续提交。
-- 共享执行器在进程退出时最多等待当前页收尾（ThreadPoolExecutor 线程非 daemon）；
-  已注册 atexit + 应用 lifespan 统一 `shutdown_ocr_runtime()`，最坏阻塞一页时长。
+- 进程退出**无法保证立即返回**：共享执行器的工作线程是 ThreadPoolExecutor 的非 daemon
+  线程，解释器退出时 concurrent.futures 注册的 `_python_exit` 仍会 join 它，`shutdown(wait=False)`
+  只停止调用方的等待、不能终止在途推理。因此"最坏只等一页超时时长"并非可保证的上界
+  （真卡死的引擎可能让退出延迟更久）。详细说明见 §5.8。
 - 空白页检测只跑在 RapidOCR 路径；tesseract / paddleocr 回退路径未启用空白跳过。
 - 性能摘要只做结构化回传与日志，未做数据库迁移，也没有在 UI 展示。
 
@@ -176,7 +178,7 @@ OCR 工作实例 2 ─┘
 
 ### 5.2 开发内容
 
-1. 增加 `OCR_WORKERS`，默认值为 2。
+1. 增加 `OCR_WORKERS`，默认值为 1（安全档）；2~4 保留为诊断/实验选项，真实基准已确认当前环境不应默认开启。
 2. 每个工作线程持有独立 RapidOCR 实例，不共享非线程安全的推理状态。
 3. 移除覆盖所有页面的单例 `_OCR_ENGINE_LOCK`，保留实例级生命周期控制。
 4. 页面渲染使用单独生产者，提前渲染数量受 `OCR_RENDER_AHEAD` 控制。
@@ -199,13 +201,18 @@ OCR 工作实例 2 ─┘
 实现要点与差异说明：
 
 - 流水线为 `_run_rapid_pipeline()`：单生产者线程 + N 个 daemon worker 线程 +
-  协调器看门狗。`OCR_WORKERS` 经 `_env_int` 钳位到 [1, 4]，1 时完全不进入流水线
-  （走第一阶段 `_ocr_rapid_serial` 串行路径，有专项用例锁定）。
+  协调器看门狗。`OCR_WORKERS` 经 `_env_int` 钳位到 [1, 4]，**默认 1** 时完全不进入
+  流水线（走第一阶段 `_ocr_rapid_serial` 串行路径，有专项用例锁定）。
+  2~4 为实验性并发档。2026-09-12 的 216 页真实基准确认当前环境下多 worker
+  会造成负加速，因此只保留给后续更换推理后端或线程控制生效后的诊断复测。
 - 引擎实例池 `get_rapid_pool(workers)` 跨任务复用，与第一阶段空闲延迟释放共用
   同一生命周期（`ocr_engine_session` 期间禁止释放；`release_ocr_engine` 同时清池）。
-- 页级超时由协调器看门狗实现：超时页记 `OCRPageTimeout` 失败、不写缓存、废弃对应
-  worker 实例（不补建，避免绕过卡死）；全部 worker 卡死时抛出 `OCRPageTimeout`，
-  语义与串行路径一致。卡死线程真正结束后解除 `_OCR_ENGINE_STUCK`。
+- 页级超时由协调器看门狗实现：超时页记 `OCRPageTimeout` 失败、不写缓存、**真正退役**
+  对应 worker——该 worker 的迟到调用返回/抛错后立即退出线程，不再领取新页，也不补建
+  替代实例（避免绕过卡死）；迟到的结果/异常同样丢弃，不写文本、版面或页缓存。
+  只有当所有 worker 都被退役（已无可用实例）时抛出 `OCRPageTimeout`，语义与串行路径
+  一致。`_OCR_ENGINE_STUCK` 精确反映"仍有卡死 worker 的迟到调用未返回"：仅当所有卡死
+  worker 的调用都返回后才清除，一个 worker 恢复不会误清其他仍卡住的标记。
 - 乱序归并：worker 只写 `texts[page_no-1]`，与完成顺序无关
   （用例：第 1 页延迟 0.3s、其余 0.01s，结果仍按页码对齐）。
 - 取消协作：checkpoint 异常/回调内 TaskCancelled 经错误通道汇总，停止领页，
@@ -225,7 +232,8 @@ OCR 工作实例 2 ─┘
 ### 5.3 新增配置
 
 ```env
-OCR_WORKERS=2
+# 默认 1（安全档）。真实基准显示 2~4 会产生 CPU 争抢和负加速，请勿默认开启。
+OCR_WORKERS=1
 OCR_RENDER_AHEAD=3
 OCR_MAX_IMAGE_QUEUE=4
 OCR_ONNX_INTRA_THREADS=6
@@ -237,8 +245,8 @@ OCR_CONTINUE_ON_PAGE_ERROR=true
 
 ### 5.4 验收标准
 
-- 100 页测试文档完成 1、2、3 worker 基准测试；
-- 默认双 worker 相对新单 worker 的目标提升不低于 1.5 倍；
+- 使用 100 页以上真实文档完成 1、2、3 worker 基准测试；
+- 双 worker 相对新单 worker 的目标提升不低于 1.5 倍；未达到时保持单 worker 默认值；
 - 实际提升必须以基准结果为准，不在产品界面承诺固定倍数；
 - 峰值内存受图像队列上限约束，不随总页数持续增长；
 - OCR 页文本、坐标数据和原 PDF 页码完全对应；
@@ -254,26 +262,38 @@ OCR_CONTINUE_ON_PAGE_ERROR=true
 | 峰值内存有界 | ✅ 通过 | `test_pipeline_image_queue_is_bounded`（队列容量=配置）+ RENDER_AHEAD 信号量 |
 | 取消收尾 | ✅ 通过 | `test_cancellation_stops_pipeline_and_keeps_completed_cache` |
 | 超时不锁死引擎 | ✅ 通过 | `test_timeout_page_fails_but_others_complete`（其余页完成、stuck 线程结束后解除标记）、`test_all_workers_stuck_raises_timeout_fast`（全卡快速失败） |
+| 超时 worker 真正退役 | ✅ 通过 | `test_retired_worker_drops_late_result_and_stops_claiming`（迟到结果不写文本/缓存、不重试该页） |
+| STUCK 精确语义 | ✅ 通过 | `test_stuck_flag_clears_only_after_all_stuck_workers_return`（单 worker 恢复不清其他卡死标记） |
+| 结算与退役原子性（TOCTOU） | ✅ 通过 | `test_finish_worker_call_never_observes_settled_without_retired`（Barrier 强制并发，finish 绝不见"已结算未退役"）、`test_settle_page_timeout_rechecks_stale_snapshot`（过期快照不误结算） |
+| 引擎生命周期竞态 | ✅ 通过 | `test_release_ocr_engine_refuses_during_active_session`、`test_idle_timer_does_not_release_engine_during_active_session`（会话内定时器到期不释放） |
+| 池无丢失/无重复加载 | ✅ 通过 | `test_get_rapid_pool_concurrent_release_no_loss_or_duplicate`（会话内并发 release 全拒绝、只加载 2 实例） |
+| 退出幂等 | ✅ 通过 | `test_shutdown_ocr_runtime_is_idempotent`（shutdown/release 多次调用无副作用） |
+| OCR 进度单调不回退 | ✅ 通过 | `test_ocr_progress_reporter_is_monotonic_under_concurrency`（多线程乱序写入值单调非降） |
 | 重试跳过成功页 | ✅ 通过 | 失败页不写缓存：`test_page_error_continues_when_enabled`；续跑用例沿用第一阶段 |
-| 1/2/3 worker 基准与 1.5 倍提升 | ⏳ 未做 | 需要 100 页以上真实扫描文档与耗时测量；当前仅验证了双 worker 并发事实（`test_pipeline_workers_run_concurrently`，max_concurrency=2）。基准测试留待拿到不含隐私的扫描样本后按 §9 执行。 |
+| 1/2/3 worker 真实基准 | ✅ 完成 | 216 页、120 DPI、零缓存命中的 RapidOCR 实测：1/2/3 worker 分别为 472.64/570.26/1019.59 s；输出逐页一致、均无失败或超时，见 §9.1。 |
+| 双 worker 1.5 倍提升目标 | ❌ 未达到 | workers=2 相对 workers=1 为 0.829 倍（慢 20.7%）；workers=3 为 0.464 倍（慢 115.7%）。保持默认 `OCR_WORKERS=1`。 |
 
-### 5.5 真实测试结果（2026-09-11，本机）
+### 5.5 真实测试结果（2026-09-12 审查修正后，本机）
 
 | 测试范围 | 结果 |
 | --- | --- |
-| 第一阶段专项 `test_ocr_phase1.py` | 24 passed |
-| 第二阶段专项 `test_ocr_phase2.py` | 15 passed |
-| 两阶段合计 | 39 passed（约 21 s） |
-| 后端全量（全新 basetemp） | 268 passed, 1 failed, 1 skipped（114 s） |
+| 第一阶段专项 `test_ocr_phase1.py` | 24 passed（约 7 s） |
+| 第二阶段专项 `test_ocr_phase2.py` | 24 passed（约 26 s，含原子性/生命周期确定性用例） |
+| OCR 相关既有回归（arch / lightweight / long-doc / reliability） | 45 passed |
+| 后端全量（全新 basetemp） | 280 passed, 1 skipped（约 72 s） |
 
-全量中唯一失败 `test_literature_workbench.py::test_real_powerpoint_render_when_available`
-为环境性失败：该 PPT 渲染测试在全量长会话中触发了沙箱 safe-delete 的"单轮累计删除
->50 文件"守卫（自行清理 372 个渲染临时文件）；单独运行该文件 19 passed / 1 skipped
-全部通过，与 OCR 改动无关。
+说明：commit `147605a` 当时的记录为「268 passed, 1 failed, 1 skipped」——唯一失败
+`test_literature_workbench.py::test_real_powerpoint_render_when_available` 为环境性失败：
+该 PPT 渲染测试在全量长会话中触发沙箱 safe-delete 的"单轮累计删除 >50 文件"守卫
+（自行清理 372 个渲染临时文件），与 OCR 改动无关；单独运行该文件全部通过。本次修正后
+的全量在全新 basetemp 下为 280 passed / 1 skipped，PPT 测试未再触发该守卫。
+2026-09-12 又完成了 216 页真实文档的 1/2/3 worker 基准；基准没有修改产品代码或正式
+配置，结论为当前环境继续保持 `OCR_WORKERS=1`，详见 §9.1。
 
 ### 5.6 第二阶段已知限制
 
-- 多 worker 的真实吞吐提升未经基准测试确认（缺 100 页以上可用扫描样本）。
+- 216 页真实基准已确认当前环境的多 worker 不会提升吞吐：workers=2/3 均比 workers=1
+  更慢并占用更多内存。在 ONNX 内部线程限制真正生效或推理后端变化前，不建议开启。
 - 当前安装的 `rapidocr_onnxruntime` 不支持 intra/inter 线程数下发，配置暂为
   best-effort no-op；CPU 争抢仅靠 worker 数 ≤4 与 onnxruntime 默认行为兜底。
 - 超时废弃的 worker 线程不可强杀（Python 限制），线程已 daemon 化，不阻塞进程退出；
@@ -281,6 +301,23 @@ OCR_CONTINUE_ON_PAGE_ERROR=true
 - tesseract / paddleocr 回退路径仍为串行单实例（第二阶段只覆盖 RapidOCR 路径）。
 - 失败页只在指标与进度消息中体现（"失败 N 页，重跑会自动补识别"），未做任务中心
   结构化展示（属第四阶段范围）。
+
+### 5.8 退出等待语义（准确说明）
+
+Python **无法强制终止本地 OCR 线程**——`threading` 没有 kill API，`future.cancel()` 只能
+取消尚未开始的任务，对已在执行的推理无效。因此：
+
+- 超时（`page_timeout_seconds`）停止的只是**调用方的等待**，识别线程仍在后台跑，
+  由 `_OCR_ENGINE_STUCK` 让后续提交快速失败，避免再空等一整轮。
+- 流水线的 worker 线程是 daemon 线程，进程退出时不会 join、不会阻塞；
+  但**共享执行器**（串行路径 `get_ocr_executor()`）的工作线程是非 daemon 的
+  ThreadPoolExecutor 线程。concurrent.futures 在解释器退出时注册的 `_python_exit`
+  仍会 join 它们，`shutdown(wait=False)` 只停止当前调用方的等待、不能终止在途推理。
+- 因此 `shutdown_ocr_runtime()` 与 atexit/lifespan 清理**不保证**"立即退出"或
+  "最坏只等一页超时时长"：若某次推理真正卡死（而非慢），退出可能被该线程无限期拖住。
+  可接受的上界是"在途推理自然返回或彻底失败"，而非任何固定时长。
+- 退出路径（`force=True`）只清引擎引用、不等待在途调用：正在执行的调用持有自己的
+  实例引用不会崩，之后再次取引擎会重新加载模型。
 
 ## 6. 第三阶段：自适应识别质量
 
@@ -412,7 +449,8 @@ OCR_MIN_VALID_CHARS=20
 
 ## 8. 推荐初始参数
 
-完成第二阶段后，24 逻辑核心的当前机器先使用以下保守配置：
+完成第二阶段后，24 逻辑核心的当前机器先使用以下保守配置（`OCR_WORKERS=1` 为安全默认，
+2~4 为实验性并发，需以 §9 的真实基准确认收益后再开启）：
 
 ```env
 OCR_PAGE_THRESHOLD=30
@@ -421,7 +459,7 @@ OCR_RENDER_DPI=120
 OCR_LARGE_DOCUMENT_DPI=96
 OCR_USE_ANGLE_CLS=false
 
-OCR_WORKERS=2
+OCR_WORKERS=1
 OCR_RENDER_AHEAD=3
 OCR_MAX_IMAGE_QUEUE=4
 OCR_ONNX_INTRA_THREADS=6
@@ -432,9 +470,46 @@ OCR_SKIP_BLANK_PAGES=true
 
 不能直接把 `OCR_WORKERS` 设置成 12 或 24。RapidOCR 推理实例内部也会使用多线程，过高并发可能导致线程争抢、内存增长和吞吐量下降。
 
-## 9. 基准测试方案
+## 9. 真实基准结果与后续复测方案
 
-选择不含隐私、允许用于测试的一份典型中文扫描 PDF，建议 100 页以上。测试前记录文档特征：
+### 9.1 已完成实测（2026-09-12）
+
+在本机使用一份 216 页、7,040,604 bytes、未加密的中文混合文本层 PDF，强制对全部
+页面执行 OCR。三种配置分别在独立 Python 进程和全新临时 `DATA_DIR` 中串行运行，保持
+RapidOCR 后端、120 DPI、180 秒页超时、0.008 空白阈值和相同页面集合不变；三轮缓存
+命中均为 0。测试没有修改正式配置，报告只保留聚合指标和文本哈希，不保存正文。
+
+环境：24 逻辑核心、15.7 GB 内存、`rapidocr_onnxruntime 1.2.3`、ONNX Runtime 1.28.0。
+当前 RapidOCR 版本不支持下发 ONNX intra/inter 线程限制，单实例已能使用大部分 CPU。
+
+| 指标 | workers=1 | workers=2 | workers=3 |
+| --- | ---: | ---: | ---: |
+| 总墙钟时间 | **472.64 s** | 570.26 s | 1019.59 s |
+| 平均秒/页 | **2.188** | 2.640 | 4.720 |
+| 吞吐量 | **27.42 页/分钟** | 22.73 页/分钟 | 12.71 页/分钟 |
+| 相对 workers=1 | 1.000 倍 | **0.829 倍** | **0.464 倍** |
+| 平均整机 CPU 占用 | 78.72% | 94.65% | 91.33% |
+| 峰值 Working Set | 947.9 MB | 1120.4 MB | 1294.1 MB |
+| OCR 成功/失败/超时 | 216/0/0 | 216/0/0 | 216/0/0 |
+| 缓存命中 | 0 | 0 | 0 |
+
+正确性核验：三轮均得到 215 个非空页和 1 个空文本页，识别字符总数均为 152,258；
+216 页的文本哈希与页面状态逐页一致，没有发现并发导致的识别差异。
+
+结论：workers=2 比 workers=1 慢 20.7%，workers=3 慢 115.7%，且峰值内存随实例数
+增加。双 worker 的 1.5 倍目标未达到，方向反而为负。当前正式默认值应保持
+`OCR_WORKERS=1`；只有在 ONNX 线程限制真正生效、推理后端或硬件环境改变后，才值得
+重新评估多 worker。
+
+适用边界：每种配置只测量一轮，覆盖 RapidOCR、120 DPI 和这一份 216 页样本；数值不应
+外推为所有文档的固定性能承诺。但 0.829/0.464 倍的差距明显，足以支持当前默认值决策。
+分阶段 `ocr` 指标是多个 worker 阶段墙钟时长之和，不应解释为操作系统 CPU 时间；CPU
+数据来自独立的进程级采样。
+
+### 9.2 后续复测方案
+
+当 ONNX 线程控制、RapidOCR 版本、推理后端或硬件环境变化时，选择不含隐私、允许用于
+测试的典型中文扫描 PDF（建议 100 页以上）重新执行基准。测试前记录文档特征：
 
 - 页数；
 - 页面尺寸；

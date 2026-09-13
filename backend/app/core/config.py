@@ -109,9 +109,12 @@ class Settings:
         self.ocr_metrics_enabled: bool = _env_bool("OCR_METRICS_ENABLED", True)
 
         # OCR 第二阶段：有限并发流水线
+        # 默认 1 = 第一阶段单页串行路径（稳定档，也是故障回退档）。
+        # 2～4 为实验性并发：尚未完成真实 100 页扫描件的 1/2/3 worker 基准，
+        # 且当前捆绑的 rapidocr 版本无法限制 ONNX 内部线程数，并发收益与峰值内存
+        # 都未经实测确认，因此不默认开启。
         # worker 上限刻意压到 4：RapidOCR 每个实例内部已用多线程，盲目开大只会争抢。
-        # 1 = 回退第一阶段单页串行路径。
-        self.ocr_workers: int = _env_int("OCR_WORKERS", 2, 1, 4)
+        self.ocr_workers: int = _env_int("OCR_WORKERS", 1, 1, 4)
         # 生产者最多超前渲染的页数（内存上界之一）。
         self.ocr_render_ahead: int = _env_int("OCR_RENDER_AHEAD", 3, 1, 16)
         # 页图像队列容量（内存上界之二）。

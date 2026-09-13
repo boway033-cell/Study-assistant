@@ -5,11 +5,11 @@
 
 个人文献知识库 · 跨文献研读 · Writing DNA · 写作与汇报
 
-[![Version](https://img.shields.io/badge/version-2.3.0-8B5A2B)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.3.2-8B5A2B)](CHANGELOG.md)
 [![Local first](https://img.shields.io/badge/local--first-Windows-304747)](PRIVACY.md)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions)
 
-[开始使用](#开始使用) · [写作工作台](#写作工作台) · [版本变化](#230-这次更新了什么) · [产品边界](#适用范围与当前边界)
+[开始使用](#开始使用) · [写作工作台](#写作工作台) · [版本变化](#232-这次更新了什么) · [产品边界](#适用范围与当前边界)
 
 </div>
 
@@ -110,7 +110,16 @@ PDF、DOCX、PPTX 统一入库。用多级虚拟书架、收藏、阅读状态�
 
 本机 PowerPoint 可自动化时，可执行逐页渲染；不可用时保留 PPTX 和结构审计结果，并标明尚未完成真实视觉验收。
 
-## 2.3.0 这次更新了什么
+## 2.3.2 这次更新了什么
+
+- **大文档 OCR 稳定性**：页级任务调度补齐超时、取消与失败隔离；超时 worker 真正退役，迟到结果不写文本、版面或页文本缓存；结算与退役合并到同一临界区，消除「页已结算但退役未登记」的并发竞态。
+- **OCR 性能（第一、二阶段）**：任务级共享单 worker 执行器、引擎空闲延迟释放、空白页跳过并写空缓存、分阶段性能指标；有限并发流水线（单生产者 + 多 worker + 协调器看门狗）作为实验能力保留。
+- **默认仍是单 worker**：216 页真实扫描件基准显示，当前 RapidOCR / ONNX Runtime 环境下 `OCR_WORKERS=2`、`=3` 均为负加速（0.83× / 0.46×），默认值保持 `OCR_WORKERS=1`；2~4 属实验性配置，需自行基准确认后再启用。
+- **测试**：新增超时退役、迟到结果丢弃、STUCK 精确语义、引擎生命周期与 OCR 进度单调的确定性用例。
+
+基准方法、三轮对比与已知限制见[OCR 性能优化方案](docs/OCR_PERFORMANCE_OPTIMIZATION_PLAN.md)。
+
+## 2.3.0 更新回顾
 
 - **长文阅读**：连续模式窗口化渲染、页面资源释放、引用切换时正确换源；目录校正和按页文本复用缓存。
 - **写作流程**：四个入口、统一输出归档；Writing DNA 增加逻辑结构层，并用于研究报告和表达审阅。
@@ -150,14 +159,14 @@ python -m venv .venv
 启动器会选择本地可用端口并打开页面。停止服务使用 `stop.bat`。第一次使用，导入一份资料，确认解析完成，再进入阅读器；需要 AI 时到设置页添加模型连接并配置任务路由。
 
 <details>
-<summary><b>从源码运行 2.3.0</b></summary>
+<summary><b>从源码运行 2.3.2</b></summary>
 
 需要 Git、Python 3.12+ 和 Node.js 22+。
 
 ```powershell
 git clone https://github.com/boway033-cell/Study-assistant.git
 cd Study-assistant
-git checkout v2.3.0
+git checkout v2.3.2
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 cd frontend
