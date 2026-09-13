@@ -62,7 +62,8 @@
       </aside>
 
       <div ref="scroller" class="pr-body" :class="'pr-mode-' + mode"
-        @scroll="onScroll" @mouseup="onMouseUp" @mousedown="onMouseDown" @wheel="onWheel">
+        @scroll="onScroll" @mouseup="onMouseUp" @mousedown="onBodyMouseDown" @wheel="onWheel"
+        @mousemove="onBodyMouseMove" @mouseleave="onBodyMouseLeave" @click="onBodyClick">
         <div v-if="mode === 'scroll'" class="pr-spacer" :style="{ height: windowSpacers.top + 'px' }" />
         <div v-for="p in renderPageList" :key="p" class="pr-page" :data-page="p"
           :style="{ width: pageWidthPx(p) + 'px', height: pageH(p) + 'px' }">
@@ -76,11 +77,35 @@
           </button>
           <div v-for="(st, i) in hlStyles(p)" :key="st.id + '-' + i" class="pr-hl"
             :class="'pr-hl-' + st.markType"
-            :style="st.style" :title="st.ann.text || ''" />
+            :style="st.style"
+            :data-ann-id="st.id"
+            :tabindex="st.focusable ? 0 : -1"
+            :aria-hidden="st.focusable ? null : 'true'"
+            :role="st.focusable ? 'button' : null"
+            :aria-label="st.focusable ? st.label : null"
+            @focus="onHighlightFocus(st)"
+            @blur="onHighlightBlur"
+            @keydown="onHighlightKeydown(st, $event)" />
         </div>
         <div v-if="mode === 'scroll'" class="pr-spacer" :style="{ height: windowSpacers.bottom + 'px' }" />
         <div v-if="loading" class="pr-loading" v-loading="true" element-loading-text="正在渲染原文…" />
         <div v-if="errorMsg" class="pr-error">⚠️ {{ errorMsg }}</div>
+      </div>
+    </div>
+
+    <!-- 批注悬浮卡：锚定在命中的高亮/划线上，长内容在卡内滚动 -->
+    <div v-if="hoverCard.visible" ref="hoverCardEl" class="pr-hover-card"
+      :style="{ left: hoverPos.left + 'px', top: hoverPos.top + 'px', opacity: hoverPlaced ? 1 : 0 }"
+      role="tooltip" aria-live="polite"
+      @mouseenter="onHoverCardEnter" @mouseleave="onHoverCardLeave">
+      <div v-for="item in hoverCard.items" :key="item.id" class="pr-hover-item">
+        <div class="pr-hover-head">
+          <span class="pr-hover-source" :class="'pr-hover-source-' + item.origin">{{ item.sourceLabel }}</span>
+          <span class="pr-hover-kind">{{ item.kindLabel }}</span>
+        </div>
+        <div v-if="item.hasNote" class="pr-hover-note">{{ item.note }}</div>
+        <div v-else class="pr-hover-empty">{{ item.emptyLabel }}</div>
+        <div v-if="item.text" class="pr-hover-quote">{{ item.text }}</div>
       </div>
     </div>
 
@@ -161,6 +186,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { annotationSegments, clipSelectionRects } from '../utils/pdfAnnotations'
+import {
+  annotationAriaLabel, buildHoverItems, hitTestEntries, hoverCardBounds,
+  hoverOpenIsStale, hoverOpenMatches, hoverTolerance,
+  placeHoverCard, retainHoverIds, unionRect,
+  HOVER_CARD_MAX_HEIGHT, HOVER_CARD_MAX_WIDTH,
+  HOVER_CLOSE_DELAY_MS, HOVER_OPEN_DELAY_MS,
+} from '../utils/annotationHover'
 import { wheelNavigation } from '../utils/readerNavigation'
 import {
   listAnnotations, createAnnotation, updateAnnotation, deleteAnnotation,
@@ -600,7 +632,7 @@ const retryPage = async (p) => {
 
 const onScroll = () => {
   selToolbar.value = false
-  if (mode.value !== 'scroll') return
+  if (mode.value !== 'scroll') { repositionHoverCard(); return }
   if (scrollFrame) return
   scrollFrame = requestAnimationFrame(() => {
     scrollFrame = null
@@ -609,6 +641,8 @@ const onScroll = () => {
     ensureCurrentOcrLayer()
     notifyPageChange()
     savePosDebounced()
+    // 浮动卡片随内容滚动重新定位；锚点页被回收时会自行收起。
+    repositionHoverCard()
   })
 }
 
@@ -685,6 +719,7 @@ const applyScale = (nextScale) => {
     if (mode.value === 'scroll') {
       scroller.value.scrollTop = Math.max(0, anchor * scale.value - scroller.value.clientHeight / 2)
     }
+    repositionHoverCard()
     zoomTimer = setTimeout(() => renderVisible(), 140)
   })
 }
@@ -711,7 +746,21 @@ const fitPage = () => {
 
 // 父组件未用 :key 强制重建时（ChatView 引用面板 / OriginalViewer / DocReader），
 // src 变化必须重建文档，否则阅读器会停留在上一本。
-watch(() => props.src, (next, prev) => { if (next && next !== prev) loadPdf() })
+watch(() => props.src, (next, prev) => { if (next && next !== prev) { closeHoverCard(); loadPdf() } })
+
+// 换书 / 换文档批次后不允许残留上一本的悬浮内容。
+watch(() => props.bookId, () => closeHoverCard())
+
+// 批注集合变化（新增、编辑、删除、重新加载）后收敛浮层：被删掉的那条立刻消失。
+watch(() => annotations.value, () => {
+  if (!hoverCard.value.visible) return
+  const kept = retainHoverIds(hoverCard.value.ids, annotations.value)
+  if (!kept) { closeHoverCard(); return }
+  const items = buildHoverItems(kept.map(id => annById.value.get(id)))
+  if (!items.length) { closeHoverCard(); return }
+  hoverCard.value = { visible: true, ids: items.map(item => item.id), items }
+  void positionHoverCard()
+})
 
 // 同一文档内换目标页（如同一本书的另一条引用）：只跳页，不拖着重载整本文档。
 watch(() => props.initialPage, (next, prev) => {
@@ -720,6 +769,7 @@ watch(() => props.initialPage, (next, prev) => {
 })
 
 watch(mode, (nv) => {
+  closeHoverCard()
   if (nv === 'double' && scroller.value) {
     const w = scroller.value.clientWidth - 40
     const bw = baseWidths[page.value] || 595
@@ -748,13 +798,22 @@ const hlIndex = computed(() => {
     for (const seg of segments) {
       const pg = Number(seg.page)
       if (!Number.isFinite(pg)) continue
+      const markType = a.mark_type || 'highlight'
+      // 悬浮卡命中、aria 标签都依赖这里的 rect/focusable，模板仍只用 style。
+      let firstKept = false
       for (const r of (seg.rects || [])) {
         if (![r.x, r.y, r.w, r.h].every(Number.isFinite) || r.w <= 0 || r.h <= 0) continue
         if (!m.has(pg)) m.set(pg, [])
+        const focusable = !firstKept
+        firstKept = true
         m.get(pg).push({
           id: a.id,
           ann: a,
-          markType: a.mark_type || 'highlight',
+          page: pg,
+          markType,
+          rect: { x: r.x, y: r.y, w: r.w, h: r.h },
+          focusable,
+          label: focusable ? annotationAriaLabel(a) : '',
           style: {
             left: (r.x * 100) + '%',
             top: (((a.mark_type || 'highlight') === 'underline' ? r.y + r.h : r.y) * 100) + '%',
@@ -769,6 +828,257 @@ const hlIndex = computed(() => {
   return m
 })
 const hlStyles = (p) => hlIndex.value.get(Number(p)) || []
+
+const annById = computed(() => {
+  const m = new Map()
+  for (const a of annotations.value) m.set(a.id, a)
+  return m
+})
+
+// ===== 批注悬浮卡 =====
+// 命中策略：不给 .pr-hl 打开 pointer-events（那会挡掉文字选择），而是在 .pr-body 上
+// 做一次事件委托，用鼠标坐标 + 当前页 hlIndex 做矩形命中；鼠标事件目标只用来定位
+// 所在页（closest('.pr-page')）。这样单个监听器即可覆盖上千个矩形。
+const hoverCard = ref({ visible: false, ids: [], items: [] })
+const hoverPos = ref({ left: 0, top: 0 })
+const hoverPlaced = ref(false)
+const hoverCardEl = ref(null)
+let hoverAnchor = null            // { page, rect } 归一化锚点
+let hoverPointer = { x: 0, y: 0, target: null }
+let hoverScanFrame = null
+let hoverOpenTimer = null
+let hoverPendingKey = ''          // 待打开计时器计划展示的命中 key；触发前会再校验
+let hoverEpoch = 0                // 每次关闭浮层自增，作废排队中的旧计时器
+let hoverCloseTimer = null
+let hoverLastKey = ''
+let hoverPinned = false
+let hoverCardPointerInside = false
+let hoverMarkedEls = []
+
+const clearHoverMarks = () => {
+  for (const el of hoverMarkedEls) el.classList.remove('is-hover')
+  hoverMarkedEls = []
+}
+
+const markHovered = (pageEl, ids) => {
+  clearHoverMarks()
+  if (!pageEl || !ids?.length) return
+  for (const id of ids) {
+    for (const el of pageEl.querySelectorAll(`.pr-hl[data-ann-id="${id}"]`)) {
+      el.classList.add('is-hover')
+      hoverMarkedEls.push(el)
+    }
+  }
+}
+
+/** 命中结果 → 稳定的展示 key（去重后的 id 集合 + 页码），计时器调度都用它做一致性校验。 */
+const hoverKeyOf = (found) => found.hits.map((h) => h.id).join(',') + '@' + found.pageNo
+
+/** 作废待打开的计时器：离开命中区、关闭浮层、开始拖选时都必须立即调用。 */
+const cancelHoverOpen = () => {
+  clearTimeout(hoverOpenTimer)
+  hoverOpenTimer = null
+  hoverPendingKey = ''
+}
+
+const closeHoverCard = () => {
+  hoverEpoch += 1                 // 让任何排队中的旧打开计时器失效
+  cancelHoverOpen()
+  clearTimeout(hoverCloseTimer); hoverCloseTimer = null
+  hoverAnchor = null
+  hoverLastKey = ''
+  hoverPinned = false
+  hoverPlaced.value = false
+  clearHoverMarks()
+  if (hoverCard.value.visible || hoverCard.value.ids.length) {
+    hoverCard.value = { visible: false, ids: [], items: [] }
+  }
+}
+
+const scheduleHoverClose = () => {
+  if (hoverCardPointerInside) return
+  clearTimeout(hoverCloseTimer)
+  hoverCloseTimer = setTimeout(() => { hoverCloseTimer = null; closeHoverCard() }, HOVER_CLOSE_DELAY_MS)
+}
+
+// 卡片位置由「标注矩形」而不是鼠标位置决定，因此鼠标在同一处高亮内移动时不会抖动。
+const positionHoverCard = async () => {
+  if (!hoverCard.value.visible || !hoverAnchor?.rect || !rootEl.value) return
+  const pageEl = rootEl.value.querySelector(`.pr-page[data-page="${hoverAnchor.page}"]`)
+  if (!pageEl) { closeHoverCard(); return }
+  const pr = pageEl.getBoundingClientRect()
+  if (!pr.width || !pr.height) { closeHoverCard(); return }
+  const r = hoverAnchor.rect
+  const box = {
+    left: pr.left + r.x * pr.width,
+    top: pr.top + r.y * pr.height,
+    width: r.w * pr.width,
+    height: r.h * pr.height,
+  }
+  box.right = box.left + box.width
+  box.bottom = box.top + box.height
+  // 锚点已经滚出阅读区就收起，避免卡片停在没有内容的区域。
+  const sr = scroller.value?.getBoundingClientRect()
+  if (sr && (box.left > sr.right || box.right < sr.left || box.top > sr.bottom || box.bottom < sr.top)) {
+    closeHoverCard()
+    return
+  }
+  const rootRect = rootEl.value.getBoundingClientRect()
+  // 先挂载再量尺寸：首次打开时卡片元素还不存在，量不到真实高度会算错翻折方向。
+  if (!hoverCardEl.value) { await nextTick(); if (!hoverCardEl.value) return }
+  // 卡片只能在「正文滚动区 ∩ 组件根节点 ∩ 视口」的交集内出现，
+  // 否则会盖住左侧目录或顶部工具栏（根节点包含这两块）。
+  const viewport = { width: window.innerWidth, height: window.innerHeight }
+  // await 期间布局可能变化，重新量一次滚动区，用最新矩形求交集。
+  const scrollerRect = scroller.value?.getBoundingClientRect()
+  const bounds = hoverCardBounds({ root: rootRect, scroller: scrollerRect, viewport })
+  const placed = placeHoverCard({
+    anchor: box,
+    card: { width: hoverCardEl.value.offsetWidth || HOVER_CARD_MAX_WIDTH, height: hoverCardEl.value.offsetHeight || HOVER_CARD_MAX_HEIGHT },
+    bounds,
+    gap: 8,
+  })
+  hoverPos.value = { left: placed.left - rootRect.left, top: placed.top - rootRect.top }
+  hoverPlaced.value = true
+}
+
+const repositionHoverCard = () => { if (hoverCard.value.visible) void positionHoverCard() }
+
+const openHoverCard = (list, pageEl, rects, pageNo, pinned = false) => {
+  const items = buildHoverItems(list)
+  if (!items.length) { closeHoverCard(); return }
+  const ids = items.map(item => item.id)
+  const key = ids.join(',') + '@' + pageNo
+  hoverPinned = pinned
+  hoverAnchor = { page: pageNo, rect: unionRect(rects) || (rects || [])[0] || null }
+  if (key !== hoverLastKey || !hoverCard.value.visible) {
+    hoverLastKey = key
+    hoverCard.value = { visible: true, ids, items }
+    hoverPlaced.value = false
+  }
+  markHovered(pageEl, ids)
+  void positionHoverCard()
+}
+
+const hoverHitAt = (clientX, clientY, target) => {
+  const pageEl = target?.closest?.('.pr-page') || null
+  if (!pageEl) return null
+  const pageNo = Number(pageEl.dataset.page)
+  const entries = hlIndex.value.get(pageNo)
+  if (!entries?.length) return null
+  const pr = pageEl.getBoundingClientRect()
+  if (!pr.width || !pr.height) return null
+  const hits = hitTestEntries(
+    entries,
+    { x: (clientX - pr.left) / pr.width, y: (clientY - pr.top) / pr.height },
+    hoverTolerance(pr),
+  )
+  return hits.length ? { pageEl, pageNo, hits } : null
+}
+
+const scanHoverAt = (clientX, clientY, target) => {
+  if (hoverPinned) return
+  if (!hlIndex.value.size) return
+  // 正在拖选文字时不弹卡，避免打断选区（isCollapsed 足够，避免对大选区做字符串化）。
+  const sel = window.getSelection()
+  if (sel && !sel.isCollapsed) return
+  const found = hoverHitAt(clientX, clientY, target)
+  if (!found) {
+    // 指针已离开命中区域：待打开的计时器立即作废，只保留关闭倒计时，
+    // 否则会在空白处短暂弹出刚扫过的高亮。
+    cancelHoverOpen()
+    scheduleHoverClose()
+    return
+  }
+  clearTimeout(hoverCloseTimer); hoverCloseTimer = null
+  const key = hoverKeyOf(found)
+  if (key === hoverLastKey && hoverCard.value.visible) { void positionHoverCard(); return }
+  // 已经显示中：切换到另一条命中不需要延迟，否则会有滞涩感。
+  if (hoverCard.value.visible) {
+    openHoverCard(found.hits.map(h => h.ann), found.pageEl, found.hits.map(h => h.rect), found.pageNo)
+    return
+  }
+  // A → B：A 的待打开计时器作废，按 B 重新计时，保证弹出的始终是当前指向的批注。
+  if (hoverOpenIsStale(hoverPendingKey, key)) cancelHoverOpen()
+  if (hoverOpenTimer) return
+  const epoch = hoverEpoch
+  hoverPendingKey = key
+  hoverOpenTimer = setTimeout(() => {
+    hoverOpenTimer = null
+    const expected = hoverPendingKey
+    hoverPendingKey = ''
+    if (epoch !== hoverEpoch) return                            // 排队期间被关闭过
+    if (!hoverOpenMatches(expected, key)) return                // 计划与登记不一致
+    // 触发前按当前指针位置再判一次：移走 / 批注被删 / 状态变化都不弹旧卡。
+    const live = hoverHitAt(hoverPointer.x, hoverPointer.y, hoverPointer.target)
+    if (!live || hoverKeyOf(live) !== expected) return
+    openHoverCard(live.hits.map(h => h.ann), live.pageEl, live.hits.map(h => h.rect), live.pageNo)
+  }, HOVER_OPEN_DELAY_MS)
+}
+
+const onBodyMouseMove = (e) => {
+  if (!hlIndex.value.size) return
+  hoverPointer = { x: e.clientX, y: e.clientY, target: e.target }
+  if (hoverScanFrame) return
+  hoverScanFrame = requestAnimationFrame(() => {
+    hoverScanFrame = null
+    scanHoverAt(hoverPointer.x, hoverPointer.y, hoverPointer.target)
+  })
+}
+
+const onBodyMouseLeave = () => {
+  // 先作废待打开的计时器（否则离开后旧卡片仍会延迟弹出），再走常规延迟关闭。
+  cancelHoverOpen()
+  scheduleHoverClose()
+}
+
+const onBodyMouseDown = () => {
+  // 按下鼠标即收起：拖选文字时浮层不会盖住正文。
+  hoverCardPointerInside = false
+  closeHoverCard()
+}
+
+// 触屏没有 hover：点击已有高亮/划线等价于悬停，再点空白处或按 Esc 关闭。
+const onBodyClick = (e) => {
+  if (!hlIndex.value.size) { closeHoverCard(); return }
+  const sel = window.getSelection()
+  if (sel && !sel.isCollapsed) return
+  const found = hoverHitAt(e.clientX, e.clientY, e.target)
+  if (!found) { closeHoverCard(); return }
+  clearTimeout(hoverCloseTimer); hoverCloseTimer = null
+  hoverLastKey = ''
+  openHoverCard(found.hits.map(h => h.ann), found.pageEl, found.hits.map(h => h.rect), found.pageNo, true)
+}
+
+const onHoverCardEnter = () => {
+  hoverCardPointerInside = true
+  clearTimeout(hoverCloseTimer); hoverCloseTimer = null
+}
+const onHoverCardLeave = () => {
+  hoverCardPointerInside = false
+  scheduleHoverClose()
+}
+
+// 键盘降级：每页每条批注的首个矩形进入 Tab 顺序（其余矩形 tabindex=-1 且 aria-hidden），
+// focus 即展示与悬停一致的内容，Esc 关闭。
+const onHighlightFocus = (st) => {
+  if (!st?.ann) return
+  const pageEl = rootEl.value?.querySelector(`.pr-page[data-page="${st.page}"]`)
+  if (!pageEl) return
+  clearTimeout(hoverCloseTimer); hoverCloseTimer = null
+  clearTimeout(hoverOpenTimer); hoverOpenTimer = null
+  const rects = (hlIndex.value.get(st.page) || []).filter(e => e.id === st.id).map(e => e.rect)
+  openHoverCard([st.ann], pageEl, rects.length ? rects : [st.rect], st.page, true)
+}
+
+const onHighlightBlur = () => { scheduleHoverClose() }
+
+const onHighlightKeydown = (st, e) => {
+  if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+    e.preventDefault()
+    onHighlightFocus(st)
+  }
+}
 
 const loadAnnotations = async () => {
   if (!props.bookId) return
@@ -841,8 +1151,6 @@ const snapshotRange = (range, exact) => {
     segments: clipSelectionRects(rangeRects, pages),
   }
 }
-
-const onMouseDown = () => {}
 
 // 批注卡片
 const openAnnCard = (modeName, ann = null, ev = null) => {
@@ -1081,6 +1389,7 @@ const onKeydown = (e) => {
   else if (e.key === 'ArrowRight') { e.preventDefault(); goPage(1) }
   else if (e.key === 'PageDown') { e.preventDefault(); goPage(1) }
   else if (e.key === 'PageUp') { e.preventDefault(); goPage(-1) }
+  else if (e.key === 'Escape' && hoverCard.value.visible) { closeHoverCard() }
 }
 
 onMounted(async () => {
@@ -1097,6 +1406,12 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   compactReaderMedia.removeEventListener('change', syncTocViewport)
   window.removeEventListener('keydown', onKeydown)
+  // 悬浮卡状态与节流帧必须清干净，避免组件卸载后残留定时器/监听。
+  cancelHoverOpen()
+  clearTimeout(hoverCloseTimer); hoverCloseTimer = null
+  if (hoverScanFrame) { cancelAnimationFrame(hoverScanFrame); hoverScanFrame = null }
+  clearHoverMarks()
+  hoverCard.value = { visible: false, ids: [], items: [] }
   savePos()
   clearTimeout(zoomTimer)
   clearTimeout(saveTimer)
@@ -1196,7 +1511,9 @@ onBeforeUnmount(() => {
 .pr-hl { position: absolute; z-index: 2; border-radius: 2px; pointer-events: none; }
 .pr-hl-highlight { background:var(--mark-color); opacity:.24; mix-blend-mode:multiply; }
 .pr-hl-underline { height:0!important; margin-top:-2px; border-bottom:2px solid var(--mark-color); border-radius:0; }
-.pr-hl:hover { outline: 1px solid #c45656; }
+/* 矩形保持 pointer-events:none，命中由页面坐标计算；这里只做视觉提示，不改底色。 */
+.pr-hl:focus-visible { outline:1px solid #c45656; outline-offset:1px; }
+.pr-hl.is-hover { outline:1px solid rgba(196,86,86,.85); outline-offset:1px; }
 .pr-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .pr-error { color: #ffd9a0; padding: 20px; font-size: 13px; }
 .pr-dark .pr-page { filter: invert(0.92) hue-rotate(180deg); }
@@ -1206,6 +1523,35 @@ onBeforeUnmount(() => {
   background: #fff; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25);
   border: 1px solid var(--el-border-color-light);
 }
+/* 悬浮卡：层级高于 canvas/文字层/高亮层（1~2），低于选区工具条(50)、批注卡(60)与全局抽屉(2000+)。 */
+.pr-hover-card {
+  position: absolute; z-index: 45; box-sizing: border-box;
+  width: 320px; max-width: min(320px, 78vw); max-height: 220px; overflow: auto;
+  padding: 8px 10px; border-radius: 6px; border: 1px solid var(--el-border-color-light);
+  background: #fff; color: var(--el-text-color-primary);
+  box-shadow: 0 4px 14px rgba(15,23,42,.18);
+  font-size: 12px; line-height: 1.6; text-align: left; pointer-events: auto;
+  transition: opacity .08s ease-out;
+}
+.pr-hover-item + .pr-hover-item { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--el-border-color-extra-light); }
+.pr-hover-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.pr-hover-source { padding: 0 5px; border-radius: 3px; font-size: 11px; line-height: 17px; border: 1px solid transparent; }
+.pr-hover-source-user { background: var(--el-color-primary-light-9); color: var(--el-color-primary); border-color: var(--el-color-primary-light-7); }
+.pr-hover-source-ai { background: var(--el-color-warning-light-9); color: var(--el-color-warning-dark-2); border-color: var(--el-color-warning-light-7); }
+.pr-hover-kind { font-size: 11px; color: var(--el-text-color-secondary); }
+.pr-hover-note { white-space: pre-wrap; word-break: break-word; color: var(--el-text-color-primary); }
+.pr-hover-empty { color: var(--el-text-color-secondary); }
+.pr-hover-quote {
+  margin-top: 5px; padding-left: 7px; border-left: 2px solid var(--el-border-color);
+  color: var(--el-text-color-secondary); white-space: pre-wrap; word-break: break-word;
+}
+.pr-dark .pr-hover-card { background: #1f2733; border-color: #3a4553; color: #e6eaf0; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
+.pr-dark .pr-hover-item + .pr-hover-item { border-top-color: #3a4553; }
+.pr-dark .pr-hover-source-user { background: #22303f; color: #8ec8f5; border-color: #2f4257; }
+.pr-dark .pr-hover-source-ai { background: #3b3220; color: #f0c07a; border-color: #4e4427; }
+.pr-dark .pr-hover-note { color: #e6eaf0; }
+.pr-dark .pr-hover-empty, .pr-dark .pr-hover-quote, .pr-dark .pr-hover-kind { color: #a9b4c2; }
+.pr-dark .pr-hover-quote { border-left-color: #3a4553; }
 .pr-ann-card {
   position: absolute; z-index: 60; width: 280px; padding: 10px; top: 58px; right: 12px;
   background: #fff; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.3);
