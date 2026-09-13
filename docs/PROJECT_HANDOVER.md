@@ -1,7 +1,20 @@
 # 项目交接文档 · Study assistant（学习助手）
 
 > **用途**：供新对话/新协作者快速接管项目。阅读本文件 + 启动项目即可继续开发。
-> **最后更新**：审计 P1/P2 全量收口、API 链路提速（GZip + SQLite PRAGMA + SQL 下推）、阅读器窗口化渲染、写作工作台入口重组；当前版本 **v2.3.0**
+> **最后更新**：OCR 大文档稳定性与性能补齐（第一、二阶段 + 独立审查修正）与 216 页真实基准收口，默认保持 `OCR_WORKERS=1`；此前为审计 P1/P2 全量收口、API 链路提速（GZip + SQLite PRAGMA + SQL 下推）、阅读器窗口化渲染、写作工作台入口重组；当前版本 **v2.3.2**
+
+---
+
+## 2.3.2 开发快照（2026-09-13）
+
+本次为 OCR 稳定性与性能的补丁版本，范围仅限 OCR 链路与发布元数据。
+
+- **已完成**：大文档 OCR 第一阶段（任务级共享单 worker 执行器、引擎空闲延迟释放、空白页跳过并写空缓存、分阶段指标、页缓存原子写）与第二阶段（单生产者 + N worker + 协调器看门狗的有限并发流水线、独立引擎实例池、双内存上界、页级失败策略、按页码归并）。
+- **审查修正**：超时 worker 真正退役（迟到调用返回即退出、不领新页、不补建，迟到结果不写文本/版面/页缓存）；结算与退役合并进单一临界区，消除 TOCTOU 竞态；`_OCR_ENGINE_STUCK` 仅在全部卡死 worker 返回后清除；引擎生命周期竞态与 OCR 进度倒退修复。
+- **默认配置**：`OCR_WORKERS` 保持 1（安全默认）；2~4 为实验性，需自行基准确认。
+- **基准结论（216 页真实扫描件，2026-09-12）**：同一页面集合、DPI、空白页阈值与超时下，`OCR_WORKERS=1` 472.6s / 27.4 页每分钟；`=2` 570.3s（0.83×）；`=3` 1019.6s（0.46×）；三轮逐页文本 SHA-256 完全一致。当前 RapidOCR / ONNX Runtime 环境下多 worker 为负加速，未达到 1.5× 目标，故**不启用多 worker**。
+- **未纳入版本**：测试 PDF、页面级识别结果、缓存与 `.workbuddy` 产物均未进入仓库与本版本。
+- **未做**：第三、四阶段（任务中心结构化失败展示等）；tesseract / paddleocr 回退路径仍为串行单实例。
 
 ---
 
@@ -516,7 +529,7 @@ GitHub 首页更新为当前四个核心工作区，特别说明研究报告的�
 
 ## 12. 开源发布状态
 
-- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布版本 v2.3.0）
+- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布版本 v2.3.2）
 - 许可证 MIT、PRIVACY.md、SECURITY.md、CHANGELOG.md、CONTRIBUTING.md、.gitattributes
 - CI（ci.yml）+ Release 自动打包（release.yml）
 - 分享给朋友：下载 Release 的 zip（含前端产物，不装 Node 也能用），或 git clone 后 `cd frontend && npm i && npm run build`
@@ -533,7 +546,7 @@ cd frontend && npm run build               # 改完前端构建（需 npm.cmd）
 
 # git 推送
 git push origin main
-git tag v2.3.0 && git push origin v2.3.0  # 触发 Release 自动打包
+git tag v2.3.2 && git push origin v2.3.2  # 触发 Release 自动打包
 
 # 关键文档
 docs/README.md  docs/产品文档.md  docs/PROJECT_HANDOVER.md
