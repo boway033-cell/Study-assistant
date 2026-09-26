@@ -5,9 +5,47 @@ import re
 
 
 ANCHOR_RE = re.compile(
-    r"\[(B\d+(?::(?:CH|C|P|NOTE)\d+(?:-\d+)?)*|(?:NOTE|EVIDENCE|REPORT):\d+)\]"
+    r"\[(B\d+(?::(?:CH|C|P|NOTE)\d+(?:-\d+)?)*"          # 本地文献片段 / 章节 / 笔记
+    r"|(?:NOTE|EVIDENCE|REPORT):\d+"                      # 库内知识对象
+    r"|WEB:[A-Za-z0-9][A-Za-z0-9._/:\-]*)\]"              # 联网元数据快照
 )
 _SUPERSCRIPT = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+WEB_ANCHOR_RE = re.compile(r"^WEB:([A-Za-z0-9._\-]+):(.+)$")
+
+
+def web_anchor(provider: str, provider_id: str) -> str:
+    """Stable machine anchor for an external metadata snapshot."""
+    safe_provider = re.sub(r"[^A-Za-z0-9._\-]", "-", str(provider or "provider"))[:40]
+    safe_id = re.sub(r"[^A-Za-z0-9._/:\-]", "-", str(provider_id or "")).strip("-")[:160]
+    return f"WEB:{safe_provider}:{safe_id}"
+
+
+def web_source_labels(sources: list[dict] | None) -> dict[str, str]:
+    """Reader-facing footnote labels for online snapshots.
+
+    The label always names the provider and, when present, the DOI/URL plus the
+    evidence level, so a reader can tell "摘要级依据" from "元数据线索".
+    """
+    labels: dict[str, str] = {}
+    for source in sources or []:
+        if not isinstance(source, dict):
+            continue
+        provider = str(source.get("provider") or "外部来源")
+        anchor = web_anchor(provider, source.get("provider_id"))
+        bits = [f"{provider}｜{str(source.get('title') or '').strip() or '未标题名'}"]
+        authors, year = str(source.get("authors") or "").strip(), source.get("year")
+        if authors or year:
+            bits.append(f"{authors}{'，' if authors and year else ''}{year or ''}".strip("，"))
+        locator = str(source.get("doi") or "").strip() or str(source.get("url") or "").strip()
+        if locator:
+            bits.append(f"DOI {locator}" if locator.startswith("10.") else locator)
+        level = str(source.get("evidence_level") or "metadata")
+        bits.append("摘要级依据" if level == "abstract" else "元数据线索（不可作为事实依据）")
+        if source.get("retrieved_at"):
+            bits.append(f"检索于 {str(source['retrieved_at'])[:10]}")
+        labels[anchor] = "，".join(bit for bit in bits if bit)
+    return labels
 
 
 def _superscript(number: int) -> str:

@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core import crypto
-from backend.app.core.config import DEEPSEEK_MODELS, settings as app_settings
+from backend.app.core.config import DEEPSEEK_MODELS, PROJECT_ROOT, settings as app_settings
 from backend.app.core.database import get_db
 from backend.app.models import Book, Chunk, Setting
 from backend.app.schemas import ProbeItem, ProbeResp, SettingsResp, SettingsUpdateReq
@@ -53,6 +53,18 @@ class ProviderRoutingWrite(BaseModel):
     default_provider_id: str = Field(min_length=3, max_length=40)
     task_routes: dict[str, str] = Field(default_factory=dict)
     fallback_provider_ids: list[str] = Field(default_factory=list, max_length=5)
+
+
+class AiPriceRateWrite(BaseModel):
+    provider_id: str = Field(pattern=r"^[a-z0-9_-]{3,40}$")
+    model: str = Field(min_length=1, max_length=120)
+    input: float = Field(ge=0, le=100000)
+    output: float = Field(ge=0, le=100000)
+
+
+class AiDefaultBudgetWrite(BaseModel):
+    max_tokens: int = Field(ge=0, le=2_000_000)
+    max_calls: int = Field(ge=0, le=200)
 
 _DEFAULTS = {
     "deepseek_api_key": app_settings.deepseek_api_key,
@@ -239,6 +251,57 @@ async def probe(db: Session = Depends(get_db)):
     )
 
 
+@router.get("/settings/diagnostics")
+def diagnostics(db: Session = Depends(get_db)):
+    from backend.app.services.diagnostics import collect_diagnostics
+    result = collect_diagnostics(PROJECT_ROOT, app_settings.data_dir)
+    cfg = load_llm_config(db)
+    result["checks"].append({"key": "ai", "ok": True,
+                             "detail": "AI 模型已配置" if cfg.get("configured") else "未配置模型；本地阅读与笔记仍可使用",
+                             "action": "需要 AI 时，在设置中添加并检测模型" if not cfg.get("configured") else ""})
+    return result
+
+
+@router.get("/settings/ai-price-rates")
+def get_ai_price_rates(db: Session = Depends(get_db)):
+    try:
+        rates = json.loads(_get_setting(db, "ai_price_rates") or "{}")
+    except (ValueError, TypeError):
+        rates = {}
+    return {"currency": "CNY", "per_tokens": 1_000_000,
+            "rates": rates if isinstance(rates, dict) else {},
+            "boundary": "费率由你填写；请以供应商账单为准。"}
+
+
+@router.put("/settings/ai-price-rates")
+def put_ai_price_rate(req: AiPriceRateWrite, db: Session = Depends(get_db)):
+    rates = get_ai_price_rates(db)["rates"]
+    rates[f"{req.provider_id}:{req.model}"] = {"input": req.input, "output": req.output}
+    _set_setting(db, "ai_price_rates", json.dumps(rates, ensure_ascii=False))
+    db.commit()
+    return get_ai_price_rates(db)
+
+
+@router.get("/settings/ai-default-budget")
+def get_ai_default_budget(db: Session = Depends(get_db)):
+    try:
+        value = json.loads(_get_setting(db, "ai_default_budget") or "{}")
+    except (ValueError, TypeError):
+        value = {}
+    if not isinstance(value, dict):
+        value = {}
+    return {"max_tokens": int(value.get("max_tokens", 200000)),
+            "max_calls": int(value.get("max_calls", 50)),
+            "boundary": "所有 AI 任务的默认估算上限；0 表示不限制。研究任务可在提交前确认单独上限。"}
+
+
+@router.put("/settings/ai-default-budget")
+def put_ai_default_budget(req: AiDefaultBudgetWrite, db: Session = Depends(get_db)):
+    _set_setting(db, "ai_default_budget", req.model_dump_json())
+    db.commit()
+    return get_ai_default_budget(db)
+
+
 @router.get("/settings/providers")
 def list_compatible_providers(db: Session = Depends(get_db)):
     deepseek_key = crypto.decrypt(_get_setting(db, "deepseek_api_key"))
@@ -344,16 +407,19 @@ def update_provider_routing(req: ProviderRoutingWrite, db: Session = Depends(get
 
 @router.get("/settings/providers/usage")
 def provider_usage(db: Session = Depends(get_db)):
+    from backend.app.services.llm.budget import estimate_tokens
     try:
         rows = json.loads(_get_setting(db, "llm_usage_stats") or "{}")
     except (TypeError, ValueError):
         rows = {}
     items = sorted((value for value in rows.values() if isinstance(value, dict)),
                    key=lambda item: (item.get("provider_id", ""), item.get("task", "")))
+    for item in items:
+        item["estimated_tokens"] = estimate_tokens(int(item.get("input_chars", 0)) + int(item.get("output_chars", 0)))
     totals = {key: sum(int(item.get(key, 0)) for item in items) for key in
               ("calls", "successes", "failures", "fallback_activations", "input_chars", "output_chars", "estimated_tokens", "elapsed_ms")}
     return {"items": items, "totals": totals,
-            "boundary": "Token 为按输入输出字符数除以 4 的本地估算；供应商未返回标准 usage 时不代表账单用量或费用。"}
+            "boundary": "Token 统一按输入输出字符数除以 2 的偏保守本地估算；供应商未返回标准 usage 时不代表账单用量或费用。"}
 
 
 @router.get("/settings/providers/{provider_id}/models")

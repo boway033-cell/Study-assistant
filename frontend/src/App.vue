@@ -9,10 +9,6 @@
         </div>
       </div>
       <AppNavigation :collapsed="sidebarCollapsed" />
-      <div class="aside-footer">
-        <div class="dew-dot" v-for="i in 3" :key="i" :style="{ left: 24 + i * 44 + 'px', animationDelay: i * 0.6 + 's' }"></div>
-        <span class="aside-poem">{{ term.name }} · {{ dateStr }}</span>
-      </div>
     </el-aside>
     <el-container>
       <el-header class="header" :class="{ 'reader-app-header': $route.name === 'reader' }">
@@ -22,7 +18,6 @@
           <div><span class="page-title">{{ $route.meta.title || '' }}</span><span class="page-context">{{ $route.meta.context || '个人知识库' }}</span></div>
         </div>
         <div class="header-actions">
-          <span class="header-slogan">{{ term.name }}三候 · {{ term.hou.join(' · ') }}</span>
           <el-badge :value="activeTaskCount" :hidden="!activeTaskCount" class="task-badge">
             <el-button plain class="task-button" @click="taskDrawerOpen = true"><el-icon><Bell /></el-icon><span>任务</span></el-button>
           </el-badge>
@@ -39,71 +34,27 @@
     </el-drawer>
     <GlobalTaskCenter v-model="taskDrawerOpen" />
 
-    <!-- 首次使用引导：未配置 API Key 时提示 -->
-    <el-dialog v-model="showKeyGuide" title="可选：启用云端 AI 能力" width="520px" append-to-body @closed="rememberKeyGuide">
-      <div class="guide-body">
-        <p>本应用支持为 <b>AI 问答、研究、写作和 PPT</b> 分别选择模型；<b>文本解析 / 切块 / 检索等分析全部在本地完成</b>，仅将「任务指令 + 检索片段」发送给你选择的模型供应商。</p>
-        <p>使用前需要至少配置一个 <b>AI 模型连接</b>：</p>
-        <ol class="guide-steps">
-          <li>可直接配置 DeepSeek，也可添加 Kimi、智谱 GLM、通义、OpenAI、Anthropic、Gemini 或自定义连接；</li>
-          <li>在 <b>设置 → 模型连接与功能路由</b> 中选择全局默认模型；</li>
-          <li>点击「检测」确认连接成功，再按需为研究、写作和 PPT 单独分配模型。</li>
-        </ol>
-        <p class="guide-tip">💡 连接与任务路由均保存在本机；API Key 加密保存，不会写入知识库正文。</p>
-      </div>
-      <template #footer>
-        <el-button @click="showKeyGuide = false">稍后再说</el-button>
-        <el-button type="primary" @click="goSettings">去设置</el-button>
-      </template>
-    </el-dialog>
   </el-container>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { Menu, Fold, Expand, Bell } from '@element-plus/icons-vue'
-import { getSettings } from './api'
-import { getSolarTerm } from './utils/solarTerm'
 import AppNavigation from './components/AppNavigation.vue'
 import GlobalTaskCenter from './components/GlobalTaskCenter.vue'
 import { taskCenter, startTaskPolling, stopTaskPolling } from './stores/taskCenter'
 
-const router = useRouter()
-const showKeyGuide = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
 const mobileNav = ref(false)
 const taskDrawerOpen = ref(false)
 const activeTaskCount = computed(() => taskCenter.items.filter((task) => ['pending', 'running', 'cancelling'].includes(task.status)).length)
-const term = getSolarTerm()
-const dateStr = (() => {
-  const d = new Date()
-  return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日'
-})()
-
-const goSettings = () => {
-  rememberKeyGuide()
-  showKeyGuide.value = false
-  router.push('/settings')
-}
-
-const rememberKeyGuide = () => localStorage.setItem('aiKeyGuideSeen', 'true')
 
 const toggleSidebar = () => {
   sidebarCollapsed.value = !sidebarCollapsed.value
   localStorage.setItem('sidebarCollapsed', String(sidebarCollapsed.value))
 }
 
-onMounted(async () => {
-  startTaskPolling()
-  // 首次使用引导：未配置 API Key 时弹窗提示
-  try {
-    const s = await getSettings()
-    if (!s.text_provider_configured && localStorage.getItem('aiKeyGuideSeen') !== 'true') {
-      showKeyGuide.value = true
-    }
-  } catch { /* 后端未启动等场景静默 */ }
-})
+onMounted(startTaskPolling)
 onUnmounted(stopTaskPolling)
 </script>
 

@@ -14,6 +14,7 @@ from backend.app.models import Book, ChatLog
 from backend.app.schemas import ChatHistoryDetail, ChatHistoryItem, ChatHistoryResp, ChatReq, ChatSource
 from backend.app.services.llm import LLMRouter, load_llm_config
 from backend.app.services.rag import fts, retriever
+from backend.app.services.rag.reranker import record_citation_eval, verify_citations
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -56,13 +57,10 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
 
         answer = "".join(answer_parts)
 
-        # 引用核验：检查 AI 回答中的 [资料N] 标注是否与检索到的 sources 匹配
-        try:
-            from backend.app.services.rag.reranker import verify_citation, record_citation_eval
-            verification = verify_citation(answer, sources_payload)
-            record_citation_eval(verification)
-        except Exception:  # noqa: BLE001
-            verification = {}
+        # This only checks that cited source numbers exist. It cannot establish
+        # whether a sentence is actually supported by the cited passage.
+        verification = verify_citations(answer, sources_payload)
+        record_citation_eval(verification)
 
         # 存历史
         log = ChatLog(
@@ -74,7 +72,9 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(log)
         yield _sse("done", {"chat_id": log.id, "sources": sources_payload,
-                            "citation_verified": verification.get("verified", False)})
+                            "citation_reference_valid": verification["verified"],
+                            "citation_audit": {**verification, "semantic_status": "not_checked"},
+                            "citation_verified": False})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -120,10 +120,13 @@ def get_chat(chat_id: int, db: Session = Depends(get_db)):
         sources = json.loads(log.sources_json) if log.sources_json else []
     except json.JSONDecodeError:
         sources = []
+    citation_audit = {**verify_citations(log.answer or "", sources),
+                      "semantic_status": "not_checked"}
     return ChatHistoryDetail(
         id=log.id, question=log.question, answer=log.answer or "",
         model=log.model_name or log.mode,
-        sources=[ChatSource(**source) for source in sources], created_at=log.created_at,
+        sources=[ChatSource(**source) for source in sources], citation_audit=citation_audit,
+        created_at=log.created_at,
     )
 
 
@@ -138,6 +141,6 @@ def delete_chat(chat_id: int, db: Session = Depends(get_db)):
 
 @router.get("/chat/eval")
 def chat_eval_stats():
-    """检索效果评测统计（命中率、引用核验率）。"""
+    """检索命中数和引用编号有效率；不代表引文语义支持率。"""
     from backend.app.services.rag.reranker import get_eval_stats
     return get_eval_stats()

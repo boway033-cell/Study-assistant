@@ -48,6 +48,16 @@ def _env_bool(key: str, default: bool) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _env_origins(key: str) -> tuple[str, ...]:
+    """读取逗号分隔的可信源，并统一去掉末尾斜杠。"""
+    values = []
+    for raw in _env(key, "").split(","):
+        origin = raw.strip().rstrip("/")
+        if origin and origin not in values:
+            values.append(origin)
+    return tuple(values)
+
+
 class Settings:
     """集中配置。.env 文件为可选（项目根目录 .env）。"""
 
@@ -56,6 +66,7 @@ class Settings:
 
         self.host: str = _env("HOST", "127.0.0.1")
         self.port: int = int(_env("PORT", "8000"))
+        self.cors_allowed_origins: tuple[str, ...] = _env_origins("CORS_ALLOWED_ORIGINS")
 
         # 数据目录（绝对路径：相对路径按项目根解析，不依赖运行 cwd）
         _data_raw = _env("DATA_DIR", str(BACKEND_DIR / "data"))

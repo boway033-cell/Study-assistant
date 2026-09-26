@@ -322,6 +322,72 @@ class StudyReport(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 
+class SensemakingArtifact(Base):
+    """Versioned, source-bound argument maps and cross-document discoveries."""
+
+    __tablename__ = "sensemaking_artifacts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    book_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    focus: Mapped[str] = mapped_column(String(300), default="", nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    source_versions_json: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class UnderstandingAttempt(Base):
+    """The user's own explanation and the source-bounded coaching response."""
+
+    __tablename__ = "understanding_attempts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    artifact_id: Mapped[int] = mapped_column(ForeignKey("sensemaking_artifacts.id", ondelete="CASCADE"), nullable=False, index=True)
+    node_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    response: Mapped[str] = mapped_column(Text, nullable=False)
+    feedback_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class SensemakingRevision(Base):
+    """Append-only history of a user's changing interpretation of a node or idea."""
+
+    __tablename__ = "sensemaking_revisions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    artifact_id: Mapped[int] = mapped_column(ForeignKey("sensemaking_artifacts.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    item_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    before_json: Mapped[str] = mapped_column(Text, nullable=False)
+    after_json: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger_ref: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class SensemakingInterpretation(Base):
+    """A question and source-bound explanation generated from a full-text reading asset."""
+
+    __tablename__ = "sensemaking_interpretations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    artifact_id: Mapped[int] = mapped_column(ForeignKey("sensemaking_artifacts.id", ondelete="CASCADE"), nullable=False, index=True)
+    question: Mapped[str] = mapped_column(String(500), nullable=False)
+    mode: Mapped[str] = mapped_column(String(24), nullable=False)
+    answer_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+
+class SensemakingReadingCheckpoint(Base):
+    """Resumable full-text reading passes tied to an exact document digest."""
+
+    __tablename__ = "sensemaking_reading_checkpoints"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    focus: Mapped[str] = mapped_column(String(300), default="", nullable=False)
+    version_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    prompt_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    state_json: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 

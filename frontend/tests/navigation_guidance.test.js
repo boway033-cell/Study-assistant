@@ -8,14 +8,13 @@ const here = dirname(fileURLToPath(import.meta.url))
 const navigation = readFileSync(resolve(here, '../src/components/AppNavigation.vue'), 'utf8')
 const app = readFileSync(resolve(here, '../src/App.vue'), 'utf8')
 
-test('sidebar presents one guided knowledge workflow before secondary capabilities', () => {
-  for (const label of ['01</i> 资料入库', '02</i> 研读与沉淀', '03</i> 写作', '04</i> 文献汇报']) {
+test('sidebar exposes four workspaces and groups secondary tools', () => {
+  for (const label of ['01</i> 资料库', '02</i> 研读', '03</i> 写作', '04</i> 汇报']) {
     assert.match(navigation, new RegExp(label))
   }
-  assert.match(navigation, /当前路径/)
-  assert.match(navigation, /先导入并确认解析就绪/)
-  assert.match(navigation, /index="assist"/)
-  assert.match(navigation, /index="optional"/)
+  assert.match(navigation, /index="tools"/)
+  assert.doesNotMatch(navigation, /当前路径/)
+  assert.doesNotMatch(navigation, /index="\/draw"/)
   assert.match(navigation, /unique-opened/)
 })
 

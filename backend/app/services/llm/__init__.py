@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 import threading
 import time
@@ -304,7 +303,8 @@ def _record_usage(provider_id: str, task: str, *, ok: bool, fallback: bool,
                 row["fallback_activations"] = int(row.get("fallback_activations", 0)) + int(fallback)
                 row["input_chars"] = int(row.get("input_chars", 0)) + input_chars
                 row["output_chars"] = int(row.get("output_chars", 0)) + output_chars
-                row["estimated_tokens"] = int(row.get("estimated_tokens", 0)) + math.ceil((input_chars + output_chars) / 4)
+                from backend.app.services.llm.budget import estimate_tokens
+                row["estimated_tokens"] = estimate_tokens(row["input_chars"] + row["output_chars"])
                 row["elapsed_ms"] = int(row.get("elapsed_ms", 0)) + elapsed_ms
                 stats[key] = row
                 setting = db.get(Setting, "llm_usage_stats")
@@ -341,20 +341,31 @@ class RoutedProvider(LLMProvider):
 
     async def stream_chat(self, messages: list[dict]) -> AsyncIterator[str]:
         input_chars = sum(len(str(message.get("content", ""))) for message in messages)
+        from backend.app.services.llm.budget import BudgetExceeded, current_budget, load_default_budget
+        budget = current_budget.get() or load_default_budget()
         errors = []
         for index, provider in enumerate(self.providers):
+            if budget is not None:
+                budget.start_call(input_chars)
             emitted = False
             output_chars = 0
             started = time.perf_counter()
             try:
                 async for delta in provider.stream_chat(messages):
                     emitted = True; output_chars += len(delta)
+                    if budget is not None:
+                        budget.output(len(delta))
                     yield delta
                 _record_usage(provider.name, self.task, ok=True, fallback=index > 0,
                               input_chars=input_chars, output_chars=output_chars,
                               elapsed_ms=round((time.perf_counter() - started) * 1000))
                 return
             except Exception as exc:
+                if isinstance(exc, BudgetExceeded):
+                    _record_usage(provider.name, self.task, ok=False, fallback=index > 0,
+                                  input_chars=input_chars, output_chars=output_chars,
+                                  elapsed_ms=round((time.perf_counter() - started) * 1000))
+                    raise
                 _record_usage(provider.name, self.task, ok=False, fallback=index > 0,
                               input_chars=input_chars, output_chars=output_chars,
                               elapsed_ms=round((time.perf_counter() - started) * 1000))

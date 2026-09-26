@@ -36,7 +36,7 @@ export function renderMarkdown(text) {
   try {
     // 兼容旧输出：内部 B/CH/C/P 锚点只用于审计，不直接打断读者句子。
     const numbers = new Map()
-    const readable = text.replace(/\[(B\d+(?::(?:CH|C|P|NOTE)\d+(?:-\d+)?)*|(?:NOTE|EVIDENCE|REPORT):\d+)\]/g, (_, anchor) => {
+    const readable = text.replace(/\[(B\d+(?::(?:CH|C|P|NOTE)\d+(?:-\d+)?)*|(?:NOTE|EVIDENCE|REPORT):\d+|WEB:[A-Za-z0-9][A-Za-z0-9._/:\-]*)\]/g, (_, anchor) => {
       if (!numbers.has(anchor)) numbers.set(anchor, numbers.size + 1)
       return `<sup class="source-note" title="来源 ${numbers.get(anchor)}">${numbers.get(anchor)}</sup>`
     })

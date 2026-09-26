@@ -24,6 +24,8 @@ jobs:
         run: pip install -r requirements.txt -r requirements/dev.txt
       - name: Unit tests
         run: python -m pytest -q
+      - name: Fixed retrieval quality gate
+        run: python scripts/evaluate_retrieval.py
 
   frontend-build:
     runs-on: ubuntu-latest

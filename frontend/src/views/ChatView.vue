@@ -34,6 +34,9 @@
               <div class="msg-content">
                 <div v-if="m.streaming" class="streaming">{{ m.content }}</div>
                 <div v-else v-html="sanitizeHtml(m.content)"></div>
+                <p v-if="m.citationAudit" class="citation-audit" :class="{ 'citation-audit-warn': !m.citationAudit.verified }">
+                  {{ m.citationAudit.verified ? '引用编号已核对；主张是否得到原文支持仍需核对' : '引用缺失或编号无效；请逐条核对原文' }}
+                </p>
                 <div v-if="m.sources?.length" class="sources">
                   <el-tag v-for="(s, j) in m.sources" :key="j" size="small" type="info"
                     :effect="activeSourceIndex === i && activeSourceIdx === j ? 'dark' : 'plain'"
@@ -210,6 +213,7 @@ const send = async () => {
       } else if (event === 'done') {
         aiMsg.value.streaming = false
         aiMsg.value.sources = data.sources || []
+        aiMsg.value.citationAudit = data.citation_audit || null
         scrollBottom()
         loadHistory()
         // 自动在右侧展示第一个出处的原文
@@ -258,7 +262,7 @@ const viewHistory = async (summary) => {
   let h
   try { h = await getChat(summary.id) } catch (error) { ElMessage.error('历史详情加载失败：' + error.message); return }
   messages.value.push({ role: 'user', content: h.question })
-  const msg = { role: 'assistant', content: h.answer, sources: h.sources || [], bookId: bookId.value }
+  const msg = { role: 'assistant', content: h.answer, sources: h.sources || [], citationAudit: h.citation_audit || null, bookId: bookId.value }
   messages.value.push(msg)
   if (h.sources?.length) {
     activeSourceIndex.value = messages.value.length - 1
@@ -314,6 +318,8 @@ onBeforeUnmount(() => { streamAbort.value?.abort() })
 .streaming::after { content: '▌'; animation: blink 1s infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .sources { margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap; }
+.citation-audit { margin-top: 8px; color: var(--study-text-secondary); font-size: 12px; line-height: 1.5; }
+.citation-audit-warn { color: var(--el-color-warning-dark-2); }
 .source-tag { cursor: pointer; }
 .input-row { display: flex; align-items: flex-end; margin-top: 12px; }
 .history-title { font-weight: 600; margin-bottom: 8px; color: var(--el-text-color-primary); }

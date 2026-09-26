@@ -37,6 +37,33 @@ from backend.app.worker.tasks import cancel_task, get_task, has_active_task, ret
 
 router = APIRouter(prefix="/api", tags=["books"])
 
+
+@router.post("/books/demo", status_code=201)
+async def create_demo_book(db: Session = Depends(get_db)):
+    """生成原创演示文献并走正常导入流程；不需要 API Key。"""
+    from io import BytesIO
+    from docx import Document
+
+    document = Document()
+    document.add_heading("演示资料：如何判断学习计划是否有效", 0)
+    document.add_paragraph("这是学习助手自带的虚构教学材料。人物、样本和数字仅用于练习阅读、检索与做笔记，不可作为真实研究证据。")
+    sections = [
+        ("研究问题", "一个学习小组想知道：把每周学习任务拆成三次短练习，是否比一次集中练习更容易坚持？他们首先把“有效”拆成完成率、延迟回忆和主观负担三个指标。"),
+        ("材料与方法", "虚构的 24 名参与者被分成两组，连续四周记录学习时长与完成情况。甲组每周做三次短练习，乙组每周做一次集中练习。两组使用同一份练习材料，但最初的学习习惯并未完全相同。"),
+        ("观察结果", "演示记录中，甲组平均完成率为 78%，乙组为 70%；一周后回忆测试分别为 6.8 和 6.2 分。差距很小，样本量也不足以支持稳健的因果结论。个别参与者更喜欢集中练习。"),
+        ("解释与边界", "这些观察只能提示短练习可能更容易安排。因为分组前的学习习惯、任务难度和自报时长都可能影响结果，不能断言练习频率单独造成差异。尝试复核时，应先定义结局指标，再扩大样本并控制基线差异。"),
+        ("阅读练习", "请在阅读器中搜索“完成率”，给结果段落添加高亮和笔记；再写下一个替代解释。无需配置 AI，也可以完成导入、阅读、检索和笔记闭环。"),
+    ]
+    for heading, body in sections:
+        document.add_heading(heading, level=1)
+        document.add_paragraph(body)
+    stream = BytesIO()
+    document.save(stream)
+    stream.seek(0)
+    result = await upload_book(UploadFile(filename="学习助手_演示研究材料.docx", file=stream), db)
+    result["demo"] = True
+    return result
+
 # 原版按页原文：每次请求都会全量重解析整本 PDF，数百页文档单次翻页可达数十秒。
 # 这里按 (文件大小, 修改时间) 做进程内缓存，只追加缓存层，不改变解析逻辑与返回值。
 _PAGE_TEXT_CACHE: dict[str, tuple[tuple[int, int], list[str]]] = {}

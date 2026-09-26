@@ -211,6 +211,7 @@ class ChatHistoryDetail(BaseModel):
     answer: str
     model: str = ""
     sources: list[ChatSource] = []
+    citation_audit: dict | None = None
     created_at: datetime
 
 

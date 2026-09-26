@@ -1,4 +1,4 @@
-# Study Assistant 2.3 下载、安装与更新
+# Study Assistant 2.4 下载、安装与更新
 
 本文面向 Windows 10/11。当前发布形态是本机运行的 Web 应用，不是桌面 EXE：双击启动器后由本地服务打开浏览器，资料不会上传到项目作者的服务器。
 
@@ -7,7 +7,7 @@
 ### A. 下载 Release（普通用户推荐）
 
 1. 打开 [最新 Release](https://github.com/boway033-cell/Study-assistant/releases/latest)。
-2. 下载所选版本下的 `study-assistant-v*.zip` 应用附件；以 Release 页实际存在的附件为准。若 2.3.0 应用包尚未发布，使用下方 Git 源码方式。
+2. 下载所选版本下的 `study-assistant-v*.zip` 应用附件；以 Release 页实际存在的附件为准。若附件尚未发布，使用下方 Git 源码方式。
 3. 完整解压到一个长期保留、路径较短的目录，例如 `D:\Apps\Study-assistant`。
 
 Release 已包含构建后的前端，因此不需要 Node.js；仍需安装 Python 与 Python 依赖。不要直接在压缩包预览窗口中运行 `start.bat`。
@@ -17,12 +17,28 @@ Release 已包含构建后的前端，因此不需要 Node.js；仍需安装 Pyt
 ```powershell
 git clone https://github.com/boway033-cell/Study-assistant.git
 cd Study-assistant
-git checkout v2.3.0
+git checkout v2.4
 ```
 
 源码方式需要 Node.js 22+ 来构建前端。
 
 ## 首次安装
+
+### 向导安装（推荐）
+
+解压完整目录后双击项目根目录的 `install.bat`。向导会检查 64 位 Python 3.12+、建立 `.venv`、安装 Python 依赖；源码包缺少 `frontend/dist` 时会调用本机 Node.js 构建。每完成一步就记录到 `.setup-state.json`，安装中断后再次运行会从未完成步骤继续。安装结束会执行只读诊断并启动应用。
+
+迁移旧版资料时，先停止旧版和新版服务，再在新版本目录运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup-wizard.ps1 -OldDataDir "D:\旧版目录\backend\data"
+```
+
+迁移先复制到暂存目录并逐文件核对 SHA-256，再放入新版 `backend/data`；旧目录保留。新版数据目录已有资料时，向导会停止，避免覆盖。安装前后可双击 `diagnose.bat`，或在应用「设置 → 安装与数据诊断」点击「一键诊断」。诊断只读取环境和数据库，不修改资料。
+
+无 API Key 也可以在「资料库」点击「试读演示资料」。应用会本地生成一份虚构 DOCX，完成导入、阅读、搜索、高亮和笔记流程；演示中的人物和数字不能当作真实研究证据。
+
+下方保留手动安装步骤，适合需要自行控制依赖版本的用户。
 
 ### 1. 安装 Python
 
@@ -69,7 +85,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\protocol\install.p
 
 ## 配置 AI 模型
 
-进入“可选工具与设置 → 设置 → 模型连接”：
+进入“设置 → 模型连接”：
 
 1. 新建或编辑供应商连接，填写 API Key、Base URL 和模型名。
 2. 运行连接检测。连接可用不代表所有任务都自动使用它。
@@ -79,6 +95,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\protocol\install.p
 支持 DeepSeek、Kimi、智谱 GLM、通义、OpenAI、Anthropic、Gemini 与自定义接口。不同厂商的鉴权和请求格式由各适配器处理，不要求所有模型兼容 OpenAI。
 
 API Key 只保存在本机并加密显示。调用云端模型时，所选范围的必要文本或图像会发送给对应供应商；完整边界见 [PRIVACY.md](../PRIVACY.md)。
+
+研究报告提交前会展示选中材料字数、模型、预计调用次数、估算 Token 和费用，并要求确认本次 Token 上限。费用仅在「设置 → AI 费用估算」手动填写对应供应商的每百万 Token 费率后显示；未填写时明确显示未知。估算不等于供应商账单，模型内部推理、重试和回退可能增加实际用量。达到已确认的任务上限时生成会停止，已保存的草稿仍可在任务中心查看。
+
+其他 AI 问答与后台生成任务使用「设置 → 所有 AI 任务的默认上限」，初始为每任务 200,000 估算 Token、50 次模型调用，可自行调整；研究报告使用提交前确认的单独上限。默认上限提供运行时保护，目前这些其他任务尚未逐一提供材料范围与费用的提交前预览。
 
 ## 更新到新版本
 
@@ -154,7 +174,7 @@ cd ..
 1. “资料库”导入一份无敏感内容的测试 PDF。
 2. 在任务中心确认解析完成。
 3. 打开阅读器并测试目录跳转。
-4. 进入“查证与维护 → 知识库健康”确认审计能运行。
+4. 进入“更多工具 → 知识库健康”确认审计能运行。
 5. 如已配置模型，再分别检测连接和任务路由。
 
 开发者可运行：

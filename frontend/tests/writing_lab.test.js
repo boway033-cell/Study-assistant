@@ -23,20 +23,22 @@ test('writing DNA keeps the 20-article and rights boundaries visible', () => {
 test('writing is a discoverable first-class workspace with versioned DNA and DOCX cleaning', () => {
   assert.match(writingView, /WritingLabDrawer/)
   assert.match(writingView, /embedded/)
-  assert.match(navigation, /写作工作台/)
+  assert.match(navigation, /03<\/i> 写作/)
   assert.match(router, /path: '\/writing'/)
   assert.match(workbench, /router\.push\('\/writing'\)/)
   assert.match(drawer, /持续完善/)
-  assert.match(drawer, /独立仿写/)
+  assert.match(drawer, /生成独立新作/)
   assert.match(drawer, /导入 Word 并输出 Word/)
   assert.match(drawer, /规则 \{\{/)
 })
 
-test('writing workspace keeps four orthogonal entries and one output archive', () => {
-  assert.match(drawer, /<el-tab-pane label="写作 DNA" name="dna">/)
-  assert.match(drawer, /<el-tab-pane label="写作生成" name="generate">/)
-  assert.match(drawer, /<el-tab-pane label="去 AI 味" name="clean">/)
-  assert.match(drawer, /<el-tab-pane label="写作输出" name="outputs">/)
+test('writing workspace starts with creation and keeps one output archive', () => {
+  assert.match(drawer, /<el-tab-pane v-if="mode==='dna'" label="写作风格" name="dna">/)
+  assert.match(drawer, /<el-tab-pane label="新建作品" name="generate">/)
+  assert.match(drawer, /<el-tab-pane v-if="mode==='clean'" label="去 AI 味" name="clean">/)
+  assert.match(drawer, /写作工具 ▾/)
+  assert.match(drawer, /<el-tab-pane label="作品库" name="outputs">/)
+  assert.match(drawer, /mode=ref\('generate'\)/)
   assert.equal((drawer.match(/<el-tab-pane /g) || []).length, 4)
   // 资产管理不再内嵌生成入口
   assert.doesNotMatch(drawer, /imitate-panel/)
@@ -59,13 +61,12 @@ test('writing outputs support corpus correction, version comparison, editing, an
   assert.match(drawer, /正文按需加载/)
 })
 
-test('multi-document review is a first-class closed-corpus writing workflow', () => {
+test('cross-document work uses research reports and keeps old review outputs', () => {
   assert.match(drawer, /多文献综述/)
-  assert.match(drawer, /至少选择 2 篇/)
-  assert.match(drawer, /Writing DNA/)
-  assert.match(drawer, /不是系统综述/)
-  assert.match(drawer, /createLiteratureReview/)
-  assert.match(drawer, /v-model\.number="reviewForm\.length"/)
+  assert.doesNotMatch(drawer, /createLiteratureReview/)
+  assert.match(drawer, /研读 · 研究报告/)
+  assert.match(drawer, /study_report:'研究报告'/)
+  assert.match(study, /继续写作 \/ 导出 Word/)
   assert.match(drawer, /subscribeTask\(submitted\.task_id/)
   assert.match(drawer, /citation_warning/)
 })
@@ -73,7 +74,7 @@ test('multi-document review is a first-class closed-corpus writing workflow', ()
 test('research reports expose coherent writing and controlled extension choices', () => {
   assert.match(study, /连贯分析文章/)
   assert.match(study, /探索性延伸/)
-  assert.match(study, /target_length:targetLength\.value/)
+  assert.match(study, /target_length:\s*targetLength\.value/)
 })
 
 test('reader prose hides machine anchors behind compact source notes', () => {
@@ -85,8 +86,9 @@ test('reader prose hides machine anchors behind compact source notes', () => {
 test('research, writing, and PPTX share the selected-knowledge-object boundary', () => {
   assert.match(study, /保存批判性审查到知识库/)
   assert.match(study, /跨文献关系/)
-  assert.match(drawer, /知识对象.*必选/)
-  assert.match(drawer, /knowledge_note_ids/)
+  assert.match(drawer, /<span>取材来源<\/span><WritingSourcePicker/)
+  assert.doesNotMatch(drawer, /取材来源 <small>/)
+  assert.match(drawer, /buildImitatePayload/)
   assert.match(workbench, /知识对象（必选）/)
   assert.match(workbench, /每页必须引用/)
   assert.match(study, /人工复核/)
