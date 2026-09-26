@@ -69,7 +69,8 @@ def main() -> int:
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered, encoding="utf-8")
-    print(rendered)
+    # CI 的 Windows 控制台可能使用 cp1252；控制台写 ASCII JSON，文件仍保留 UTF-8 原文。
+    print(json.dumps(report, ensure_ascii=True, indent=2))
     return 0 if report["thresholds"]["passed"] else 1
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, literature, official_writing, presentations, quizzes, settings, shelves, stats, study, tags, writing
+from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, literature, official_writing, presentations, quizzes, sensemaking, settings, shelves, stats, study, tags, writing
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import Base, engine
 from backend.app.services.rag import fts
@@ -250,7 +251,7 @@ async def lifespan(_app: FastAPI):
         pass
 
 
-app = FastAPI(title="Study assistant", version="2.3.3", lifespan=lifespan)
+app = FastAPI(title="Study assistant", version="2.4.0", lifespan=lifespan)
 
 
 class SPAStaticFiles(StaticFiles):
@@ -271,11 +272,15 @@ class SPAStaticFiles(StaticFiles):
 # 本地访问控制：只允许本服务与本地开发源，拒绝任意来源跨域（防恶意网页调用本地 API）
 # 8000–8010 are runtime fallback ports; 8011 is the documented isolated UI-smoke port.
 _LOCAL_APP_PORTS = {*range(8000, 8012), app_settings.port}
-_ALLOWED_ORIGINS = [
+_LOCAL_ALLOWED_ORIGINS = [
     f"http://{host}:{port}"
     for host in ("127.0.0.1", "localhost")
     for port in sorted(_LOCAL_APP_PORTS | {5173})
 ]
+_ALLOWED_ORIGINS = list(dict.fromkeys([
+    *_LOCAL_ALLOWED_ORIGINS,
+    *app_settings.cors_allowed_origins,
+]))
 
 app.add_middleware(
     CORSMiddleware,
@@ -293,10 +298,14 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 @app.middleware("http")
 async def _guard_local_api(request: Request, call_next):
-    """拒绝带非本地 Origin 的 API 请求（防恶意网页跨源调用本地服务）。"""
+    """允许可信跨源及当前部署域名的同源 API 请求。"""
     if request.url.path.startswith("/api/"):
         origin = (request.headers.get("origin") or "").rstrip("/")
-        if origin and origin not in _ALLOWED_ORIGINS:
+        forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",", 1)[0].strip()
+        request_host = forwarded_host or request.headers.get("host", "").strip()
+        origin_host = urlsplit(origin).netloc if origin else ""
+        is_same_origin = bool(origin_host and request_host and origin_host.casefold() == request_host.casefold())
+        if origin and origin not in _ALLOWED_ORIGINS and not is_same_origin:
             return JSONResponse(status_code=403, content={"detail": "跨源请求被拒绝"})
     return await call_next(request)
 
@@ -310,6 +319,7 @@ app.include_router(annotations.router)
 app.include_router(ai.router)
 app.include_router(deep.router)
 app.include_router(study.router)
+app.include_router(sensemaking.router)
 app.include_router(graph.router)
 app.include_router(tags.router)
 app.include_router(shelves.router)

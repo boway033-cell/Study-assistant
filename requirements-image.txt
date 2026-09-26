@@ -1,0 +1,25 @@
+# Meoo 首次镜像部署使用的核心依赖。
+#
+# 秒悟 CLI 当前会在约 12 分钟终止构建，而远端镜像源下载速度约 100 KB/s。
+# 首次烟测镜像因此省略按需加载的大型文档依赖：PyMuPDF、pdftext、
+# python-pptx、Pillow、jieba、rapidocr 与 onnxruntime。Web/API、DOCX、AI
+# 客户端与密钥加密功能保留；PDF/PPTX/OCR/中文分词增强功能仅在本地完整
+# 环境可用。待镜像构建缓存或自定义基础镜像可用后恢复完整 requirements.txt。
+# 待镜像构建缓存或自定义基础镜像可用后，再恢复 requirements.txt 的完整依赖集。
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.3
+sqlalchemy==2.0.52
+aiosqlite==0.22.1
+python-multipart==0.0.32
+python-dotenv==1.2.2
+
+# DOCX 是启动链路中的硬依赖
+python-docx==1.2.0
+
+# 云端 AI 客户端
+httpx==0.28.1
+openai==3.1.0
+
+# API Key 加密存储
+cryptography==50.0.0

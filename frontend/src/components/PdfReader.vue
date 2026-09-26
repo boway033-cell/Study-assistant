@@ -95,9 +95,13 @@
 
     <!-- 批注悬浮卡：锚定在命中的高亮/划线上，长内容在卡内滚动 -->
     <div v-if="hoverCard.visible" ref="hoverCardEl" class="pr-hover-card"
-      :style="{ left: hoverPos.left + 'px', top: hoverPos.top + 'px', opacity: hoverPlaced ? 1 : 0 }"
-      role="tooltip" aria-live="polite"
+      :style="{ left: hoverPos.left + 'px', top: hoverPos.top + 'px', width: hoverCardSize.width + 'px', maxHeight: hoverCardSize.maxHeight + 'px', opacity: hoverPlaced ? 1 : 0, pointerEvents: hoverPlaced ? 'auto' : 'none' }"
+      :role="hoverPinned ? 'dialog' : 'tooltip'" :aria-label="hoverPinned ? '批注详情' : '批注预览'" aria-live="polite"
       @mouseenter="onHoverCardEnter" @mouseleave="onHoverCardLeave">
+      <div v-if="hoverPinned" class="pr-hover-toolbar">
+        <span>批注详情</span>
+        <button type="button" aria-label="关闭批注详情" @click="closeHoverCard">×</button>
+      </div>
       <div v-for="item in hoverCard.items" :key="item.id" class="pr-hover-item">
         <div class="pr-hover-head">
           <span class="pr-hover-source" :class="'pr-hover-source-' + item.origin">{{ item.sourceLabel }}</span>
@@ -106,6 +110,10 @@
         <div v-if="item.hasNote" class="pr-hover-note">{{ item.note }}</div>
         <div v-else class="pr-hover-empty">{{ item.emptyLabel }}</div>
         <div v-if="item.text" class="pr-hover-quote">{{ item.text }}</div>
+        <div v-if="hoverPinned && annById.has(item.id)" class="pr-hover-actions">
+          <button type="button" @click="editHoverAnnotation(item.id)">编辑</button>
+          <button type="button" class="danger" @click="removeAnn(annById.get(item.id))">删除</button>
+        </div>
       </div>
     </div>
 
@@ -698,7 +706,7 @@ const scrollToPage = (p, smooth = true) => {
   const useSmooth = smooth && mode.value === 'scroll'
   const top = mode.value === 'scroll' ? pageOffset(target) + 2 : 0
   scroller.value.scrollTo({ top, behavior: useSmooth ? 'smooth' : 'auto' })
-  nextTick(renderVisible)
+  nextTick(() => { renderVisible(); repositionHoverCard() })
   notifyPageChange()
 }
 
@@ -842,6 +850,7 @@ const annById = computed(() => {
 const hoverCard = ref({ visible: false, ids: [], items: [] })
 const hoverPos = ref({ left: 0, top: 0 })
 const hoverPlaced = ref(false)
+const hoverCardSize = ref({ width: HOVER_CARD_MAX_WIDTH, maxHeight: HOVER_CARD_MAX_HEIGHT })
 const hoverCardEl = ref(null)
 let hoverAnchor = null            // { page, rect } 归一化锚点
 let hoverPointer = { x: 0, y: 0, target: null }
@@ -851,7 +860,9 @@ let hoverPendingKey = ''          // 待打开计时器计划展示的命中 key
 let hoverEpoch = 0                // 每次关闭浮层自增，作废排队中的旧计时器
 let hoverCloseTimer = null
 let hoverLastKey = ''
-let hoverPinned = false
+const hoverPinned = ref(false)
+let hoverPositionRequest = 0
+let hoverResizeObserver = null
 let hoverCardPointerInside = false
 let hoverMarkedEls = []
 
@@ -882,12 +893,13 @@ const cancelHoverOpen = () => {
 }
 
 const closeHoverCard = () => {
+  hoverPositionRequest += 1
   hoverEpoch += 1                 // 让任何排队中的旧打开计时器失效
   cancelHoverOpen()
   clearTimeout(hoverCloseTimer); hoverCloseTimer = null
   hoverAnchor = null
   hoverLastKey = ''
-  hoverPinned = false
+  hoverPinned.value = false
   hoverPlaced.value = false
   clearHoverMarks()
   if (hoverCard.value.visible || hoverCard.value.ids.length) {
@@ -896,14 +908,18 @@ const closeHoverCard = () => {
 }
 
 const scheduleHoverClose = () => {
-  if (hoverCardPointerInside) return
+  if (hoverPinned.value || hoverCardPointerInside) return
   clearTimeout(hoverCloseTimer)
-  hoverCloseTimer = setTimeout(() => { hoverCloseTimer = null; closeHoverCard() }, HOVER_CLOSE_DELAY_MS)
+  hoverCloseTimer = setTimeout(() => {
+    hoverCloseTimer = null
+    if (!hoverPinned.value && !hoverCardPointerInside) closeHoverCard()
+  }, HOVER_CLOSE_DELAY_MS)
 }
 
 // 卡片位置由「标注矩形」而不是鼠标位置决定，因此鼠标在同一处高亮内移动时不会抖动。
 const positionHoverCard = async () => {
   if (!hoverCard.value.visible || !hoverAnchor?.rect || !rootEl.value) return
+  const request = ++hoverPositionRequest
   const pageEl = rootEl.value.querySelector(`.pr-page[data-page="${hoverAnchor.page}"]`)
   if (!pageEl) { closeHoverCard(); return }
   const pr = pageEl.getBoundingClientRect()
@@ -924,14 +940,24 @@ const positionHoverCard = async () => {
     return
   }
   const rootRect = rootEl.value.getBoundingClientRect()
-  // 先挂载再量尺寸：首次打开时卡片元素还不存在，量不到真实高度会算错翻折方向。
-  if (!hoverCardEl.value) { await nextTick(); if (!hoverCardEl.value) return }
+  // 先挂载再量尺寸；卡片尺寸必须跟随正文区，而非整个浏览器视口。
+  if (!hoverCardEl.value) await nextTick()
+  if (request !== hoverPositionRequest || !hoverCardEl.value) return
   // 卡片只能在「正文滚动区 ∩ 组件根节点 ∩ 视口」的交集内出现，
   // 否则会盖住左侧目录或顶部工具栏（根节点包含这两块）。
   const viewport = { width: window.innerWidth, height: window.innerHeight }
   // await 期间布局可能变化，重新量一次滚动区，用最新矩形求交集。
   const scrollerRect = scroller.value?.getBoundingClientRect()
   const bounds = hoverCardBounds({ root: rootRect, scroller: scrollerRect, viewport })
+  const availableWidth = bounds.right - bounds.left - 12
+  const availableHeight = bounds.bottom - bounds.top - 12
+  if (availableWidth < 80 || availableHeight < 60) { closeHoverCard(); return }
+  hoverCardSize.value = {
+    width: Math.min(HOVER_CARD_MAX_WIDTH, availableWidth),
+    maxHeight: Math.min(HOVER_CARD_MAX_HEIGHT, availableHeight),
+  }
+  await nextTick()
+  if (request !== hoverPositionRequest || !hoverCardEl.value) return
   const placed = placeHoverCard({
     anchor: box,
     card: { width: hoverCardEl.value.offsetWidth || HOVER_CARD_MAX_WIDTH, height: hoverCardEl.value.offsetHeight || HOVER_CARD_MAX_HEIGHT },
@@ -944,12 +970,14 @@ const positionHoverCard = async () => {
 
 const repositionHoverCard = () => { if (hoverCard.value.visible) void positionHoverCard() }
 
+watch(showTocPanel, () => nextTick(repositionHoverCard))
+
 const openHoverCard = (list, pageEl, rects, pageNo, pinned = false) => {
   const items = buildHoverItems(list)
   if (!items.length) { closeHoverCard(); return }
   const ids = items.map(item => item.id)
   const key = ids.join(',') + '@' + pageNo
-  hoverPinned = pinned
+  hoverPinned.value = pinned
   hoverAnchor = { page: pageNo, rect: unionRect(rects) || (rects || [])[0] || null }
   if (key !== hoverLastKey || !hoverCard.value.visible) {
     hoverLastKey = key
@@ -977,7 +1005,7 @@ const hoverHitAt = (clientX, clientY, target) => {
 }
 
 const scanHoverAt = (clientX, clientY, target) => {
-  if (hoverPinned) return
+  if (hoverPinned.value) return
   if (!hlIndex.value.size) return
   // 正在拖选文字时不弹卡，避免打断选区（isCollapsed 足够，避免对大选区做字符串化）。
   const sel = window.getSelection()
@@ -1032,8 +1060,10 @@ const onBodyMouseLeave = () => {
   scheduleHoverClose()
 }
 
-const onBodyMouseDown = () => {
-  // 按下鼠标即收起：拖选文字时浮层不会盖住正文。
+const onBodyMouseDown = (e) => {
+  // 高亮上的按下先保留当前卡片，让 click 决定切换或关闭，避免闪动。
+  cancelHoverOpen()
+  if (hoverHitAt(e.clientX, e.clientY, e.target)) return
   hoverCardPointerInside = false
   closeHoverCard()
 }
@@ -1045,6 +1075,7 @@ const onBodyClick = (e) => {
   if (sel && !sel.isCollapsed) return
   const found = hoverHitAt(e.clientX, e.clientY, e.target)
   if (!found) { closeHoverCard(); return }
+  if (hoverPinned.value && hoverKeyOf(found) === hoverLastKey) { closeHoverCard(); return }
   clearTimeout(hoverCloseTimer); hoverCloseTimer = null
   hoverLastKey = ''
   openHoverCard(found.hits.map(h => h.ann), found.pageEl, found.hits.map(h => h.rect), found.pageNo, true)
@@ -1057,6 +1088,13 @@ const onHoverCardEnter = () => {
 const onHoverCardLeave = () => {
   hoverCardPointerInside = false
   scheduleHoverClose()
+}
+
+const editHoverAnnotation = (id) => {
+  const annotation = annById.value.get(id)
+  if (!annotation) return
+  closeHoverCard()
+  openAnnCard('edit', annotation)
 }
 
 // 键盘降级：每页每条批注的首个矩形进入 Tab 顺序（其余矩形 tabindex=-1 且 aria-hidden），
@@ -1103,6 +1141,7 @@ const loadNodeOptions = async () => {
 const onMouseUp = async (e) => {
   const sel = window.getSelection()
   if (!sel || sel.isCollapsed || !sel.toString().trim()) { selToolbar.value = false; return }
+  closeHoverCard()
   const range = sel.getRangeAt(0).cloneRange()
   const rect = range.getBoundingClientRect()
   if (!rect.width) return
@@ -1395,6 +1434,10 @@ const onKeydown = (e) => {
 onMounted(async () => {
   syncTocViewport(compactReaderMedia)
   compactReaderMedia.addEventListener('change', syncTocViewport)
+  hoverResizeObserver = new ResizeObserver(repositionHoverCard)
+  if (rootEl.value) hoverResizeObserver.observe(rootEl.value)
+  if (scroller.value) hoverResizeObserver.observe(scroller.value)
+  window.addEventListener('resize', repositionHoverCard)
   try {
     const b = props.bookId ? await getBook(props.bookId) : null
     bookTitle = b?.title || ''
@@ -1405,6 +1448,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   compactReaderMedia.removeEventListener('change', syncTocViewport)
+  window.removeEventListener('resize', repositionHoverCard)
+  hoverResizeObserver?.disconnect()
   window.removeEventListener('keydown', onKeydown)
   // 悬浮卡状态与节流帧必须清干净，避免组件卸载后残留定时器/监听。
   cancelHoverOpen()
@@ -1526,13 +1571,16 @@ onBeforeUnmount(() => {
 /* 悬浮卡：层级高于 canvas/文字层/高亮层（1~2），低于选区工具条(50)、批注卡(60)与全局抽屉(2000+)。 */
 .pr-hover-card {
   position: absolute; z-index: 45; box-sizing: border-box;
-  width: 320px; max-width: min(320px, 78vw); max-height: 220px; overflow: auto;
+  width: 320px; max-height: 220px; overflow: auto;
   padding: 8px 10px; border-radius: 6px; border: 1px solid var(--el-border-color-light);
   background: #fff; color: var(--el-text-color-primary);
   box-shadow: 0 4px 14px rgba(15,23,42,.18);
   font-size: 12px; line-height: 1.6; text-align: left; pointer-events: auto;
   transition: opacity .08s ease-out;
 }
+.pr-hover-toolbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:7px; padding-bottom:5px; border-bottom:1px solid var(--el-border-color-extra-light); color:var(--el-text-color-secondary); font-size:11px; }
+.pr-hover-toolbar button { border:0; background:transparent; color:inherit; font:18px/1 sans-serif; cursor:pointer; }
+.pr-hover-toolbar button:hover { color:var(--el-text-color-primary); }
 .pr-hover-item + .pr-hover-item { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--el-border-color-extra-light); }
 .pr-hover-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .pr-hover-source { padding: 0 5px; border-radius: 3px; font-size: 11px; line-height: 17px; border: 1px solid transparent; }
@@ -1545,13 +1593,17 @@ onBeforeUnmount(() => {
   margin-top: 5px; padding-left: 7px; border-left: 2px solid var(--el-border-color);
   color: var(--el-text-color-secondary); white-space: pre-wrap; word-break: break-word;
 }
-.pr-dark .pr-hover-card { background: #1f2733; border-color: #3a4553; color: #e6eaf0; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
-.pr-dark .pr-hover-item + .pr-hover-item { border-top-color: #3a4553; }
-.pr-dark .pr-hover-source-user { background: #22303f; color: #8ec8f5; border-color: #2f4257; }
-.pr-dark .pr-hover-source-ai { background: #3b3220; color: #f0c07a; border-color: #4e4427; }
-.pr-dark .pr-hover-note { color: #e6eaf0; }
-.pr-dark .pr-hover-empty, .pr-dark .pr-hover-quote, .pr-dark .pr-hover-kind { color: #a9b4c2; }
-.pr-dark .pr-hover-quote { border-left-color: #3a4553; }
+.pr-hover-actions { display:flex; justify-content:flex-end; gap:12px; margin-top:6px; }
+.pr-hover-actions button { border:0; padding:2px 0; background:transparent; color:var(--el-color-primary); font:inherit; cursor:pointer; }
+.pr-hover-actions button.danger { color:var(--el-color-danger); }
+.pr-hover-actions button:hover { text-decoration:underline; }
+.pr-dark .pr-hover-card { background: #252525; border-color: #555; color: #eee; box-shadow: 0 4px 16px rgba(0,0,0,.38); }
+.pr-dark .pr-hover-toolbar, .pr-dark .pr-hover-item + .pr-hover-item { border-color: #484848; }
+.pr-dark .pr-hover-source-user { background: #343632; color: #d7dec8; border-color: #55594e; }
+.pr-dark .pr-hover-source-ai { background: #3b342a; color: #e5c78c; border-color: #5a4b34; }
+.pr-dark .pr-hover-note { color: #eee; }
+.pr-dark .pr-hover-empty, .pr-dark .pr-hover-quote, .pr-dark .pr-hover-kind { color: #bbb; }
+.pr-dark .pr-hover-quote { border-left-color: #555; }
 .pr-ann-card {
   position: absolute; z-index: 60; width: 280px; padding: 10px; top: 58px; right: 12px;
   background: #fff; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.3);

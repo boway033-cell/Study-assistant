@@ -82,7 +82,7 @@ def verify_citations(answer: str, sources: list[dict]) -> dict:
     返回: {citations_found: [N], sources_provided: int, mismatched: [N], verified: bool}
     """
     # 提取回答中的 [资料N] 标注（兼容中英文标点）
-    citations = re.findall('资料([0-9]+)|ref([0-9]+)', answer)
+    citations = re.findall(r'\[(?:资料([0-9]+)|ref([0-9]+))\]', answer, re.IGNORECASE)
     cited_nums = [int(n1 or n2) for n1, n2 in citations]
     sources_count = len(sources)
 
@@ -132,5 +132,7 @@ def get_eval_stats() -> dict:
         "total_queries": len(hits),
         "avg_retrieval_hits": round(avg_hits, 1),
         "total_citation_checks": len(cites),
-        "citation_verify_rate": round(verify_rate, 2),
+        "citation_reference_valid_rate": round(verify_rate, 2),
+        "citation_verify_rate": round(verify_rate, 2),  # Legacy name: number validity only.
+        "citation_semantic_support_rate": None,
     }

@@ -15,6 +15,8 @@ from backend.app.core.database import get_db
 from backend.app.models import Book, LiteratureAccessAttempt, LiteratureResource, PaperProfile, Setting
 from backend.app.services.literature_access import (PROVIDER_CAPABILITIES, build_library_handoff,
     download_verified_pdf, resolve_candidates, LiteratureNetworkError)
+from backend.app.services.literature_search import (CROSSREF_ATTRIBUTION, CROSSREF_PROVIDER,
+    LiteratureSearchError, provider_capabilities, search_literature)
 
 logger = logging.getLogger(__name__)
 from backend.app.worker.import_task import run_import
@@ -46,6 +48,14 @@ class BrowserHandoffReq(ResolveReq):
 RESOURCE_ROLES = {"main", "supplementary", "figure", "table", "dataset", "other"}
 RIGHTS_STATUSES = {"not_evaluated", "undetermined", "in_copyright", "open_license",
                    "permission_granted", "public_domain", "restricted"}
+
+
+class SearchReq(BaseModel):
+    """按主题检索学术元数据；只返回结构化元数据与摘要，不下载全文。"""
+
+    query: str = Field(min_length=3, max_length=400)
+    provider: str = Field(default=CROSSREF_PROVIDER, max_length=40)
+    rows: int = Field(default=10, ge=1, le=25)
 
 
 class ResourceWrite(BaseModel):
@@ -187,6 +197,39 @@ async def import_open_access(req: ImportReq, db: Session = Depends(get_db)):
         logger.error("文献导入未预期异常: %s", exc)
         target.unlink(missing_ok=True); attempt.status = "failed"; attempt.error_msg = "导入失败"; db.commit()
         raise HTTPException(500, "文献导入失败，请稍后重试") from exc
+
+
+@router.post("/search")
+async def search_metadata(req: SearchReq, db: Session = Depends(get_db)):
+    """用户主动触发的按主题学术元数据检索。
+
+    只返回结构化元数据/摘要，绝不下载全文、绝不读取浏览器状态。失败时给出可恢复的
+    中文错误，且不向前端或日志暴露 API key、内部路径或原始异常。
+    """
+    if req.provider not in {item["id"] for item in provider_capabilities()}:
+        raise HTTPException(400, "暂不支持该文献元数据 provider")
+    query = req.query.strip()
+    try:
+        results = await search_literature(query, provider=req.provider, rows=req.rows,
+                                          mailto=_get(db, "unpaywall_email"))
+    except LiteratureSearchError as exc:
+        logger.warning("文献元数据检索失败: %s", exc)
+        raise HTTPException(502, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    attribution = CROSSREF_ATTRIBUTION if req.provider == CROSSREF_PROVIDER else ""
+    attempt = LiteratureAccessAttempt(
+        query=query, include_si=None, route=f"{req.provider}_metadata",
+        status="searched" if results else "no_result",
+        manifest_json=json.dumps({"version": 1, "provider": req.provider, "rows": req.rows,
+                                  "result_count": len(results), "attribution": attribution,
+                                  "full_text_downloaded": False, "secrets_included": False},
+                                 ensure_ascii=False))
+    db.add(attempt); db.commit(); db.refresh(attempt)
+    return {"attempt_id": attempt.id, "provider": req.provider, "query": query,
+            "count": len(results), "results": results, "attribution": attribution,
+            "evidence_levels": {"abstract": "摘要级依据（主张不得超出摘要）",
+                                "metadata": "元数据线索（不可作为事实依据，请先查找开放全文或导入后再使用）"}}
 
 
 @router.post("/library-handoff")

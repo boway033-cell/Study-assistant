@@ -7,6 +7,7 @@
         <div><strong>{{ libraryStats.attention }}</strong><span>待处理</span></div>
       </div>
       <template #actions><div class="library-primary-actions">
+        <el-button :loading="demoLoading" @click="loadDemo">试读演示资料</el-button>
         <KeycapCard compact :variant="searchPanelOpen ? 'primary' : 'warm'" aria-haspopup="dialog" :aria-expanded="searchPanelOpen" @click="searchPanelOpen = true">全文检索</KeycapCard>
         <el-upload :show-file-list="false" :auto-upload="false" :on-change="handleBatchSelect" multiple accept=".pdf,.docx,.pptx" :disabled="uploading">
           <KeycapCard compact variant="warm" :loading="uploading">批量导入</KeycapCard>
@@ -113,7 +114,7 @@
                 </el-dropdown>
               </div>
             </StudyListRow>
-            <StudyEmptyState v-if="!filteredBooks.length && !loading" compact :title="activeFilterCount ? '没有符合当前筛选的资料' : '当前范围还没有资料'" :description="activeFilterCount ? '清除部分筛选条件，或切换到其他书架。' : '导入 PDF、Word 或 PowerPoint 后会在这里建立可检索档案。'"><template #actions><el-button v-if="activeFilterCount" type="primary" plain @click="clearLibraryFilters">清除筛选</el-button></template></StudyEmptyState>
+            <StudyEmptyState v-if="!filteredBooks.length && !loading" compact :title="activeFilterCount ? '没有符合当前筛选的资料' : '当前范围还没有资料'" :description="activeFilterCount ? '清除部分筛选条件，或切换到其他书架。' : '导入 PDF、Word 或 PowerPoint 后会在这里建立可检索档案。无 API Key 也能试读演示资料、搜索并做笔记。'"><template #actions><el-button v-if="activeFilterCount" type="primary" plain @click="clearLibraryFilters">清除筛选</el-button><el-button v-else type="primary" plain :loading="demoLoading" @click="loadDemo">加载演示资料</el-button></template></StudyEmptyState>
             <el-button v-if="books.length < filteredTotal" class="library-load-more" :loading="loading" @click="loadBooks(false)">加载更多（{{ books.length }}/{{ filteredTotal }}）</el-button>
           </div>
         </GlowBorderCard>
@@ -268,7 +269,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { MoreFilled } from '@element-plus/icons-vue'
 import { listBooks, uploadBook, uploadBookBatch, deleteBook, getBook, searchBooks, classifyAllBooks, setBookCategory, deepAnalyze, updateArchiveProfile,
-  listShelves, createShelf, updateShelf, deleteShelf as deleteShelfApi, putShelfBooks, reorderBooks } from '../api'
+  listShelves, createShelf, updateShelf, deleteShelf as deleteShelfApi, putShelfBooks, reorderBooks, createDemoBook } from '../api'
 import { sanitizeHtml } from '../utils/markdown'
 import { notifyTaskSubmitted } from '../stores/taskCenter'
 import StudyCommandBar from '../components/StudyCommandBar.vue'
@@ -287,6 +288,17 @@ const libraryStats = ref({ total: 0, reading: 0, favorite: 0, attention: 0, unfi
 const libraryPage = ref(1)
 const loading = ref(false)
 const uploading = ref(false)
+const demoLoading = ref(false)
+const loadDemo = async () => {
+  demoLoading.value = true
+  try {
+    const result = await createDemoBook()
+    await loadBooks()
+    if (result.duplicate) ElMessage.info('演示资料已在资料库中')
+    else { notifyTaskSubmitted(); ElMessage.success('演示资料已加入解析队列。完成后可阅读、搜索和做笔记。') }
+  } catch (error) { ElMessage.error(`加载演示资料失败：${error.message}`) }
+  finally { demoLoading.value = false }
+}
 const classifying = ref(false)
 const searchQ = ref('')
 const results = ref(null)

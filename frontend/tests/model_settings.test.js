@@ -10,9 +10,10 @@ test('model settings use one provider list instead of a duplicate connection tab
   assert.match(source, /按功能选择模型/)
 })
 
-test('default text model is probed independently and automatically', () => {
+test('default text model is probed explicitly from settings', () => {
   assert.match(source, /probeCompatibleProvider\(id\)/)
-  assert.match(source, /await probeDefault\(\)/)
+  assert.match(source, /@click="probeDefault"/)
+  assert.doesNotMatch(source, /await probeDefault\(\)/)
 })
 
 test('model routing exposes safe fallback, local usage, and capacity guardrails', () => {

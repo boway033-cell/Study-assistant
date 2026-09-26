@@ -28,7 +28,7 @@
 
       <main class="report-pane panel">
         <header>
-          <div><b>研究报告工作区</b><small>模型规划研究路径、来源约束防止脱离原文；结论与来源主张审计。需要叙事型综述请用「写作工作台 → 多文献综述」</small></div>
+          <div><b>研究报告工作区</b><small>在这里完成跨文献比较、叙事综述与证据审查；成稿后送入写作作品库继续编辑。</small></div>
           <div class="report-head-actions"><el-button v-if="content" @click="copyReport">复制 Markdown</el-button><el-button v-if="content" type="primary" plain @click="immersive=true">沉浸阅读</el-button></div>
         </header>
         <div class="research-brief">
@@ -45,7 +45,7 @@
               </el-radio-group>
             </label>
           </div>
-          <p class="method-hint">{{ activeMode.description }} <span v-if="reasoningDepth==='deep'">深度模式分批阅读所选全文，再规划与综合；长书耗时和模型用量会随文本量增加。</span><span v-else>快速模式按问题检索证据，适合先形成草稿。</span></p>
+          <p class="method-hint">{{ activeMode.description }} <span v-if="reasoningDepth==='deep'">{{ selectedNoteIds.length && !selectedChapterIds.length ? '仅选笔记时使用所选笔记，不扩展到全文。' : '深度模式分批阅读所选书目或章节全文，再规划与综合；长书耗时和模型用量会随文本量增加。' }}</span><span v-else>快速模式使用所选章节或笔记；未点选具体材料时按问题检索书目片段。</span></p>
           <div class="method-row writing-options">
             <label>成文方式
               <el-select v-model="writingStyle"><el-option label="连贯分析文章" value="analytical_essay"/><el-option label="结构化研究报告" value="structured_report"/></el-select>
@@ -66,6 +66,7 @@
           <label>用户补充维度（可选）
             <el-input v-model="framework" type="textarea" :rows="2" maxlength="400" placeholder="留空时由 AI 根据材料自主选择；也可补充必须比较的概念、案例或方法" />
           </label>
+          <p v-if="knowledgeBookIds.length" class="method-hint">本次已选 {{ knowledgeBookIds.length }} 本资料、{{ selectedChapterIds.length }} 章、{{ selectedNoteIds.length }} 条笔记；任务内容将发送至<router-link to="/settings">设置中的研究模型供应商</router-link>。{{ reasoningDepth === 'deep' && !(selectedNoteIds.length && !selectedChapterIds.length) ? '可能分批发送所选范围的全文。' : '发送所选材料或检索片段。' }}</p>
           <el-button type="primary" size="large" :disabled="loading" @click="generate">{{ loading ? '研读任务已在后台运行' : '生成研究报告' }}</el-button>
           <section v-if="loading" class="task-monitor" aria-live="polite">
             <header><div><b>研读进度</b><small>{{ activeTaskId }}</small></div><el-button link type="danger" @click="cancelActiveTask">停止任务</el-button></header>
@@ -82,7 +83,7 @@
           <div class="plan-columns">
             <div v-if="activePlan.subquestions?.length"><h3>子问题</h3><ol><li v-for="item in activePlan.subquestions" :key="item">{{ item }}</li></ol></div>
             <div v-if="activePlan.analysis_axes?.length"><h3>分析维度</h3><ul><li v-for="item in activePlan.analysis_axes" :key="item">{{ item }}</li></ul></div>
-            <div v-if="activePlan.evidence_needs?.length"><h3>证据需求</h3><ul><li v-for="item in activePlan.evidence_needs" :key="item">{{ item }}</li></ul></div>
+            <div v-if="activePlan.evidence_needs?.length"><h3>证据需求</h3><ul><li v-for="item in activePlan.evidence_needs" :key="item">{{ item }}</li></ul><p v-for="item in activePlan.evidence_need_checks || []" :key="item.need" class="need-check">{{ item.status === 'candidate_found' ? '已找到候选片段' : '未检出候选片段' }}：{{ item.need }}。这不是主张支持性核验。</p></div>
           </div>
         </section>
 
@@ -92,21 +93,22 @@
         </section>
         <el-alert v-if="reportViolations" type="warning" :closable="false" class="report-violations" :title="`AI 味硬性禁令检测：疑似违规 ${reportViolations.total} 处（${reportViolations.detail}），提示词已禁止这些写法，此为机器检测结果，请人工复核。`" :description="reportViolations.samples" />
         <article v-if="content" class="markdown-body report-content" v-html="renderMarkdown(content)" />
-        <el-empty v-else description="选择材料并提出研究问题；不勾选章节时，AI 会在所选书目范围内检索证据。需要叙事型长综述或证据图谱，请用「写作工作台 → 写作生成 → 多文献综述」" />
+        <el-empty v-else description="选择材料并提出研究问题；不勾选章节时，AI 会在所选书目范围内检索证据。" />
         <footer v-if="content" class="output-actions">
           <el-button type="success" :loading="depositing" @click="depositReview">保存批判性审查到知识库</el-button>
+          <el-button type="primary" :loading="promotingReport" @click="continueWriting">继续写作 / 导出 Word</el-button>
           <el-button type="primary" plain @click="sendToPptx">发送到 PPTX 工作台</el-button>
         </footer>
       </main>
 
       <aside class="audit-pane panel">
-        <header><div><b>来源与主张审计</b><small>{{ activeReport?.claims?.length || 0 }} 条主张</small></div><div class="claim-review-actions"><el-button v-if="activeReport?.claims?.length&&!editingClaims" size="small" text @click="beginClaimReview">人工复核</el-button><template v-if="editingClaims"><el-button size="small" text @click="cancelClaimReview">取消</el-button><el-button size="small" type="primary" :loading="savingClaims" @click="saveClaimReview">保存</el-button></template></div></header>
+        <header><div><b>来源与主张审计</b><small>{{ activeReport?.claims?.length || 0 }} 条主张 · AI 初判需核对原文</small></div><div class="claim-review-actions"><el-button v-if="activeReport?.claims?.length&&!editingClaims" size="small" text @click="beginClaimReview">人工复核</el-button><template v-if="editingClaims"><el-button size="small" text @click="cancelClaimReview">取消</el-button><el-button size="small" type="primary" :loading="savingClaims" @click="saveClaimReview">保存</el-button></template></div></header>
         <section class="source-summary"><h3>本次来源</h3><button v-for="book in scopedBooks" :key="book.id" @click="router.push(`/reader/${book.id}`)">《{{ book.title }}》 ↗</button></section>
-        <section v-if="activeReport?.evidence_summary" class="evidence-summary"><h3>跨文献关系</h3><div><span>共识 <b>{{ relationCount('consensus') }}</b></span><span>互补 <b>{{ relationCount('complementary') }}</b></span><span>冲突 <b>{{ relationCount('conflict') }}</b></span><span>待定 <b>{{ relationCount('unresolved') }}</b></span></div></section>
+        <section v-if="activeReport?.evidence_summary" class="evidence-summary"><h3>跨文献关系（台账标签计数）</h3><div><span>共识 <b>{{ relationCount('consensus') }}</b></span><span>互补 <b>{{ relationCount('complementary') }}</b></span><span>冲突 <b>{{ relationCount('conflict') }}</b></span><span>待定 <b>{{ relationCount('unresolved') }}</b></span></div></section>
         <section>
-          <h3>可核验主张</h3>
+          <h3>逐条核对主张</h3>
           <article v-for="(claim,index) in displayedClaims" :key="index" class="claim-card" :class="{editing:editingClaims}">
-            <div class="claim-meta"><span :class="claim.status">{{ statusLabel(claim.status) }}</span><span>{{ relationLabel(claim.synthesis_relation) }}</span><span>{{ qualityLabel(claim.evidence_quality) }}</span><small>{{ confidenceLabel(claim.confidence) }}</small></div>
+            <div class="claim-meta"><span :class="claim.status">{{ statusLabel(claim.status) }}</span><span>{{ relationLabel(claim.synthesis_relation) }}</span><span>{{ qualityLabel(claim.evidence_quality) }}</span><small>{{ confidenceLabel(claim.confidence) }}</small><small>{{ activeReport?.selection?.claims_reviewed_at && !claim.human_review_required ? '人工已复核' : '待人工核对' }}</small></div>
             <template v-if="editingClaims"><el-input v-model="claim.claim" type="textarea" :rows="2" maxlength="1000" /><div class="claim-edit-grid"><el-select v-model="claim.status"><el-option label="支持" value="supported"/><el-option label="部分支持" value="partial"/><el-option label="待核验" value="needs_review"/><el-option label="不支持" value="unsupported"/></el-select><el-select v-model="claim.synthesis_relation"><el-option label="共识" value="consensus"/><el-option label="互补" value="complementary"/><el-option label="冲突" value="conflict"/><el-option label="单一来源" value="single_source"/><el-option label="待定" value="unresolved"/></el-select><el-select v-model="claim.evidence_quality"><el-option label="高质量" value="high"/><el-option label="中等质量" value="moderate"/><el-option label="低质量" value="low"/><el-option label="极低质量" value="very_low"/><el-option label="未评估" value="not_assessed"/></el-select></div><el-input v-model="claim.reason" type="textarea" :rows="2" placeholder="判断理由"/><el-input v-model="claim.counterpoint" type="textarea" :rows="2" placeholder="反例、限制或适用边界"/><el-checkbox v-model="claim.human_review_required">仍需进一步人工核验</el-checkbox></template><p v-else>{{ claim.claim }}</p>
             <div class="source-links"><button v-for="ref in claim.source_refs || []" :key="ref" @click="openSourceRef(ref)">{{ ref }} ↗</button><small v-if="!(claim.source_refs || []).length">无有效来源锚点</small></div>
             <em>{{ claim.reason }}</em><em v-if="claim.counterpoint" class="counterpoint">限制：{{ claim.counterpoint }}</em>
@@ -133,10 +135,10 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import KnowledgeScopeSelector from '../components/KnowledgeScopeSelector.vue'
 import { knowledgeBooks, knowledgeBookIds, loadKnowledgeBooks } from '../stores/knowledgeScope'
-import { cancelTask, getBook, subscribeTask, studyOverview, studyReports, getStudyReport, listKnowledgeRecords, listWritingProfiles, depositStudyReport, updateStudyReportClaims } from '../api'
+import { cancelTask, getBook, subscribeTask, studyOverview, estimateStudyOverview, studyReports, getStudyReport, listKnowledgeRecords, listWritingProfiles, depositStudyReport, updateStudyReportClaims, promoteStudyReport } from '../api'
 import { renderMarkdown } from '../utils/markdown'
 import { notifyTaskSubmitted } from '../stores/taskCenter'
 
@@ -149,6 +151,16 @@ const researchModes = [
 ]
 const router = useRouter()
 const route = useRoute()
+const promotingReport = ref(false)
+const continueWriting = async () => {
+  if (!activeReport.value?.id) return ElMessage.warning('请先生成或打开报告')
+  promotingReport.value = true
+  try {
+    const output = await promoteStudyReport(activeReport.value.id)
+    router.push({ path: '/writing', query: { outputId: output.id } })
+  } catch (error) { ElMessage.error(error.message) }
+  finally { promotingReport.value = false }
+}
 const materialBooks = ref([]), notes = ref([]), selectedChapterIds = ref([]), selectedNoteIds = ref([])
 const sourceQuery = ref(''), focus = ref(''), framework = ref(''), content = ref('')
 const researchMode = ref('adaptive'), reasoningDepth = ref('deep')
@@ -236,6 +248,26 @@ const followStudyTask = async taskId => {
 }
 const generate = async () => {
   if (!focus.value.trim()) return ElMessage.warning('请先写明研究问题')
+  const request = { book_ids: [...knowledgeBookIds.value], chapter_ids: [...selectedChapterIds.value], note_ids: [...selectedNoteIds.value], focus: focus.value.trim(), framework: framework.value.trim(), research_mode: researchMode.value, reasoning_depth: reasoningDepth.value, writing_style: writingStyle.value, extension_level: extensionLevel.value, target_length: targetLength.value, profile_id: dnaProfileId.value }
+  let cap
+  try {
+    const estimate = await estimateStudyOverview(request)
+    if (!estimate.configured) return ElMessage.warning('研究模型尚未配置，请先在设置中添加并检测模型')
+    const suggested = Math.min(2_000_000, Math.ceil(estimate.estimated_tokens * 1.5))
+    const callCap = Math.min(200, Math.max(estimate.estimated_calls, estimate.estimated_calls * 2))
+    const cost = estimate.estimated_cost_cny == null ? '费率未设置，费用未知' : `约 ¥${estimate.estimated_cost_cny}`
+    const { value } = await ElMessageBox.prompt(
+      `材料约 ${estimate.material_chars.toLocaleString()} 字；${estimate.provider_name} / ${estimate.model}；预计 ${estimate.estimated_calls} 次调用、输入 ${estimate.estimated_input_tokens.toLocaleString()} + 输出 ${estimate.estimated_output_tokens.toLocaleString()} 估算 Token；${cost}。本任务调用上限 ${callCap} 次。${estimate.boundary}`,
+      '确认本次 AI 用量上限',
+      { confirmButtonText: '确认并开始', cancelButtonText: '返回调整材料', inputValue: String(suggested),
+        inputPlaceholder: '输入本任务最大估算 Token',
+        inputValidator: text => Number.isInteger(Number(text)) && Number(text) >= estimate.estimated_tokens && Number(text) <= 2_000_000 ? true : `请输入 ${estimate.estimated_tokens}–2,000,000 之间的整数` }
+    )
+    cap = { budget_max_tokens: Number(value), budget_max_calls: callCap }
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    return ElMessage.error(`无法预估任务用量：${error.message || error}`)
+  }
   loading.value = true
   progress.value = 0
   stageKey.value = 'overview'
@@ -245,7 +277,7 @@ const generate = async () => {
   activeReport.value = null
   content.value = ''
   try {
-    const response = await studyOverview({ book_ids: knowledgeBookIds.value, chapter_ids: selectedChapterIds.value, note_ids: selectedNoteIds.value, focus: focus.value.trim(), framework: framework.value.trim(), research_mode: researchMode.value, reasoning_depth: reasoningDepth.value, writing_style:writingStyle.value, extension_level:extensionLevel.value, target_length:targetLength.value, profile_id:dnaProfileId.value })
+    const response = await studyOverview({ ...request, ...cap })
     notifyTaskSubmitted()
     followStudyTask(response.task_id)
   } catch (error) {
@@ -282,6 +314,10 @@ onMounted(async () => {
   await loadKnowledgeBooks()
   await Promise.all([loadMaterials(), loadReports(), listWritingProfiles().then(r => { readyDnaProfiles.value = (r.items || []).filter(item => item.status === 'ready') }).catch(() => {})])
   const reportId = Number(route.query.reportId)
+  if (!reportId && typeof route.query.focus === 'string') {
+    focus.value = route.query.focus.slice(0, 500)
+    researchMode.value = 'gap'
+  }
   if (Number.isInteger(reportId) && reportId > 0) {
     const report = reports.value.find(item => item.id === reportId) || { id: reportId }
     await openReport(report)

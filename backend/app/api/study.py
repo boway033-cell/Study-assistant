@@ -48,6 +48,80 @@ class StudyOverviewReq(BaseModel):
     extension_level: Literal["grounded", "exploratory"] = "exploratory"
     target_length: int = Field(default=3000, ge=800, le=12000)
     profile_id: int | None = None
+    budget_max_tokens: int = Field(default=0, ge=0, le=2_000_000)
+    budget_max_calls: int = Field(default=0, ge=0, le=200)
+
+
+def _overview_budget(req: StudyOverviewReq, db: Session) -> dict:
+    """提交前用数据库里的实际材料范围估算；不把估算冒充账单。"""
+    from math import ceil
+    from backend.app.services.long_research import scope_size
+    from backend.app.services.llm.budget import estimate_tokens
+    from backend.app.models import Setting
+
+    books = db.scalars(select(Book).where(Book.id.in_(req.book_ids))).all()
+    if len(books) != len(set(req.book_ids)) or any(book.status != "ready" for book in books):
+        raise HTTPException(400, "所选资料不存在或尚未解析完成")
+    if req.chapter_ids:
+        rows = db.execute(select(Chapter.id, Chapter.book_id, Chapter.parent_id)
+                          .where(Chapter.book_id.in_(req.book_ids))).all()
+        selected = set(req.chapter_ids)
+        if not selected.issubset({row.id for row in rows}):
+            raise HTTPException(400, "所选章节不属于当前资料")
+        while True:
+            expanded = selected | {row.id for row in rows if row.parent_id in selected}
+            if expanded == selected:
+                break
+            selected = expanded
+        chapter_ids = list(selected)
+    else:
+        chapter_ids = []
+    _, corpus_chars = scope_size(db, req.book_ids, chapter_ids)
+    notes = db.scalars(select(KnowledgeNote).where(KnowledgeNote.id.in_(req.note_ids))).all() if req.note_ids else []
+    if len(notes) != len(set(req.note_ids)) or any(note.book_id not in req.book_ids for note in notes):
+        raise HTTPException(400, "所选笔记不属于当前资料")
+    note_chars = sum(min(2000, len(note.content or "")) for note in notes)
+    full_scope = req.reasoning_depth == "deep" and not (req.note_ids and not req.chapter_ids)
+    long_reading = full_scope and corpus_chars > 24000
+    batches = ceil(corpus_chars / 11000) if long_reading else 0
+    sections = max(2, min(6, ceil(req.target_length / 2000))) if long_reading or req.target_length > 4500 else 1
+    calls = batches + (1 if req.reasoning_depth == "deep" else 0) + sections + (1 if sections > 1 else 0)
+    if long_reading:
+        calls += ceil(batches / 18)  # 中间证据地图压缩；具体次数取决于模型输出
+    context_chars = min(corpus_chars, 48000) if full_scope else min(corpus_chars, 42000)
+    if req.note_ids and not req.chapter_ids:
+        context_chars = note_chars
+    if long_reading:
+        context_chars = min(24000, batches * 1200)
+    input_chars = batches * 12500 + context_chars * sections + min(context_chars, 18000) * int(req.reasoning_depth == "deep")
+    input_chars += note_chars * max(1, sections) + len(req.focus + req.framework) * max(1, calls) + calls * 2400
+    output_chars = batches * 1200 + req.target_length * (1.5 if sections > 1 else 1.8) + calls * 350
+    input_tokens, output_tokens = estimate_tokens(input_chars), estimate_tokens(int(output_chars))
+    cfg = load_llm_config(db, "research")
+    try:
+        rates = json.loads((db.get(Setting, "ai_price_rates") or Setting(value="{}")).value)
+    except (ValueError, TypeError):
+        rates = {}
+    rate = rates.get(f"{cfg.get('provider_id')}:{cfg.get('model')}", {}) if isinstance(rates, dict) else {}
+    try:
+        price = round((input_tokens * float(rate["input"]) + output_tokens * float(rate["output"])) / 1_000_000, 4)
+    except (KeyError, TypeError, ValueError):
+        price = None
+    selected_document_chars = 0 if req.note_ids and not req.chapter_ids else corpus_chars
+    return {"material_chars": selected_document_chars + note_chars, "document_chars": selected_document_chars,
+            "note_chars": note_chars, "estimated_calls": calls, "estimated_input_tokens": input_tokens,
+            "estimated_output_tokens": output_tokens, "estimated_tokens": input_tokens + output_tokens,
+            "estimated_cost_cny": price, "provider_id": cfg.get("provider_id"),
+            "provider_name": cfg.get("provider_name"), "model": cfg.get("model"),
+            "configured": bool(cfg.get("configured")),
+            "boundary": "Token 按约 2 字/Token 偏保守估算；重试、回退、模型内部推理与供应商实际分词可能增加用量。费用仅使用你填写的费率。"}
+
+
+@router.post("/overview/estimate")
+def estimate_overview(req: StudyOverviewReq, db: Session = Depends(get_db)):
+    if not req.book_ids:
+        raise HTTPException(422, "请至少选择一本研读文献")
+    return _overview_budget(req, db)
 
 
 _MODE_GUIDANCE = {
@@ -130,7 +204,7 @@ async def _stream_answer(provider, messages: list[dict], error_prefix: str, on_p
                 return answer
             last_err = "AI 返回为空"
         except Exception as exc:  # noqa: BLE001
-            if exc.__class__.__name__ == "TaskCancelled":
+            if exc.__class__.__name__ in {"TaskCancelled", "BudgetExceeded"}:
                 raise
             if answer and on_text:
                 on_text(answer)
@@ -209,6 +283,54 @@ def _format_retrieved_context(items: list[dict], max_chars: int = 22000) -> tupl
         anchors.add(anchor)
         size += len(block)
     return "\n\n".join(parts), anchors
+
+
+def _retrieve_research_candidates(retrieve, focus: str, plan: dict,
+                                  book_ids: list[int]) -> tuple[list[dict], list[dict]]:
+    """Reserve a bounded search pass for planned evidence needs.
+
+    A hit is a candidate passage, not proof that the need was met. Every
+    retrieval is scoped to a book explicitly selected by the user.
+    """
+    needs = list(dict.fromkeys(str(value).strip() for value in plan.get("evidence_needs", [])
+                               if str(value).strip()))[:3]
+    per_book_cap = 6 if needs else 5
+    base_queries = list(dict.fromkeys([focus.strip(), *plan.get("subquestions", [])[:2]]))
+    accepted = {book_id: 0 for book_id in book_ids}
+    seen: set[int] = set()
+    items: list[dict] = []
+    checks = [{"need": need, "status": "no_candidate", "source_refs": []} for need in needs]
+
+    def add_candidates(query: str, book_id: int, *, check: dict | None = None,
+                       per_query: int = 2) -> None:
+        if not query or accepted[book_id] >= per_book_cap:
+            return
+        added = 0
+        for item in retrieve(query, book_ids=[book_id], top_k=6):
+            chunk_id = int(item.get("chunk_id") or 0)
+            if not chunk_id:
+                continue  # A directory outline is not passage evidence.
+            if check is not None:
+                ref = _source_anchor(item)
+                if ref not in check["source_refs"]:
+                    check["source_refs"].append(ref)
+                    check["status"] = "candidate_found"
+            if chunk_id in seen:
+                continue
+            seen.add(chunk_id)
+            items.append(item)
+            accepted[book_id] += 1
+            added += 1
+            if added >= per_query or accepted[book_id] >= per_book_cap:
+                break
+
+    for check in checks:
+        for book_id in book_ids:
+            add_candidates(check["need"], book_id, check=check, per_query=1)
+    for book_id in book_ids:
+        for query in base_queries:
+            add_candidates(query, book_id, per_query=2 if needs else 5)
+    return items, checks
 
 
 def _normalize_claims(raw_claims, allowed_refs: set[str]) -> list[dict]:
@@ -444,29 +566,22 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
 
         # 用户没有点选具体材料时，按研究问题和 AI 子问题在所选书目内迭代检索。
         # 已点选章节/笔记时严格遵守选择边界，不从其他章节补料。
+        evidence_need_checks: list[dict] = []
         if selected_context:
             evidence_context = selected_context
         else:
             update_progress(record, 0.52, "evidence", "正在按研究路径检索和整理证据...")
             from backend.app.services.rag import retriever
-            queries = [focus.strip()] + plan.get("subquestions", [])[:3]
-            retrieved: list[dict] = []
-            seen: set[int] = set()
-            # 每本文献都获得独立召回预算，避免相关性最高的一本文献垄断上下文。
-            for book_id in book_ids:
-                accepted = 0
-                for query in queries:
-                    if not query or accepted >= 5:
-                        continue
-                    for item in retriever.retrieve(query, book_ids=[book_id], top_k=5):
-                        chunk_id = int(item.get("chunk_id") or 0)
-                        if chunk_id and chunk_id not in seen:
-                            seen.add(chunk_id); retrieved.append(item); accepted += 1
-                            if accepted >= 5:
-                                break
+            retrieved, evidence_need_checks = _retrieve_research_candidates(
+                retriever.retrieve, focus, plan, book_ids)
             evidence_context, allowed_refs = _format_retrieved_context(retrieved, max_chars=42000)
+            for check in evidence_need_checks:
+                check["source_refs"] = [ref for ref in check["source_refs"] if ref in allowed_refs]
+                if not check["source_refs"]:
+                    check["status"] = "no_candidate"
             if not evidence_context:
                 evidence_context = overview_context[:22000]
+        plan["evidence_need_checks"] = evidence_need_checks
 
         from backend.app.services.writing_citations import database_source_labels, readable_citations
         citation_labels = database_source_labels(db, allowed_refs)
@@ -507,6 +622,7 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                 f"研读方式：{_MODE_GUIDANCE.get(research_mode, _MODE_GUIDANCE['adaptive'])}\n"
                 f"研究问题：{focus.strip()}\n用户补充维度：{framework.strip() or '无，允许 AI 自主选择'}\n"
                 f"AI 研究路径（可调整结构，不是答案）：{json.dumps(plan, ensure_ascii=False)}\n\n"
+                "证据需求的检索状态只表示是否找到候选片段，不代表主张已获支持；未找到候选时收缩相应判断并列入待核查问题。\n"
                 f"写作形态：{'连贯分析文章' if writing_style == 'analytical_essay' else '结构化研究报告'}；"
                 f"推演自由度：{'允许有标识的探索性延伸' if extension_level == 'exploratory' else '以直接证据解释为主'}；"
                 f"目标长度：约 {target_length} 字。\n"
@@ -607,6 +723,8 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
         if not report_content:
             report_content = answer
         claims = _normalize_claims(raw_claims, allowed_refs)
+        for claim in claims:
+            claim["human_review_required"] = True  # A model cannot mark its own output as human-reviewed.
         hypotheses = _normalize_hypotheses(raw_hypotheses, allowed_refs)
         report_content, citation_notes = readable_citations(
             report_content, valid_anchors=allowed_refs, labels=citation_labels,
@@ -651,6 +769,13 @@ def study_overview(req: StudyOverviewReq, db: Session = Depends(get_db)):
         raise HTTPException(422, "请至少选择一本研读文献")
     if not req.focus.strip():
         raise HTTPException(422, "请先写明研究问题")
+    estimate = _overview_budget(req, db)
+    if not estimate["configured"]:
+        raise HTTPException(400, "研究模型尚未配置，请先在设置中添加并检测模型")
+    if not req.budget_max_tokens or not req.budget_max_calls:
+        raise HTTPException(409, "请先查看用量预估并确认本次 Token 与调用上限")
+    if req.budget_max_tokens < estimate["estimated_tokens"] or req.budget_max_calls < estimate["estimated_calls"]:
+        raise HTTPException(409, "本次上限低于估算需求，请调整范围或提高上限")
     if req.profile_id is not None:
         from backend.app.models import WritingDnaProfile
         dna_profile = db.get(WritingDnaProfile, req.profile_id)
@@ -660,7 +785,8 @@ def study_overview(req: StudyOverviewReq, db: Session = Depends(get_db)):
         rec, req.book_ids, req.focus, req.framework, req.chapter_ids, req.note_ids,
         req.research_mode, req.reasoning_depth, req.writing_style, req.extension_level,
         req.target_length, req.profile_id,
-    ), book_id=req.book_ids[0])
+    ), book_id=req.book_ids[0], budget_max_tokens=req.budget_max_tokens,
+       budget_max_calls=req.budget_max_calls)
     return {"task_id": record.id}
 
 

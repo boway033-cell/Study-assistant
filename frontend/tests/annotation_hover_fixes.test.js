@@ -211,8 +211,8 @@ test('pointer enters A, reader mouseleave fires before the open delay expires �
 
 test('anti-flicker semantics preserved: entering the card keeps it open (close suppressed)', () => {
   const body = extractHandlerBody(reader, 'scheduleHoverClose')
-  assert.match(body, /if \(hoverCardPointerInside\) return/,
-    '指针在卡片内部时不得排关闭计时器（防闪烁语义保留）')
+  assert.match(body, /if \(hoverPinned\.value \|\| hoverCardPointerInside\) return/,
+    '卡片已固定或指针在卡片内部时不得排关闭计时器（防闪烁语义保留）')
   assert.match(body, /HOVER_CLOSE_DELAY_MS/, '关闭仍走原有延迟')
 })
 

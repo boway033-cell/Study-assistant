@@ -141,6 +141,7 @@ export const reorderBooks = (bookIds, shelfId = null) => http.put('/books/order'
 export const getKnowledgeBaseHealth = () => http.get('/books/health')
 export const repairKnowledgeBaseHealth = (issueIds) => http.post('/books/health/repair', { issue_ids: issueIds })
 export const getBook = (id) => http.get(`/books/${id}`)
+export const createDemoBook = () => http.post('/books/demo')
 export const uploadBook = (file) => {
   const form = new FormData()
   form.append('file', file)
@@ -176,6 +177,26 @@ export const restoreTocRevision = (bookId, revisionId) => http.post(`/books/${bo
 export const getArchiveProfile = (bookId) => http.get(`/books/${bookId}/archive`)
 export const updateArchiveProfile = (bookId, data) => http.patch(`/books/${bookId}/archive`, data)
 export const getSourceMap = (bookId) => http.get(`/books/${bookId}/source-map`)
+
+// ===== 理解与深度发现 =====
+export const startArgumentMap = (bookId, focus = '') => http.post('/sensemaking/reading', { book_id: bookId, focus })
+export const estimateFullReading = bookId => http.get('/sensemaking/reading/estimate', { params: { book_id: bookId } })
+export const startConceptDiscovery = (bookIds, concept) => http.post('/sensemaking/discovery', { book_ids: bookIds, concept })
+export const listSensemakingArtifacts = (params = {}) => http.get('/sensemaking/artifacts', { params })
+export const getSensemakingArtifact = (id) => http.get(`/sensemaking/artifacts/${id}`)
+export const submitUnderstandingAttempt = (id, nodeId, response) => http.post(
+  `/sensemaking/artifacts/${id}/attempts`, { node_id: nodeId, response }, { timeout: TIMEOUT.ai })
+export const listUnderstandingAttempts = (id) => http.get(`/sensemaking/artifacts/${id}/attempts`)
+export const reviewDiscoveryCard = (id, discoveryId, status, note = '', remainingDoubt = '', triggerRef = null) => http.patch(
+  `/sensemaking/artifacts/${id}/discoveries/${discoveryId}`, { status, note, remaining_doubt: remainingDoubt, trigger_ref: triggerRef })
+export const reviewArgumentNode = (id, nodeId, status, note = '', remainingDoubt = '', triggerRef = null) => http.patch(
+  `/sensemaking/artifacts/${id}/nodes/${nodeId}`, { status, note, remaining_doubt: remainingDoubt, trigger_ref: triggerRef })
+export const listSensemakingRevisions = id => http.get(`/sensemaking/artifacts/${id}/revisions`)
+export const generateFullTextInterpretation = (id, question, mode) => http.post(
+  `/sensemaking/artifacts/${id}/interpretations`, { question, mode }, { timeout: TIMEOUT.ai })
+export const listFullTextInterpretations = id => http.get(`/sensemaking/artifacts/${id}/interpretations`)
+export const coachArgumentNode = (id, nodeId, mode) => http.post(
+  `/sensemaking/artifacts/${id}/nodes/${nodeId}/coach`, { mode }, { timeout: TIMEOUT.ai })
 
 // ===== 问答 =====
 export const chatStream = async (body, onEvent, options = {}) => {
@@ -294,6 +315,7 @@ export const aiExplain = (data) => http.post('/ai/explain', data)
 export const aiSummarize = (data) => http.post('/ai/summarize', data)
 export const aiVision = (data) => http.post('/ai/vision', data)
 export const studyOverview = (data) => http.post('/study/overview', data)
+export const estimateStudyOverview = (data) => http.post('/study/overview/estimate', data)
 export const studyReports = (page = 1, pageSize = 20) => http.get('/study/reports', { params: { page, page_size: pageSize } })
 export const updateStudyReportClaims = (id, claims) => http.patch(`/study/reports/${id}/claims`, { claims })
 export const depositStudyReport = (id, data = {}) => http.post(`/study/reports/${id}/deposit`, data)
@@ -313,6 +335,11 @@ export const deleteCompatibleProvider = (id) => http.delete(`/settings/providers
 export const probeCompatibleProvider = (id) => http.post(`/settings/providers/${id}/probe`)
 export const updateProviderRouting = (data) => http.put('/settings/providers/routing', data)
 export const getProviderUsage = () => http.get('/settings/providers/usage')
+export const getDiagnostics = () => http.get('/settings/diagnostics')
+export const getAiPriceRates = () => http.get('/settings/ai-price-rates')
+export const updateAiPriceRate = (data) => http.put('/settings/ai-price-rates', data)
+export const getAiDefaultBudget = () => http.get('/settings/ai-default-budget')
+export const updateAiDefaultBudget = (data) => http.put('/settings/ai-default-budget', data)
 export const listProviderModels = (id) => http.get(`/settings/providers/${id}/models`)
 export const discoverProviderModels = (data) => http.post('/settings/providers/models/discover', data)
 export const getStorageUsage = () => http.get('/settings/storage')
@@ -335,10 +362,13 @@ export const createWritingProfile = (data) => http.post('/writing/profiles', dat
 export const refineWritingProfile = (id, data) => http.post(`/writing/profiles/${id}/refine`, data)
 export const deleteWritingProfile = (id) => http.delete(`/writing/profiles/${id}`)
 export const imitateWriting = (id, data) => http.post(`/writing/profiles/${id}/imitate`, data, { timeout: TIMEOUT.ai })
+export const listWritingSources = (params = {}) => http.get('/writing/sources', { params, paramsSerializer: repeatedParams })
+export const searchLiterature = (data) => http.post('/literature/search', data, { timeout: TIMEOUT.write })
 export const createLiteratureReview = (data) => http.post('/writing/literature-review', data, { timeout: TIMEOUT.longAi })
 export const cleanAiToneText = (data) => http.post('/writing/clean-text', data, { timeout: TIMEOUT.ai })
 export const cleanAiToneDocx = (file, profileId) => { const form=new FormData(); form.append('file',file); if(profileId) form.append('profile_id',profileId); return http.post('/writing/clean-docx',form,{timeout:TIMEOUT.longAi}) }
 export const listWritingOutputs = (params = {}) => http.get('/writing/outputs', { params })
+export const promoteStudyReport = (id) => http.post(`/writing/outputs/from-study-report/${id}`)
 export const getWritingOutput = (id) => http.get(`/writing/outputs/${id}`)
 export const updateWritingOutput = (id, data) => http.patch(`/writing/outputs/${id}`, data)
 export const reviewWritingOutput = (id, acceptedIndexes) => http.post(`/writing/outputs/${id}/review`, { accepted_indexes: acceptedIndexes })

@@ -13,6 +13,7 @@
         </div>
         <div v-if="book" class="reader-actions">
           <el-button size="small" @click="askKnowledgeBase">围绕本文提问</el-button>
+          <el-button size="small" @click="router.push({ path: '/sensemaking', query: { bookId: book.id } })">理解这篇</el-button>
           <el-button size="small" type="primary" plain @click="sendToDeck">选段生成汇报</el-button>
           <el-tooltip content="专注阅读"><el-button size="small" circle aria-label="切换专注阅读" @click="focusMode = !focusMode">{{ focusMode ? '↙' : '⛶' }}</el-button></el-tooltip>
         </div>

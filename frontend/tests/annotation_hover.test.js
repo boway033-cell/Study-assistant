@@ -111,8 +111,10 @@ test('a long AI note is preserved verbatim while the card caps its own size', ()
 
   assert.equal(HOVER_CARD_MAX_HEIGHT, 220)
   assert.equal(HOVER_CARD_MAX_WIDTH, 320)
-  // 组件侧：卡片有最大宽高且内部滚动，不会撑破阅读区
-  assert.match(reader, /\.pr-hover-card \{[\s\S]*?max-width: min\(320px, 78vw\);[\s\S]*?max-height: 220px;[\s\S]*?overflow: auto;/)
+  // 组件侧：尺寸由正文可用区域决定，长内容仍在卡片内部滚动。
+  assert.match(reader, /width: Math\.min\(HOVER_CARD_MAX_WIDTH, availableWidth\)/)
+  assert.match(reader, /maxHeight: Math\.min\(HOVER_CARD_MAX_HEIGHT, availableHeight\)/)
+  assert.match(reader, /\.pr-hover-card \{[\s\S]*?max-height: 220px; overflow: auto;/)
   assert.match(reader, /\.pr-hover-note \{ white-space: pre-wrap; word-break: break-word;/)
 })
 
@@ -265,8 +267,17 @@ test('highlight rects keep pointer-events:none and hit testing goes through dele
 
   // 拖选文字过程中不弹卡
   assert.match(reader, /if \(sel && !sel\.isCollapsed\) return/)
-  // 按下鼠标即收起，浮层不会挡住拖选
-  assert.match(reader, /const onBodyMouseDown = \(\) => \{[\s\S]{0,120}closeHoverCard\(\)/)
+  // 点击高亮先保持卡片状态；实际形成文字选区时才收起。
+  assert.match(reader, /const onBodyMouseDown = \(e\) => \{[\s\S]*?if \(hoverHitAt\(e\.clientX, e\.clientY, e\.target\)\) return/)
+  assert.match(reader, /const onMouseUp = async \(e\) => \{[\s\S]*?closeHoverCard\(\)/)
+})
+
+test('click-pinned annotation stays open on leave and a second click closes it', () => {
+  assert.match(reader, /if \(hoverPinned\.value \|\| hoverCardPointerInside\) return/)
+  assert.match(reader, /if \(hoverPinned\.value && hoverKeyOf\(found\) === hoverLastKey\) \{ closeHoverCard\(\); return \}/)
+  assert.match(reader, /:role="hoverPinned \? 'dialog' : 'tooltip'"/)
+  assert.match(reader, /@click="editHoverAnnotation\(item\.id\)"/)
+  assert.match(reader, /@click="removeAnn\(annById\.get\(item\.id\)\)"/)
 })
 
 // ---------------------------------------------------------------------------

@@ -14,3 +14,6 @@
 
 # 批处理脚本必须 CRLF（Windows）
 *.bat text eol=crlf
+
+# 秒悟远程构建在 Linux 中直接执行这些脚本
+*.sh text eol=lf

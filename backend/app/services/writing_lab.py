@@ -18,7 +18,10 @@ from backend.app.core.config import settings
 from backend.app.core.database import SessionLocal
 from backend.app.models import (Book, Chunk, EvidenceCard, KnowledgeNote, PaperProfile, StudyReport, WritingDnaProfile,
                                 WritingDnaRevision, WritingOutput)
+from backend.app.services.literature_access import validate_public_https_url
 from backend.app.services.llm import LLMRouter, load_llm_config, parse_json_response
+from backend.app.services.writing_citations import (ANCHOR_RE, database_source_labels, readable_citations,
+                                                    web_anchor, web_source_labels)
 from backend.app.worker.tasks import TaskRecord, update_progress
 
 AI_TONE_RULES = """仅按以下白名单最小改写，未命中内容逐字保留：
@@ -313,50 +316,247 @@ def dna_style_context(db, profile_id: int, max_chars: int = 12000) -> tuple[str,
     return "\n\n".join(parts)[:max_chars], revision.version
 
 
-def collect_writing_knowledge(db, allowed_book_ids: list[int], knowledge_note_ids: list[int] | None,
-                              evidence_card_ids: list[int] | None, report_ids: list[int] | None,
-                              max_chars: int = 30000) -> tuple[str, list[dict]]:
-    """Resolve selected knowledge objects; raw corpus remains style calibration only."""
-    note_ids = list(dict.fromkeys(knowledge_note_ids or []))
-    card_ids = list(dict.fromkeys(evidence_card_ids or []))
-    selected_report_ids = list(dict.fromkeys(report_ids or []))
-    if not note_ids and not card_ids and not selected_report_ids:
-        raise ValueError("请至少选择一个知识对象作为写作取材来源")
-    allowed = set(allowed_book_ids)
+MAX_KNOWLEDGE_NOTES = 40
+MAX_EVIDENCE_CARDS = 40
+MAX_REPORTS = 10
+MAX_LOCAL_BOOKS = 20
+MAX_EXTERNAL_SOURCES = 20
+MIN_WEB_ABSTRACT_CHARS = 40
+TRUNCATION_NOTICE = "[部分内容来源达到公平取材上限；未展示部分不得推断，也不得引用其锚点]"
+
+
+def _normalize_external_source(raw: dict) -> dict:
+    """校验并冻结一条联网元数据快照。
+
+    只有携带摘要的快照才允许进入取材；仅题名/元数据的命中是检索线索，
+    不能作为事实依据（前端也应阻止其被勾选）。
+    """
+    provider = str(raw.get("provider") or "").strip()[:40]
+    provider_id = str(raw.get("provider_id") or "").strip()[:200]
+    title = re.sub(r"\s+", " ", str(raw.get("title") or "")).strip()[:500]
+    url = str(raw.get("url") or "").strip()
+    abstract = re.sub(r"\s+", " ", str(raw.get("abstract") or "")).strip()[:4000]
+    level = str(raw.get("evidence_level") or "metadata").strip()
+    if not provider or not provider_id:
+        raise ValueError("联网来源缺少 provider 或记录号，无法审计")
+    if not title:
+        raise ValueError("联网来源缺少题名，无法识别")
+    if level not in {"abstract", "metadata"}:
+        raise ValueError("联网来源的证据层级不合法")
+    try:
+        url = validate_public_https_url(url)
+    except ValueError as exc:
+        raise ValueError(f"联网来源地址不合法：{exc}") from exc
+    if level == "metadata" or len(abstract) < MIN_WEB_ABSTRACT_CHARS:
+        raise ValueError("联网来源只有题名或元数据，不能作为事实依据；请先查找开放全文或导入后再使用")
+    return {
+        "provider": provider, "provider_id": provider_id, "title": title,
+        "authors": re.sub(r"\s+", " ", str(raw.get("authors") or "")).strip()[:1000],
+        "year": raw.get("year") if isinstance(raw.get("year"), int) else None,
+        "doi": (str(raw.get("doi") or "").strip()[:255] or None),
+        "url": url, "container_title": str(raw.get("container_title") or "").strip()[:255],
+        "abstract": abstract, "evidence_level": "abstract",
+        "retrieved_at": str(raw.get("retrieved_at") or "").strip()[:40],
+    }
+
+
+def _pack_rows(header: str, rows: list[dict], per_chunk: int, budget: int) -> tuple[str, list[dict], bool]:
+    """把带锚点的片段严格装入预算；只把真正送入模型的锚点记为可引用。"""
+    if budget <= 0:
+        return "", [], bool(rows or header)
+    clipped_header = header[:budget]
+    parts = [clipped_header] if clipped_header else []
+    used = len(clipped_header)
+    included: list[dict] = []
+    truncated = len(header) > budget
+    for row in rows:
+        piece = f"{row['anchor']}\n{row['text'][:per_chunk]}"
+        separator = 2 if parts else 0
+        available = budget - used - separator
+        if available < len(row["anchor"]):
+            truncated = True
+            break
+        clipped = piece[:available]
+        parts.append(clipped)
+        used += separator + len(clipped)
+        included.append({**row, "included_chars": max(0, len(clipped) - len(row["anchor"]) - 1)})
+        if len(clipped) < len(piece):
+            truncated = True
+            break
+    return "\n\n".join(parts), included, truncated
+
+
+def collect_writing_knowledge(db, knowledge_note_ids: list[int] | None = None,
+                              evidence_card_ids: list[int] | None = None, report_ids: list[int] | None = None,
+                              local_book_ids: list[int] | None = None,
+                              external_sources: list[dict] | None = None, question: str = "",
+                              max_chars: int = 30000) -> tuple[str, list[dict], set[str]]:
+    """解析本次仿写的全部内容来源，并返回 (上下文, 内容 manifest, 合法锚点集合)。
+
+    Writing DNA 的语料范围**不再参与内容准入**：DNA 只校准表达、结构与论证习惯；
+    内容可以来自全库任意显式选择的知识对象、已解析本地文献片段，或用户主动检索
+    并标注为“摘要级”的联网快照。DNA corpus 原文永远只作为 calibration。
+    """
+    note_ids = list(dict.fromkeys(int(value) for value in (knowledge_note_ids or [])))
+    card_ids = list(dict.fromkeys(int(value) for value in (evidence_card_ids or [])))
+    selected_report_ids = list(dict.fromkeys(int(value) for value in (report_ids or [])))
+    book_ids = list(dict.fromkeys(int(value) for value in (local_book_ids or [])))
+    raw_externals = list(external_sources or [])
+    if len(raw_externals) > MAX_EXTERNAL_SOURCES:
+        raise ValueError(f"一次最多选择 {MAX_EXTERNAL_SOURCES} 条联网摘要")
+    externals: list[dict] = []
+    seen_web: set[str] = set()
+    for raw in raw_externals:
+        item = _normalize_external_source(raw if isinstance(raw, dict) else {})
+        key = f"{item['provider']}:{item['provider_id']}"
+        if key not in seen_web:
+            seen_web.add(key)
+            externals.append(item)
+    if not (note_ids or card_ids or selected_report_ids or book_ids or externals):
+        raise ValueError("请至少选择一个内容来源：知识笔记 / 证据卡 / 批判性审查报告 / 本地文献 / 联网摘要")
+    if len(note_ids) > MAX_KNOWLEDGE_NOTES:
+        raise ValueError(f"一次最多选择 {MAX_KNOWLEDGE_NOTES} 条知识笔记")
+    if len(card_ids) > MAX_EVIDENCE_CARDS:
+        raise ValueError(f"一次最多选择 {MAX_EVIDENCE_CARDS} 张证据卡")
+    if len(selected_report_ids) > MAX_REPORTS:
+        raise ValueError(f"一次最多选择 {MAX_REPORTS} 份批判性审查报告")
+    if len(book_ids) > MAX_LOCAL_BOOKS:
+        raise ValueError(f"一次最多选择 {MAX_LOCAL_BOOKS} 篇本地文献")
+
     notes = list(db.scalars(select(KnowledgeNote).where(KnowledgeNote.id.in_(note_ids))).all()) if note_ids else []
     cards = list(db.scalars(select(EvidenceCard).where(EvidenceCard.id.in_(card_ids))).all()) if card_ids else []
     reports = list(db.scalars(select(StudyReport).where(StudyReport.id.in_(selected_report_ids))).all()) if selected_report_ids else []
-    if {item.id for item in notes} != set(note_ids) or {item.id for item in cards} != set(card_ids) or {item.id for item in reports} != set(selected_report_ids):
+    if ({item.id for item in notes} != set(note_ids) or {item.id for item in cards} != set(card_ids)
+            or {item.id for item in reports} != set(selected_report_ids)):
         raise ValueError("所选知识对象不存在或已被删除")
-    if any(item.book_id not in allowed for item in [*notes, *cards]):
-        raise ValueError("所选知识对象超出当前 Writing DNA 的文献范围")
-    for report in reports:
-        report_books = set(json.loads(report.book_ids_json or "[]"))
-        if not report_books or not report_books.issubset(allowed):
-            raise ValueError("所选研究报告超出当前 Writing DNA 的文献范围")
+
+    local_books: list[dict] = []
+    for book_id in book_ids:
+        book = db.get(Book, book_id)
+        if not book:
+            raise ValueError(f"本地文献 {book_id} 不存在或已被删除")
+        if book.status != "ready":
+            raise ValueError(f"《{book.title}》尚未完成解析（当前状态：{book.status}）")
+        chunks = list(db.scalars(select(Chunk).where(Chunk.book_id == book_id).order_by(Chunk.chunk_index)).all())
+        if not chunks:
+            raise ValueError(f"《{book.title}》没有可用于取材的正文分块")
+        selected = _select_evidence_chunks(chunks, question or "", limit=6)
+        profile = db.get(PaperProfile, book_id)
+        header_bits = [f"B{book_id}《{book.title}》"]
+        if profile and profile.authors:
+            header_bits.append(str(profile.authors))
+        if profile and profile.published_year:
+            header_bits.append(str(profile.published_year))
+        local_books.append({
+            "book_id": book_id, "title": book.title, "header": "｜".join(header_bits),
+            "authors": profile.authors if profile else None,
+            "year": profile.published_year if profile else None,
+            "journal": profile.journal if profile else None,
+            "book_file_hash": book.file_hash, "total_chunks": len(chunks),
+            "rows": [{"chunk_id": chunk.id, "anchor": _anchor_for_chunk(chunk),
+                      "text": re.sub(r"\n{3,}", "\n\n", (chunk.content or "").strip()),
+                      "fingerprint": content_fingerprint(chunk.content, chunk.page_start, chunk.page_end,
+                                                         chunk.chapter_id)}
+                     for chunk in selected],
+        })
+
+    block_count = len(notes) + len(cards) + len(reports) + len(externals) + len(local_books)
+    # 分隔符和截断提示同样计入全局上限。不能设置“每块最低字数”，否则来源很多时
+    # 会反向突破 max_chars，造成模型上下文膨胀。
+    separator_chars = max(0, block_count - 1) * 2
+    notice_chars = len(TRUNCATION_NOTICE) + 2
+    distributable = max(0, max_chars - separator_chars - notice_chars)
+    budget = distributable // max(block_count, 1)
     blocks: list[str] = []
     manifest: list[dict] = []
+    valid_anchors: set[str] = set()
+    truncated_any = False
+
     for note in notes:
-        blocks.append(f"[NOTE:{note.id}|B{note.book_id}] {note.title}\n{note.content}")
+        anchor = f"[NOTE:{note.id}]"
+        body = f"{anchor} 知识笔记｜关联文献 B{note.book_id}｜{note.title}\n{note.content}"
+        rendered = body[:budget]
+        anchors = [anchor] if anchor in rendered else []
+        valid_anchors.update(anchors)
+        truncated_any = truncated_any or len(body) > len(rendered)
+        if rendered:
+            blocks.append(rendered)
         manifest.append({"type": "note", "id": note.id, "book_id": note.book_id, "title": note.title,
+                         "anchors": anchors, "truncated": len(body) > len(rendered),
                          "fingerprint": content_fingerprint(note.title, note.content, note.source_refs_json)})
     for card in cards:
-        blocks.append(f"[EVIDENCE:{card.id}|B{card.book_id}] {card.title}\n主张：{card.claim_text or ''}\n证据：{card.evidence_text}\n核验状态：{card.verification_status}")
-        manifest.append({"type": "evidence", "id": card.id, "book_id": card.book_id,
-                         "title": card.title, "verification_status": card.verification_status,
+        anchor = f"[EVIDENCE:{card.id}]"
+        body = (f"{anchor} 证据卡｜关联文献 B{card.book_id}｜{card.title}\n"
+                f"主张：{card.claim_text or ''}\n证据：{card.evidence_text}\n核验状态：{card.verification_status}")
+        rendered = body[:budget]
+        anchors = [anchor] if anchor in rendered else []
+        valid_anchors.update(anchors)
+        truncated_any = truncated_any or len(body) > len(rendered)
+        if rendered:
+            blocks.append(rendered)
+        manifest.append({"type": "evidence", "id": card.id, "book_id": card.book_id, "title": card.title,
+                         "verification_status": card.verification_status, "anchors": anchors,
+                         "truncated": len(body) > len(rendered),
                          "fingerprint": content_fingerprint(card.title, card.claim_text, card.evidence_text,
                                                             card.source_ref_json, card.verification_status)})
     for report in reports:
-        blocks.append(f"[REPORT:{report.id}] {report.focus or '综合研读'}\n{report.content}")
-        manifest.append({"type": "report", "id": report.id,
-                         "book_ids": json.loads(report.book_ids_json or "[]"), "title": report.focus or "综合研读",
+        anchor = f"[REPORT:{report.id}]"
+        report_book_ids = json.loads(report.book_ids_json or "[]")
+        body = f"{anchor} 批判性审查报告｜范围 {len(report_book_ids)} 篇｜{report.focus or '综合研读'}\n{report.content}"
+        rendered = body[:budget]
+        anchors = [anchor] if anchor in rendered else []
+        valid_anchors.update(anchors)
+        truncated_any = truncated_any or len(body) > len(rendered)
+        if rendered:
+            blocks.append(rendered)
+        manifest.append({"type": "report", "id": report.id, "book_ids": report_book_ids,
+                         "title": report.focus or "综合研读", "anchors": anchors,
+                         "truncated": len(body) > len(rendered),
                          "fingerprint": content_fingerprint(report.focus, report.content, report.claims_json,
                                                             report.selection_json)})
-    per_object = max(800, max_chars // max(len(blocks), 1))
-    context = "\n\n".join(block[:per_object] for block in blocks)
-    if any(len(block) > per_object for block in blocks):
-        context += "\n\n[部分知识对象达到公平取材上限；未展示部分不得推断]"
-    return context, manifest
+    for item in externals:
+        anchor = f"[{web_anchor(item['provider'], item['provider_id'])}]"
+        body = (f"{anchor} 联网元数据快照｜{item['title']}\n"
+                f"作者：{item['authors'] or '未提供'}｜年份：{item['year'] or '未提供'}｜来源：{item['container_title'] or '未提供'}\n"
+                f"DOI：{item['doi'] or '未提供'}｜URL：{item['url']}｜证据层级：摘要级依据（主张不得超出摘要）｜检索于 {item['retrieved_at'] or '未记录'}\n"
+                f"摘要：{item['abstract']}")
+        rendered = body[:budget]
+        anchors = [anchor] if anchor in rendered else []
+        valid_anchors.update(anchors)
+        truncated_any = truncated_any or len(body) > len(rendered)
+        if rendered:
+            blocks.append(rendered)
+        manifest.append({"type": "web", "provider": item["provider"], "provider_id": item["provider_id"],
+                         "title": item["title"], "authors": item["authors"], "year": item["year"],
+                         "doi": item["doi"], "url": item["url"], "evidence_level": item["evidence_level"],
+                         "retrieved_at": item["retrieved_at"], "anchors": anchors,
+                         "truncated": len(body) > len(rendered),
+                         "fingerprint": content_fingerprint(item["provider"], item["provider_id"], item["title"],
+                                                            item["abstract"], item["retrieved_at"])})
+    for local in local_books:
+        per_chunk = max(1, budget // max(1, len(local["rows"])))
+        block, included, truncated = _pack_rows(f"## {local['header']}", local["rows"], per_chunk, budget)
+        valid_anchors.update(row["anchor"] for row in included)
+        truncated_any = truncated_any or truncated
+        if block:
+            blocks.append(block)
+        manifest.append({"type": "local_literature", "book_id": local["book_id"], "title": local["title"],
+                         "authors": local["authors"], "year": local["year"], "journal": local["journal"],
+                         "book_file_hash": local["book_file_hash"], "total_chunks": local["total_chunks"],
+                         "selected_chunks": len(included),
+                         "anchors": [row["anchor"] for row in included],
+                         "source_fingerprints": [{"chunk_id": row["chunk_id"], "fingerprint": row["fingerprint"]}
+                                                 for row in included],
+                         "excerpt_chars": sum(row["included_chars"] for row in included),
+                         "truncated": truncated})
+
+    context = "\n\n".join(blocks)
+    if truncated_any:
+        suffix = ("\n\n" if context else "") + TRUNCATION_NOTICE
+        context = (context + suffix)[:max_chars]
+    else:
+        context = context[:max_chars]
+    return context, manifest, valid_anchors
 
 
 def _review_query_terms(question: str) -> set[str]:
@@ -560,14 +760,18 @@ async def generate_literature_review(db, *, question: str, title: str, book_ids:
 async def imitate(db, profile_id: int, topic: str, genre: str, length: int, brief: str,
                   knowledge_note_ids: list[int] | None = None,
                   evidence_card_ids: list[int] | None = None,
-                  report_ids: list[int] | None = None) -> WritingOutput:
+                  report_ids: list[int] | None = None,
+                  local_book_ids: list[int] | None = None,
+                  external_sources: list[dict] | None = None) -> WritingOutput:
+    """独立仿写：Writing DNA 只提供风格，内容来自用户显式选择的内容来源。"""
     profile = db.get(WritingDnaProfile, profile_id)
     if not profile or profile.status != "ready":
         raise ValueError("Writing DNA 尚未就绪")
     revision = _latest_revision(db, profile_id)
     profile_book_ids = json.loads(profile.book_ids_json or "[]")
-    knowledge_context, knowledge_manifest = collect_writing_knowledge(
-        db, profile_book_ids, knowledge_note_ids, evidence_card_ids, report_ids,
+    content_context, content_manifest, valid_anchors = collect_writing_knowledge(
+        db, knowledge_note_ids, evidence_card_ids, report_ids, local_book_ids, external_sources,
+        question=topic,
     )
     ranked = []
     topic_terms = set(re.findall(r"[\u4e00-\u9fff]{2,4}|[A-Za-z]{3,}", topic.lower()))
@@ -584,35 +788,86 @@ async def imitate(db, profile_id: int, topic: str, genre: str, length: int, brie
     provider = LLMRouter.get("auto", cfg)
     logic_block = f"\n【逻辑结构DNA】\n{revision.logic_dna}" if revision.logic_dna else ""
     prompt = f"""按下列 Writing DNA 写一篇新的中文文章。复刻抽象的语言、结构和视觉排版规律，
-不得复制原文独特短语、事实和观点，不得冒充原作者；文末附“本文为风格参考写作”。
+不得复制 DNA 语料原文的独特短语、事实和观点，不得冒充原作者；文末附“本文为风格参考写作”。
 {AI_TONE_OUTPUT_BANS}
-用户要求优先于 DNA。题目：{topic}\n体裁：{genre}\n目标长度：约{length}字\n补充要求：{brief or '无'}
-【强制取材边界】事实、观点、数字、案例和结论只能来自下列已选知识对象。保留其中的冲突、不确定性、反例、证据质量与限定词；
-不得把未核验假设写成事实。用 [NOTE:…]、[EVIDENCE:…] 或 [REPORT:…] 标记关键事实的来源即可；标记只供机器审计，系统会自动转换为脚注，不要让它参与句法或逐段堆叠。材料不足时直接收缩主张。
-【已选知识对象】\n{knowledge_context}
+【优先级】用户本次明确要求高于 Writing DNA 风格约束。
+题目：{topic}\n体裁：{genre}\n目标长度：约{length}字\n补充要求：{brief or '无'}
+
+【风格约束：Writing DNA（只校准表达、结构与论证习惯，不得作为事实、数字、观点或案例来源）】
 【语言DNA】\n{revision.language_dna}\n【结构模板】\n{revision.structure_patterns}{logic_block}
 【认知框架】\n{revision.cognitive_framework}\n【视觉指南】\n{revision.visual_style_guide}
-【整合DNA】\n{revision.writing_dna}\n【5篇相近原文，仅校准语感，不得取材】\n{calibration[:14000]}"""
-    output_text = await _call(provider, [{"role": "system", "content": "生成独立新作；内容只能取自已选知识对象，风格语料不得充当事实来源。围绕中心主张直接、连贯地写作，避免近似复述、作者冒充、免责声明和修饰词堆叠。"},
-                                         {"role": "user", "content": prompt}])
-    from backend.app.services.writing_citations import readable_citations
-    knowledge_labels = {
-        f"{str(item['type']).upper()}:{item['id']}": (
-            f"{ {'note': '知识笔记', 'evidence': '证据卡', 'report': '研究报告'}.get(item['type'], '知识对象') }“{item['title']}”"
-        ) for item in knowledge_manifest
-    }
+【整合DNA】\n{revision.writing_dna}
+【DNA 语料相近原文，仅校准语感，不得取材、不得引用】\n{calibration[:14000]}
+
+【内容证据：本次已选内容来源，是唯一允许的事实来源】
+事实、观点、数字、案例和结论只能来自下列来源。保留其中的冲突、不确定性、反例、证据质量与限定词；
+不得把未核验假设写成事实。材料不足时直接收缩主张，不要补造。
+锚点规则：
+- 库内知识对象与本地文献片段沿用原有锚点（如 [NOTE:12]、[EVIDENCE:3]、[REPORT:2]、[B8:C120:P15-16]）；
+- 联网来源使用 [WEB:provider:记录号]，其证据层级是“摘要级依据”，相关主张不得超出摘要给出的事实、数字与限定条件；
+- 锚点只是机器审计标记，系统会自动转成脚注编号；不要让锚点参与句法，也不要为了形式在每段重复堆叠。
+【已选内容来源】\n{content_context}"""
+    output_text = await _call(provider, [
+        {"role": "system", "content": "生成独立新作；内容只能取自已选内容来源，DNA 语料只能校准风格、不得充当事实来源。围绕中心主张直接、连贯地写作，避免近似复述、作者冒充、免责声明和修饰词堆叠。"},
+        {"role": "user", "content": prompt}])
+    valid = {anchor.strip("[]") for anchor in valid_anchors}
+    found = set(re.findall(ANCHOR_RE, output_text))
+    invalid_anchors = sorted(f"[{anchor}]" for anchor in found - valid)
+    valid_found = found & valid
+    labels: dict[str, str] = {}
+    for item in content_manifest:
+        if item["type"] == "note":
+            labels[f"NOTE:{item['id']}"] = f"知识笔记“{item['title']}”（关联文献 B{item['book_id']}）"
+        elif item["type"] == "evidence":
+            labels[f"EVIDENCE:{item['id']}"] = (f"证据卡“{item['title']}”"
+                                                f"（核验状态：{item.get('verification_status') or '未标注'}）")
+        elif item["type"] == "report":
+            labels[f"REPORT:{item['id']}"] = f"批判性审查报告“{item['title']}”（范围 {len(item.get('book_ids') or [])} 篇）"
+    labels.update(web_source_labels([item for item in content_manifest if item["type"] == "web"]))
+    labels.update(database_source_labels(db, {anchor for anchor in valid_found if anchor.startswith("B")}))
     output_text, citation_notes = readable_citations(
-        output_text, valid_anchors=set(knowledge_labels), labels=knowledge_labels,
+        output_text, valid_anchors=valid_found, labels=labels,
     )
+    source_counts: dict[str, int] = {}
+    for item in content_manifest:
+        source_counts[item["type"]] = source_counts.get(item["type"], 0) + 1
+    unreferenced = [
+        {"type": item["type"], "title": item.get("title") or "",
+         "id": item.get("id") or item.get("provider_id"),
+         "provider": item.get("provider")}
+        for item in content_manifest
+        if not ({anchor.strip("[]") for anchor in item.get("anchors") or []} & valid_found)
+    ]
+    external_snapshot = [
+        {"provider": item["provider"], "provider_id": item["provider_id"], "title": item["title"],
+         "authors": item["authors"], "year": item["year"], "doi": item["doi"], "url": item["url"],
+         "evidence_level": item["evidence_level"], "retrieved_at": item["retrieved_at"]}
+        for item in content_manifest if item["type"] == "web"
+    ]
+    retrieved_times = [item["retrieved_at"] for item in external_snapshot if item["retrieved_at"]]
     row = WritingOutput(profile_id=profile_id, kind="imitation", title=topic[:255], input_type="text",
-                        source_text=knowledge_context, output_text=output_text,
-                        audit_json=json.dumps({"dna_version": revision.version,
-                                               "calibration_books": [title for _, title, _ in related],
-                                               "knowledge_objects": knowledge_manifest,
-                                               "citation_notes": citation_notes,
-                                               "ai_tone_violations": ai_flavor_violations(output_text),
-                                               "content_policy": "selected_knowledge_objects_only",
-                                               "human_review_required": True}, ensure_ascii=False))
+                        source_text=content_context, output_text=output_text,
+                        audit_json=json.dumps({
+                            "dna_profile_id": profile_id,
+                            "dna_version": revision.version,
+                            "dna_corpus_book_ids": profile_book_ids,
+                            "calibration_books": [title for _, title, _ in related],
+                            "calibration_policy": "dna_corpus_style_only",
+                            "content_manifest": content_manifest,
+                            "content_source_counts": source_counts,
+                            "content_policy": "selected_content_sources_only",
+                            "valid_anchor_count": len(valid),
+                            "citation_count": len(valid_found),
+                            "invalid_anchors": invalid_anchors,
+                            "unreferenced_sources": unreferenced,
+                            "truncated_sources": [item.get("title") or item.get("provider_id")
+                                                  for item in content_manifest if item.get("truncated")],
+                            "external_sources": external_snapshot,
+                            "external_retrieved_at": min(retrieved_times) if retrieved_times else None,
+                            "citation_notes": citation_notes,
+                            "ai_tone_violations": ai_flavor_violations(output_text),
+                            "human_review_required": True,
+                        }, ensure_ascii=False))
     db.add(row); db.commit(); db.refresh(row)
     return row
 

@@ -6,15 +6,15 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
-from backend.app.models import (Book, Chunk, EvidenceCard, KnowledgeNote, StudyReport,
+from backend.app.models import (Book, Chapter, Chunk, EvidenceCard, KnowledgeNote, PaperProfile, StudyReport,
                                 WritingDnaProfile, WritingDnaRevision, WritingOutput)
 from backend.app.services.writing_lab import (ai_flavor_violations, apply_docx_changes,
     apply_text_changes, clean_blocks, content_fingerprint, create_word_output,
@@ -38,6 +38,22 @@ class ProfileRefineReq(BaseModel):
     feedback: str = Field(default="", max_length=4000)
 
 
+class ExternalSourceReq(BaseModel):
+    """联网元数据快照；只有带摘要的快照才允许作为事实依据。"""
+
+    provider: str = Field(min_length=1, max_length=40)
+    provider_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=500)
+    authors: str = Field(default="", max_length=1000)
+    year: int | None = None
+    doi: str | None = Field(default=None, max_length=255)
+    container_title: str = Field(default="", max_length=255)
+    url: str = Field(min_length=8, max_length=2000)
+    abstract: str = Field(default="", max_length=8000)
+    evidence_level: str = Field(default="metadata", pattern="^(abstract|metadata)$")
+    retrieved_at: str = Field(default="", max_length=40)
+
+
 class ImitateReq(BaseModel):
     topic: str = Field(min_length=2, max_length=300)
     genre: str = Field(default="深度文章", max_length=80)
@@ -46,6 +62,15 @@ class ImitateReq(BaseModel):
     knowledge_note_ids: list[int] = Field(default_factory=list, max_length=40)
     evidence_card_ids: list[int] = Field(default_factory=list, max_length=40)
     report_ids: list[int] = Field(default_factory=list, max_length=10)
+    local_book_ids: list[int] = Field(default_factory=list, max_length=20)
+    external_sources: list[ExternalSourceReq] = Field(default_factory=list, max_length=20)
+
+
+def has_usable_content_source(req: ImitateReq) -> bool:
+    """门禁：只有元数据线索不能生成；至少要有一个可承载事实的来源。"""
+    return bool(req.knowledge_note_ids or req.evidence_card_ids or req.report_ids or req.local_book_ids
+                or [item for item in req.external_sources
+                    if item.evidence_level == "abstract" and len(item.abstract.strip()) >= 40])
 
 
 class LiteratureReviewReq(BaseModel):
@@ -115,8 +140,41 @@ def _source_freshness(db: Session, row: WritingOutput) -> dict:
     missing: list[dict] = []
     checked = 0
     legacy = False
-    for item in audit.get("knowledge_objects", []) if isinstance(audit.get("knowledge_objects"), list) else []:
+    immutable = 0
+    manifest = audit.get("content_manifest") if isinstance(audit.get("content_manifest"), list) else None
+    if manifest is None:
+        # 旧版输出只保存 knowledge_objects，保持可复核。
+        manifest = audit.get("knowledge_objects") if isinstance(audit.get("knowledge_objects"), list) else []
+    for item in manifest:
         kind, object_id, expected = item.get("type"), item.get("id"), item.get("fingerprint")
+        if kind == "web":
+            # 在线摘要使用检索时的不可变快照 + retrieved_at；打开旧输出时绝不静默刷新。
+            immutable += 1
+            continue
+        if kind == "local_literature":
+            book_id = item.get("book_id")
+            book = db.get(Book, book_id) if book_id else None
+            if not book:
+                missing.append({"type": "book", "id": book_id, "title": item.get("title")})
+                continue
+            checked += 1
+            if item.get("book_file_hash") and item["book_file_hash"] != book.file_hash:
+                changed.append({"type": "book", "id": book_id, "title": item.get("title")})
+            fingerprints = item.get("source_fingerprints")
+            if not isinstance(fingerprints, list):
+                legacy = True
+                continue
+            for source in fingerprints:
+                chunk_id, expected_chunk = source.get("chunk_id"), source.get("fingerprint")
+                chunk = db.get(Chunk, chunk_id) if chunk_id else None
+                if not chunk:
+                    missing.append({"type": "chunk", "id": chunk_id, "book_id": book_id})
+                    continue
+                checked += 1
+                actual = content_fingerprint(chunk.content, chunk.page_start, chunk.page_end, chunk.chapter_id)
+                if expected_chunk and actual != expected_chunk:
+                    changed.append({"type": "chunk", "id": chunk_id, "book_id": book_id})
+            continue
         model = {"note": KnowledgeNote, "evidence": EvidenceCard, "report": StudyReport}.get(kind)
         current = db.get(model, object_id) if model and object_id else None
         if not current:
@@ -137,16 +195,16 @@ def _source_freshness(db: Session, row: WritingOutput) -> dict:
         if actual != expected:
             changed.append({"type": kind, "id": object_id, "title": item.get("title")})
     manifests = audit.get("evidence_manifest", []) if isinstance(audit.get("evidence_manifest"), list) else []
-    for manifest in manifests:
-        book_id = manifest.get("book_id")
+    for manifest_item in manifests:
+        book_id = manifest_item.get("book_id")
         book = db.get(Book, book_id) if book_id else None
         if not book:
-            missing.append({"type": "book", "id": book_id, "title": manifest.get("title")})
+            missing.append({"type": "book", "id": book_id, "title": manifest_item.get("title")})
             continue
-        expected_book_hash = manifest.get("book_file_hash")
+        expected_book_hash = manifest_item.get("book_file_hash")
         if expected_book_hash and expected_book_hash != book.file_hash:
-            changed.append({"type": "book", "id": book_id, "title": manifest.get("title")})
-        fingerprints = manifest.get("source_fingerprints")
+            changed.append({"type": "book", "id": book_id, "title": manifest_item.get("title")})
+        fingerprints = manifest_item.get("source_fingerprints")
         if not isinstance(fingerprints, list):
             legacy = True
             continue
@@ -166,12 +224,14 @@ def _source_freshness(db: Session, row: WritingOutput) -> dict:
         status, message = "stale", "生成后来源内容发生变化，当前正文与引用需要重新核对。"
     elif checked:
         status, message = "fresh", "生成时使用的知识对象与文献片段未发生变化。"
+    elif immutable:
+        status, message = "snapshot", "在线摘要使用检索时的不可变快照，打开旧输出不会静默刷新。"
     elif legacy:
         status, message = "unknown", "这是旧版输出，未保存来源指纹，无法自动判断是否过期。"
     else:
         status, message = "not_applicable", "该输出没有可复核的知识库来源快照。"
     return {"status": status, "message": message, "checked_sources": checked,
-            "changed": changed, "missing": missing,
+            "immutable_snapshots": immutable, "changed": changed, "missing": missing,
             "checked_at": datetime.now(timezone.utc).isoformat()}
 
 
@@ -295,17 +355,141 @@ def refine_profile(profile_id: int, req: ProfileRefineReq, db: Session = Depends
             "next_version": row.current_version + 1, "pruned_book_ids": pruned}
 
 
+SOURCE_CATEGORIES = ("note", "evidence", "report", "local_literature")
+
+
+def _source_counts(db: Session) -> dict:
+    ready_with_chunks = select(Chunk.book_id).distinct()
+    return {
+        "note": db.scalar(select(func.count()).select_from(KnowledgeNote)) or 0,
+        "evidence": db.scalar(select(func.count()).select_from(EvidenceCard)) or 0,
+        "report": db.scalar(select(func.count()).select_from(StudyReport)) or 0,
+        "local_literature": db.scalar(select(func.count()).select_from(Book).where(
+            Book.status == "ready", Book.id.in_(ready_with_chunks))) or 0,
+    }
+
+
+@router.get("/sources")
+def list_writing_sources(category: str = "note", q: str | None = None, page: int = 1, page_size: int = 20,
+                         ids: list[int] | None = Query(default=None), db: Session = Depends(get_db)):
+    """取材来源分区读模型：五类来源各自分页、搜索与计数。
+
+    `ids` 用于前端校验已选来源是否仍然存在；返回的 `missing_ids` 让界面能明确
+    移除失效来源并提示，而不是在生成时才失败。
+    """
+    if category not in SOURCE_CATEGORIES:
+        raise HTTPException(400, "不支持的取材来源类别")
+    term = (q or "").strip().lower()
+    safe_page = max(1, page if isinstance(page, int) else 1)
+    safe_size = min(max(page_size if isinstance(page_size, int) else 20, 5), 50)
+    wanted_ids = sorted({int(value) for value in (ids or [])})
+    items: list[dict] = []
+    found_ids: set[int] = set()
+    total = 0
+
+    if category in {"note", "evidence"}:
+        model = KnowledgeNote if category == "note" else EvidenceCard
+        conditions = []
+        if term:
+            if category == "note":
+                conditions.append(or_(model.title.ilike(f"%{term}%"), model.content.ilike(f"%{term}%")))
+            else:
+                conditions.append(or_(model.title.ilike(f"%{term}%"), model.evidence_text.ilike(f"%{term}%"),
+                                      model.claim_text.ilike(f"%{term}%")))
+        if wanted_ids:
+            conditions.append(model.id.in_(wanted_ids))
+        stmt = (select(model, Book.title, Chapter.title).join(Book, Book.id == model.book_id)
+                .outerjoin(Chapter, Chapter.id == model.chapter_id))
+        if conditions:
+            stmt = stmt.where(*conditions)
+        stmt = stmt.order_by(model.created_at.desc(), model.id.desc())
+        if not wanted_ids:
+            stmt = stmt.offset((safe_page - 1) * safe_size).limit(safe_size)
+        count_stmt = (select(func.count()).select_from(model).join(Book, Book.id == model.book_id))
+        if conditions:
+            count_stmt = count_stmt.where(*conditions)
+        total = db.scalar(count_stmt) or 0
+        for row, book_title, chapter_title in db.execute(stmt).all():
+            found_ids.add(row.id)
+            if category == "note":
+                items.append({"type": "note", "id": row.id, "title": row.title, "book_id": row.book_id,
+                              "book_title": book_title, "chapter_title": chapter_title, "page": row.page,
+                              "origin": row.origin, "preview": (row.content or "")[:200],
+                              "created_at": row.created_at.isoformat() if row.created_at else None})
+            else:
+                items.append({"type": "evidence", "id": row.id, "title": row.title, "book_id": row.book_id,
+                              "book_title": book_title, "chapter_title": chapter_title, "page": row.page,
+                              "verification_status": row.verification_status,
+                              "claim_preview": (row.claim_text or "")[:160],
+                              "preview": (row.evidence_text or "")[:200],
+                              "created_at": row.created_at.isoformat() if row.created_at else None})
+    elif category == "report":
+        conditions = []
+        if term:
+            conditions.append(or_(StudyReport.focus.ilike(f"%{term}%"), StudyReport.content.ilike(f"%{term}%")))
+        if wanted_ids:
+            conditions.append(StudyReport.id.in_(wanted_ids))
+        stmt = select(StudyReport)
+        if conditions:
+            stmt = stmt.where(*conditions)
+        stmt = stmt.order_by(StudyReport.created_at.desc(), StudyReport.id.desc())
+        if not wanted_ids:
+            stmt = stmt.offset((safe_page - 1) * safe_size).limit(safe_size)
+        count_stmt = select(func.count()).select_from(StudyReport)
+        if conditions:
+            count_stmt = count_stmt.where(*conditions)
+        total = db.scalar(count_stmt) or 0
+        for row in db.scalars(stmt).all():
+            found_ids.add(row.id)
+            selection = _loads(row.selection_json, {})
+            items.append({"type": "report", "id": row.id, "title": row.focus or "综合研读",
+                          "book_ids": _loads(row.book_ids_json, []),
+                          "evidence_summary": selection.get("evidence_summary", {}) if isinstance(selection, dict) else {},
+                          "hypothesis_count": len(selection.get("hypotheses", [])) if isinstance(selection, dict) else 0,
+                          "preview": (row.content or "")[:200],
+                          "created_at": row.created_at.isoformat() if row.created_at else None})
+    else:
+        conditions = [Book.status == "ready", Book.id.in_(select(Chunk.book_id).distinct())]
+        if term:
+            conditions.append(Book.title.ilike(f"%{term}%"))
+        if wanted_ids:
+            conditions.append(Book.id.in_(wanted_ids))
+        stmt = (select(Book, PaperProfile).outerjoin(PaperProfile, PaperProfile.book_id == Book.id)
+                .where(*conditions).order_by(Book.title))
+        if not wanted_ids:
+            stmt = stmt.offset((safe_page - 1) * safe_size).limit(safe_size)
+        rows = db.execute(stmt).all()
+        total = db.scalar(select(func.count()).select_from(Book).where(*conditions)) or 0
+        page_ids = [book.id for book, _ in rows]
+        chunk_counts = {book_id: count for book_id, count in db.execute(
+            select(Chunk.book_id, func.count()).where(Chunk.book_id.in_(page_ids)).group_by(Chunk.book_id)).all()
+        } if page_ids else {}
+        for book, profile in rows:
+            found_ids.add(book.id)
+            items.append({"type": "local_literature", "book_id": book.id, "id": book.id, "title": book.title,
+                          "authors": profile.authors if profile else None,
+                          "year": profile.published_year if profile else None,
+                          "journal": profile.journal if profile else None,
+                          "file_type": book.file_type,
+                          "chunk_count": chunk_counts.get(book.id, 0)})
+
+    return {"category": category, "items": items, "total": total, "page": safe_page, "page_size": safe_size,
+            "counts": _source_counts(db),
+            "missing_ids": sorted(set(wanted_ids) - found_ids) if wanted_ids else []}
+
+
 async def _imitate_task(record, payload: dict) -> dict:
     from backend.app.core.database import SessionLocal
     from backend.app.worker.tasks import update_progress
 
     db = SessionLocal()
     try:
-        update_progress(record, 0.06, "evidence", "正在整理已选知识对象与语料校准样本...")
+        update_progress(record, 0.06, "evidence", "正在整理已选内容来源与语料校准样本...")
         update_progress(record, 0.25, "writing", "正在按 Writing DNA 撰写初稿（长文可能需要几分钟）...")
         row = await imitate(db, payload["profile_id"], payload["topic"], payload["genre"],
                             payload["length"], payload["brief"], payload["knowledge_note_ids"],
-                            payload["evidence_card_ids"], payload["report_ids"])
+                            payload["evidence_card_ids"], payload["report_ids"],
+                            payload.get("local_book_ids") or [], payload.get("external_sources") or [])
         update_progress(record, 0.9, "document", "正在生成可编辑 Word 与引用审计...")
         path = output_path(); create_word_output(row.title, row.output_text, path)
         row.output_file_path = path.name; db.commit(); db.refresh(row)
@@ -320,6 +504,9 @@ def imitate_with_profile(profile_id: int, req: ImitateReq, db: Session = Depends
     profile = db.get(WritingDnaProfile, profile_id)
     if not profile:
         raise HTTPException(404, "Writing DNA 项目不存在")
+    if not has_usable_content_source(req):
+        raise HTTPException(400, "请至少选择一个内容来源（知识笔记 / 证据卡 / 批判性审查报告 / 本地文献 / 联网摘要）；"
+                                 "只有题名或元数据的检索线索不能作为事实依据")
     payload = {"profile_id": profile_id, **req.model_dump()}
     task = submit("imitate", lambda record: _imitate_task(record, payload),
                   book_id=_task_book_id(db, _loads(profile.book_ids_json, [])))
@@ -472,6 +659,33 @@ def list_outputs(page: int = 1, page_size: int = 20, exclude_official: bool = Fa
                       .offset((safe_page - 1) * safe_size).limit(safe_size)).all()
     return {"items": [_output(row, detail=False) for row in rows], "total": total,
             "page": safe_page, "page_size": safe_size}
+
+
+@router.post("/outputs/from-study-report/{report_id}")
+def output_from_study_report(report_id: int, db: Session = Depends(get_db)):
+    report = db.get(StudyReport, report_id)
+    if not report:
+        raise HTTPException(404, "研究报告不存在")
+    source_key = f"study-report:{report_id}"
+    row = db.scalar(select(WritingOutput).where(WritingOutput.kind == "study_report",
+                                                 WritingOutput.source_text == source_key)
+                    .order_by(WritingOutput.id.desc()))
+    if row:
+        return _output(row)
+    title = (report.focus or f"研究报告 {report_id}").strip()[:255]
+    fingerprint = content_fingerprint(report.focus, report.content, report.claims_json,
+                                      report.selection_json)
+    audit = {"source_report_id": report_id, "content_manifest": [{"type": "report",
+             "id": report_id, "title": title, "fingerprint": fingerprint}],
+             "book_ids": _loads(report.book_ids_json, []), "handoff": "study_report"}
+    row = WritingOutput(kind="study_report", title=title, input_type="text",
+                        source_text=source_key, output_text=report.content,
+                        audit_json=json.dumps(audit, ensure_ascii=False))
+    _replace_word_output(row, row.output_text)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _output(row)
 
 
 @router.get("/outputs/{output_id}")

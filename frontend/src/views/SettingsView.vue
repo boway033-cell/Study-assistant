@@ -2,10 +2,13 @@
   <div class="settings-page study-page">
     <header class="page-heading">
       <div><h1>设置</h1></div>
-      <el-button :loading="probingAll" @click="probeDefault">检测默认模型</el-button>
+      <el-button v-if="settingsSection==='models'" :loading="probingAll" @click="probeDefault">检测默认模型</el-button>
     </header>
+    <nav class="settings-sections" aria-label="设置分类">
+      <button v-for="section in settingsSections" :key="section.id" type="button" :class="{active:settingsSection===section.id}" @click="settingsSection=section.id"><b>{{ section.label }}</b><small>{{ section.description }}</small></button>
+    </nav>
 
-    <GlowBorderCard class="appearance-panel" aria-label="界面设置">
+    <GlowBorderCard v-show="settingsSection==='local'" class="appearance-panel" aria-label="界面设置">
       <template #header><div class="appearance-heading"><h2>界面</h2><el-button text @click="resetUiPreferences">恢复默认</el-button></div></template>
       <div class="appearance-grid">
         <div class="appearance-controls">
@@ -13,11 +16,10 @@
           <div class="appearance-control"><span>机械按键</span><el-switch v-model="uiPreferences.keycapButtons" aria-label="机械按键" /></div>
           <div class="appearance-control"><span>列表密度</span><el-radio-group v-model="uiPreferences.libraryDensity" size="small" aria-label="列表密度"><el-radio-button value="comfortable">舒适</el-radio-button><el-radio-button value="compact">紧凑</el-radio-button></el-radio-group></div>
         </div>
-        <div class="appearance-preview"><KeycapCard aria-label="按键预览 K" /></div>
       </div>
     </GlowBorderCard>
 
-    <el-card shadow="never" class="model-panel">
+    <el-card v-show="settingsSection==='models'" shadow="never" class="model-panel">
       <div class="section-heading"><div><h2>模型供应商</h2><p>密钥只加密保存在本机。</p></div></div>
 
       <div class="provider-list">
@@ -47,14 +49,38 @@
       </div>
 
       <div class="add-actions">
-        <el-button class="add-button" @click="openProvider('kimi')">＋ 添加供应商</el-button>
-        <el-button class="add-button" @click="openProvider('custom')">＋ 添加自定义供应商</el-button>
+        <el-button class="add-button" @click="openProvider('kimi')">＋ 添加模型连接</el-button>
+      </div>
+    </el-card>
+
+    <el-card v-show="settingsSection==='local'" shadow="never" class="advanced-panel">
+      <div class="section-heading"><div><h2>安装与数据诊断</h2><p>检查运行环境、前端、数据目录与数据库；不修改资料。</p></div><el-button :loading="diagnosticsLoading" @click="runDiagnostics">一键诊断</el-button></div>
+      <div v-if="diagnostics.checks.length" class="diagnostic-list">
+        <div v-for="item in diagnostics.checks" :key="item.key"><el-tag :type="item.ok ? 'success' : 'danger'" size="small" effect="plain">{{ item.ok ? '正常' : '需处理' }}</el-tag><span>{{ item.detail }}</span><small v-if="item.action">{{ item.action }}</small></div>
+      </div>
+      <p class="usage-boundary">首次安装或迁移旧资料可运行项目目录的 install.bat；失败后再次运行会继续。安装前也可双击 diagnose.bat。</p>
+    </el-card>
+
+    <el-card v-show="settingsSection==='cost'" shadow="never" class="advanced-panel">
+      <div class="section-heading"><div><h2>AI 费用估算</h2><p>按供应商填写每百万 Token 的输入和输出单价（人民币）。研究任务确认前会显示估算费用。</p></div></div>
+      <div class="price-grid">
+        <label>供应商<el-select v-model="priceForm.provider_id" placeholder="选择供应商"><el-option v-for="provider in textProviders" :key="provider.id" :label="providerLabel(provider)" :value="provider.id" /></el-select></label>
+        <label>输入单价<el-input-number v-model="priceForm.input" :min="0" :max="100000" :precision="4" controls-position="right" aria-label="输入价格" /></label>
+        <label>输出单价<el-input-number v-model="priceForm.output" :min="0" :max="100000" :precision="4" controls-position="right" aria-label="输出价格" /></label>
+        <el-button :disabled="!priceForm.provider_id" @click="savePriceRate">保存费率</el-button>
+      </div>
+      <p class="usage-boundary">顺序为供应商、输入单价、输出单价。费用依据你填写的费率和本地估算 Token 计算；请以供应商账单为准。</p>
+      <div class="section-heading budget-heading"><div><h2>所有 AI 任务的默认上限</h2><p>问答及未单独确认预算的生成任务达到上限后会停止。0 表示不限制。</p></div></div>
+      <div class="price-grid budget-grid">
+        <label>估算 Token 上限<el-input-number v-model="defaultBudget.max_tokens" :min="0" :max="2000000" :step="10000" controls-position="right" /></label>
+        <label>调用次数上限<el-input-number v-model="defaultBudget.max_calls" :min="0" :max="200" :step="5" controls-position="right" /></label>
+        <el-button @click="saveDefaultBudget">保存默认上限</el-button>
       </div>
     </el-card>
 
     <el-card shadow="never" class="advanced-panel">
       <el-collapse v-model="openSections">
-        <el-collapse-item name="routes">
+        <el-collapse-item v-if="settingsSection==='models'" name="routes">
           <template #title><div class="collapse-title"><b>按功能选择模型</b><span>可选</span><small>研究、写作和 PPT 可以使用不同模型</small></div></template>
           <div class="route-grid">
             <label v-for="(label, key) in taskLabels" :key="key">
@@ -68,13 +94,13 @@
           <div class="fallback-row"><div><b>失败降级顺序</b><small>仅在主模型尚未输出任何文字时依次尝试，防止不同模型内容被拼接。</small></div><el-select v-model="routing.fallback_provider_ids" multiple collapse-tags placeholder="不自动降级" @change="saveRouting"><el-option v-for="provider in textProviders" :key="provider.id" :disabled="provider.id===routing.default_provider_id" :label="providerLabel(provider)" :value="provider.id" /></el-select></div>
         </el-collapse-item>
 
-        <el-collapse-item name="usage">
+        <el-collapse-item v-if="settingsSection==='cost'" name="usage">
           <template #title><div class="collapse-title"><b>模型使用与故障</b><span>本机统计</span><small>调用、失败、降级与估算 token</small></div></template>
           <div class="usage-summary"><span>调用 <b>{{ usage.totals.calls || 0 }}</b></span><span>失败 <b>{{ usage.totals.failures || 0 }}</b></span><span>降级 <b>{{ usage.totals.fallback_activations || 0 }}</b></span><span>估算 Token <b>{{ formatNumber(usage.totals.estimated_tokens) }}</b></span></div>
           <p class="usage-boundary">{{ usage.boundary }}</p>
         </el-collapse-item>
 
-        <el-collapse-item name="vision">
+        <el-collapse-item v-if="settingsSection==='models'" name="vision">
           <template #title><div class="collapse-title"><b>页面视觉分析</b><span>可选</span><small>用于 PDF 页面、图表和公式解读</small></div></template>
           <el-form label-position="top" class="compact-form">
             <div class="two-columns">
@@ -94,7 +120,7 @@
           </el-form>
         </el-collapse-item>
 
-        <el-collapse-item name="local">
+        <el-collapse-item v-if="settingsSection==='local'" name="local">
           <template #title><div class="collapse-title"><b>本地检索与存储</b><span>高级</span><small>一般无需调整</small></div></template>
           <el-form label-position="top" class="compact-form">
             <div class="two-columns">
@@ -157,14 +183,15 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import GlowBorderCard from '../components/GlowBorderCard.vue'
-import KeycapCard from '../components/KeycapCard.vue'
 import { uiPreferences, resetUiPreferences } from '../stores/uiPreferences'
-import { cleanupStorage, deleteCompatibleProvider, discoverProviderModels, getCapacityStatus, getProviderUsage, getSettings, getStorageUsage, listCompatibleProviders, probeCompatibleProvider, probeSettings, saveCompatibleProvider, updateProviderRouting, updateSettings } from '../api'
+import { cleanupStorage, deleteCompatibleProvider, discoverProviderModels, getCapacityStatus, getProviderUsage, getSettings, getStorageUsage, listCompatibleProviders, probeCompatibleProvider, probeSettings, saveCompatibleProvider, updateProviderRouting, updateSettings, getDiagnostics, getAiPriceRates, updateAiPriceRate, getAiDefaultBudget, updateAiDefaultBudget } from '../api'
 
 const taskLabels = { chat: 'AI 问答', research: '研究与跨文献分析', writing: '写作台', presentation: 'PPT 生成', utility: '题目与通用生成' }
+const settingsSections = [{id:'models',label:'模型连接',description:'供应商 · 功能分配 · 视觉分析'},{id:'cost',label:'用量与预算',description:'费率 · 调用统计 · 默认上限'},{id:'local',label:'本机与界面',description:'诊断 · 存储 · 外观'}]
+const settingsSection = ref('models')
 const protocolNames = { openai_chat: 'Chat Completions', anthropic_messages: 'Anthropic Messages', google_generate: 'Google GenerateContent' }
 const providerPresets = {
   kimi: { label: 'Kimi / Moonshot', name: 'Kimi', protocol: 'openai_chat', base_url: 'https://api.moonshot.cn/v1', model: 'kimi-k2.6' },
@@ -197,8 +224,14 @@ const probingVision = ref(false)
 const visionMessage = ref('')
 const storage = ref({ total_bytes: 0, items: [] })
 const storageLoading = ref(false)
+const diagnostics = ref({ checks: [] })
+const diagnosticsLoading = ref(false)
+const priceRates = ref({})
+const priceForm = ref({ provider_id: '', input: 0, output: 0 })
+const defaultBudget = ref({ max_tokens: 200000, max_calls: 50 })
 const cleanupSelection = ref([])
 const textProviders = computed(() => providers.value.filter(provider => provider.capability === 'text'))
+const selectedPriceProvider = computed(() => textProviders.value.find(provider => provider.id === priceForm.value.provider_id))
 const capacityTierText = computed(() => ({normal:'常规区间',attention:'需要关注',migration_review:'迁移评审'}[capacity.value.tier] || '待评估'))
 
 const providerLabel = provider => `${provider.name} · ${provider.model}`
@@ -216,7 +249,16 @@ const loadProviders = async () => {
   const data = await listCompatibleProviders()
   providers.value = data.items || []
   routing.value = { default_provider_id: data.default_text_provider || 'deepseek', task_routes: { ...(data.task_routes || {}) }, fallback_provider_ids: data.fallback_provider_ids || [] }
+  if (!priceForm.value.provider_id) priceForm.value.provider_id = routing.value.task_routes.research || routing.value.default_provider_id
+  syncPriceForm()
 }
+const runDiagnostics = async () => { diagnosticsLoading.value = true; try { diagnostics.value = await getDiagnostics() } catch (error) { ElMessage.error(error.message) } finally { diagnosticsLoading.value = false } }
+const loadPriceRates = async () => { priceRates.value = (await getAiPriceRates()).rates || {}; syncPriceForm() }
+const syncPriceForm = () => { const key = `${priceForm.value.provider_id}:${selectedPriceProvider.value?.model || ''}`; const rate = priceRates.value[key] || {}; priceForm.value.input = Number(rate.input ?? 0); priceForm.value.output = Number(rate.output ?? 0) }
+const savePriceRate = async () => { try { const result = await updateAiPriceRate({ ...priceForm.value, model: selectedPriceProvider.value?.model || '' }); priceRates.value = result.rates || {}; ElMessage.success('该模型的估算费率已保存') } catch (error) { ElMessage.error(error.message) } }
+const loadDefaultBudget = async () => { const value = await getAiDefaultBudget(); defaultBudget.value = { max_tokens: value.max_tokens, max_calls: value.max_calls } }
+const saveDefaultBudget = async () => { try { await updateAiDefaultBudget(defaultBudget.value); ElMessage.success('默认任务上限已保存') } catch (error) { ElMessage.error(error.message) } }
+watch(() => priceForm.value.provider_id, syncPriceForm)
 const loadUsage=async()=>{usage.value=await getProviderUsage()}
 const loadCapacity=async()=>{capacity.value=await getCapacityStatus()}
 const formatNumber=value=>Number(value||0).toLocaleString('zh-CN')
@@ -311,16 +353,21 @@ const clearSelectedCaches = async () => {
 }
 
 onMounted(async () => {
-  try { await Promise.all([load(), loadProviders(), loadStorage(), loadUsage(), loadCapacity()]); await probeDefault() }
+  try { await Promise.all([load(), loadProviders(), loadStorage(), loadUsage(), loadCapacity(), loadPriceRates(), loadDefaultBudget()]) }
   catch (error) { ElMessage.error(error.message) }
 })
 </script>
 
 <style scoped>
+.settings-sections{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 18px}.settings-sections button{display:grid;gap:4px;padding:14px 16px;border:1px solid var(--study-card-border);border-radius:12px;background:var(--study-surface-muted);color:var(--study-text-strong);text-align:left;cursor:pointer}.settings-sections button.active{border-color:var(--el-color-primary);background:var(--el-color-primary-light-9)}.settings-sections small{color:var(--study-text-secondary);font-size:11px}.add-actions{grid-template-columns:1fr}.appearance-grid{grid-template-columns:1fr}@media(max-width:720px){.settings-sections{grid-template-columns:1fr}.settings-sections button{padding:10px 12px}}
 .settings-page{max-width:920px;margin:0 auto;padding-bottom:32px}.page-heading{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px}.page-heading h1{font-size:24px;line-height:1.3;color:#f7f2e9;font-weight:650;text-shadow:0 1px 8px rgba(0,0,0,.22)}.page-heading>div>p{margin-top:5px;color:rgba(247,242,233,.72);font-size:14px}.section-heading p{margin-top:5px;color:var(--el-text-color-secondary);font-size:14px}.model-panel,.advanced-panel{border:1px solid var(--study-card-border);border-radius:14px}.advanced-panel{margin-top:14px}.section-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.section-heading h2{font-size:17px}.provider-list{display:grid;gap:10px}.provider-item{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:12px;min-height:68px;padding:11px 14px;border:1px solid var(--study-card-border);border-radius:12px;background:var(--el-bg-color)}.status-dot{width:9px;height:9px;border-radius:50%;background:#c8cdd4}.status-dot.ok{background:#2fbf71;box-shadow:0 0 0 3px rgba(47,191,113,.12)}.status-dot.error,.status-dot.missing{background:#e46b5d}.status-dot.configured{background:#d5a83e}.provider-main{min-width:0}.provider-name{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:650}.default-badge{padding:2px 7px;border-radius:999px;background:#eef4f1;color:#396c5c;font-size:11px;font-weight:500}.provider-meta,.probe-message{margin-top:4px;color:var(--el-text-color-secondary);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.provider-meta span{margin:0 6px}.probe-message{color:var(--study-text-strong)}.provider-actions{display:flex;align-items:center}.default-row{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-top:14px;padding:14px;border-radius:12px;background:var(--el-fill-color-lighter)}.default-row>div{display:flex;flex-direction:column;gap:3px}.default-row small{color:var(--el-text-color-secondary)}.add-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}.add-button{height:44px;border-style:dashed}.advanced-panel :deep(.el-card__body){padding:0 18px}.advanced-panel :deep(.el-collapse){border:0}.collapse-title{display:flex;align-items:center;min-width:0;gap:9px}.collapse-title span{padding:1px 6px;border-radius:5px;background:var(--el-fill-color-light);color:var(--el-text-color-secondary);font-size:11px}.collapse-title small{color:var(--el-text-color-secondary);font-weight:400}.route-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:4px 0 16px}.route-grid label{display:flex;flex-direction:column;gap:6px;color:var(--el-text-color-secondary);font-size:12px}.fallback-row{display:grid;grid-template-columns:minmax(240px,1fr) minmax(260px,1fr);align-items:center;gap:18px;padding:12px 0 16px;border-top:1px solid var(--study-card-border)}.fallback-row>div{display:flex;flex-direction:column;gap:4px}.fallback-row small,.usage-boundary{color:var(--study-text-secondary);font-size:11px}.usage-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:4px 0 10px}.usage-summary span{display:flex;flex-direction:column;padding:10px;border-radius:8px;background:var(--study-surface-muted);font-size:11px}.usage-summary b{margin-top:4px;font:600 18px var(--study-font-latin)}.compact-form{padding:4px 0 16px}.two-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.field-hint{margin-left:10px;color:var(--el-text-color-secondary);font-size:12px}.form-actions{display:flex;gap:8px}.inline-message{margin-top:8px;color:var(--el-text-color-secondary);font-size:12px}.storage-head{display:flex;justify-content:space-between;align-items:center}.storage-head>div{display:flex;flex-direction:column;gap:3px}.storage-head small{color:var(--el-text-color-secondary)}.storage-list{margin:12px 0}.storage-row{display:grid;grid-template-columns:56px minmax(120px,1fr) 90px minmax(160px,1.4fr);align-items:center;gap:8px;min-height:40px;border-top:1px solid var(--study-card-border);font-size:12px}.storage-row span,.storage-row small{color:var(--study-text-secondary)}.protected-label{font-size:11px}.model-input{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;width:100%}.dialog-advanced{margin-top:6px;border-top:1px solid var(--study-card-border)}
 .capacity-card{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:13px;border:1px solid var(--study-card-border);border-radius:10px;background:var(--study-surface-muted)}.capacity-card>div{display:flex;flex-direction:column;gap:4px}.capacity-card span,.capacity-card small{color:var(--study-text-secondary);font-size:12px}.capacity-card b{font-size:14px}.capacity-card.attention{border-color:#d8b46b}.capacity-card.migration_review{border-color:#d98474}
+.diagnostic-list{display:grid;gap:8px;margin:12px 0}.diagnostic-list>div{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.diagnostic-list small{color:var(--study-text-secondary)}.price-grid{display:grid;grid-template-columns:minmax(180px,2fr) repeat(2,minmax(130px,1fr)) auto;gap:10px;align-items:end}.price-grid label{display:grid;gap:5px;color:var(--study-text-secondary);font-size:12px}.price-grid :deep(.el-input-number){width:100%}
+.budget-heading{margin-top:22px;padding-top:16px;border-top:1px solid var(--study-card-border)}.budget-grid{grid-template-columns:repeat(2,minmax(170px,1fr)) auto}.budget-grid label{display:grid;gap:5px;color:var(--study-text-secondary);font-size:12px}
 .model-discovery-hint{width:100%;margin-top:6px;color:var(--el-color-success);font-size:12px}
 .appearance-panel { margin-bottom: 16px; }
+.settings-page .add-actions{grid-template-columns:1fr}
+.settings-page .appearance-grid{grid-template-columns:1fr}
 .appearance-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .appearance-heading h2 { font-size: 17px; }
 .appearance-grid { display: grid; grid-template-columns: minmax(0, 1fr) 200px; align-items: center; gap: 24px; }
@@ -329,5 +376,5 @@ onMounted(async () => {
 .appearance-control > span { flex: none; font-size: 13px; }
 .appearance-preview { display: flex; align-items: center; justify-content: center; min-height: 184px; }
 @media(max-width:720px) { .appearance-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
-@media(max-width:720px){.settings-page{padding:0 2px 24px}.page-heading{align-items:center}.route-grid,.two-columns,.add-actions,.fallback-row,.usage-summary{grid-template-columns:1fr}.provider-item{grid-template-columns:10px minmax(0,1fr)}.provider-actions{grid-column:2;justify-content:flex-start}.default-row{align-items:stretch;flex-direction:column}.collapse-title small{display:none}.storage-row{grid-template-columns:48px 1fr 80px}.storage-row small{display:none}}
+@media(max-width:720px){.settings-page{padding:0 2px 24px}.page-heading{align-items:center}.route-grid,.two-columns,.add-actions,.fallback-row,.usage-summary,.price-grid{grid-template-columns:1fr}.provider-item{grid-template-columns:10px minmax(0,1fr)}.provider-actions{grid-column:2;justify-content:flex-start}.default-row{align-items:stretch;flex-direction:column}.collapse-title small{display:none}.storage-row{grid-template-columns:48px 1fr 80px}.storage-row small{display:none}}
 </style>

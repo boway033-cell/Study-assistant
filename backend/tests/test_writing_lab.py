@@ -10,11 +10,11 @@ import pytest
 from sqlalchemy import select
 
 from ai_tone_cases import DETECTOR_CASES, RULE_CASES
-from backend.app.api.writing import (OutputReviewReq, OutputUpdateReq, list_outputs, review_output,
+from backend.app.api.writing import (OutputReviewReq, OutputUpdateReq, list_outputs, output_from_study_report, review_output,
                                      update_output)
 from backend.app.core.config import settings
 from backend.app.core.database import SessionLocal
-from backend.app.models import WritingOutput
+from backend.app.models import StudyReport, WritingOutput
 from backend.app.services import writing_lab
 from backend.app.services.writing_lab import (
     AI_TONE_VIOLATION_PATTERNS,
@@ -48,12 +48,40 @@ def test_writing_output_archive_is_single_entry_point_with_kind_filter():
         db.close()
 
 
+def test_study_report_handoff_reuses_one_editable_word_output():
+    db = SessionLocal()
+    report = StudyReport(book_ids_json="[]", selection_json="{}", focus="研究问题",
+                         claims_json="[]", content="# 研究问题\n\n来源与结论。")
+    db.add(report); db.commit(); db.refresh(report)
+    word_path = None
+    try:
+        first = output_from_study_report(report.id, db)
+        second = output_from_study_report(report.id, db)
+        assert first["id"] == second["id"]
+        output = db.get(WritingOutput, first["id"])
+        word_path = settings.writing_dir / "outputs" / output.output_file_path
+        assert word_path.exists()
+        assert output.kind == "study_report"
+        edited = update_output(output.id, OutputUpdateReq(title="修改后的标题", output_text="人工修改的正文"), db)
+        assert edited["output_text"] == "人工修改的正文"
+        assert output_from_study_report(report.id, db)["id"] == output.id
+    finally:
+        output = db.scalar(select(WritingOutput).where(WritingOutput.kind == "study_report",
+                                                     WritingOutput.source_text == f"study-report:{report.id}"))
+        if output:
+            db.delete(output)
+        db.delete(report); db.commit(); db.close()
+        if word_path:
+            word_path.unlink(missing_ok=True)
+
+
 def test_writing_dna_rejects_fewer_than_twenty_articles():
     with pytest.raises(ValueError, match="至少需要 20 篇"):
         validate_corpus(None, list(range(1, 20)))
 
 
-def test_writing_material_requires_selected_in_scope_knowledge_objects():
+def test_writing_material_accepts_knowledge_objects_outside_dna_corpus():
+    """内容来源与 DNA 语料解耦：DNA 之外的知识对象同样可选作取材。"""
     from uuid import uuid4
     from backend.app.models import Book, EvidenceCard, KnowledgeNote
 
@@ -65,12 +93,13 @@ def test_writing_material_requires_selected_in_scope_knowledge_objects():
                         claim_text="不同研究存在冲突", verification_status="needs_review")
     db.add_all([note, card]); db.commit(); db.refresh(note); db.refresh(card)
     try:
-        with pytest.raises(ValueError, match="至少选择一个知识对象"):
-            collect_writing_knowledge(db, [book.id], [], [], [])
-        context, manifest = collect_writing_knowledge(db, [book.id], [note.id], [card.id], [])
-        assert f"[NOTE:{note.id}|B{book.id}]" in context
-        assert f"[EVIDENCE:{card.id}|B{book.id}]" in context
+        with pytest.raises(ValueError, match="至少选择一个内容来源"):
+            collect_writing_knowledge(db)
+        context, manifest, anchors = collect_writing_knowledge(db, [note.id], [card.id], [])
+        assert f"[NOTE:{note.id}]" in context
+        assert f"[EVIDENCE:{card.id}]" in context
         assert {item["type"] for item in manifest} == {"note", "evidence"}
+        assert anchors == {f"[NOTE:{note.id}]", f"[EVIDENCE:{card.id}]"}
     finally:
         db.delete(book); db.commit(); db.close()
 
@@ -85,7 +114,8 @@ def test_writing_output_freshness_detects_changed_and_missing_knowledge():
     db.add(book); db.flush()
     note = KnowledgeNote(book_id=book.id, title="来源", content="原始判断", source_refs_json="[]")
     db.add(note); db.commit(); db.refresh(note)
-    _, manifest = collect_writing_knowledge(db, [book.id], [note.id], [], [])
+    _, manifest, _ = collect_writing_knowledge(db, [note.id])
+    # 旧版输出只保存 knowledge_objects，仍须可复核（向后兼容）。
     output = WritingOutput(kind="imitation", title="快照", input_type="text", output_text="正文",
                            audit_json=json.dumps({"knowledge_objects": manifest}, ensure_ascii=False))
     db.add(output); db.commit(); db.refresh(output)
