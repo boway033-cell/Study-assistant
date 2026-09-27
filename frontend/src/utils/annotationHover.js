@@ -98,6 +98,7 @@ export function buildHoverItem(annotation) {
     hasNote: !!note,
     emptyLabel: note ? '' : kind.kind === 'underline' ? '仅划线' : '仅高亮',
     text: preview,
+    fullText: typeof annotation?.text === 'string' ? annotation.text : '',
     ariaLabel: annotationAriaLabel(annotation),
   }
 }

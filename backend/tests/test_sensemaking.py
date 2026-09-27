@@ -24,6 +24,82 @@ def _evidence(source: dict, quote: str) -> list[dict]:
     return [{"ref": source["ref"], "quote": quote}]
 
 
+def test_quote_alignment_accepts_only_typographic_differences_and_keeps_source_text():
+    source = _source(1, 1, "网络舆论对政策议程的影响，是一个重要议题。")
+    aligned = sm.verified_evidence(_evidence(source, "网络舆论对政策议程的影响是一个重要议题"), [source])
+    assert aligned[0]["quote"] == "网络舆论对政策议程的影响，是一个重要议题"
+    assert sm.verified_evidence(_evidence(source, "网络舆论主导了政策议程"), [source]) == []
+
+
+def test_evidence_recovers_unique_source_ref_and_fullwidth_quote():
+    first = _source(1, 1, "研究首先介绍了问题背景与方法。")
+    second = _source(1, 2, "本研究使用ＡＩ工具分析三组访谈材料。")
+    found = sm.verified_evidence(_evidence(first, "本研究使用AI工具分析三组访谈材料"), [first, second])
+    assert len(found) == 1
+    assert found[0]["ref"] == second["ref"]
+    assert found[0]["quote"] == "本研究使用ＡＩ工具分析三组访谈材料"
+    assert found[0]["match_status"] == "recovered_ref"
+    assert found[0]["source_hash"] == second["hash"]
+
+
+def test_evidence_ref_recovery_rejects_ambiguous_or_out_of_scope_sources():
+    first = _source(1, 1, "不同场景都使用相同的研究方法来观察合作过程。")
+    second = _source(1, 2, first["text"])
+    wrong = {"ref": "B1:P9:C999", "quote": "相同的研究方法来观察合作过程"}
+    assert sm.verified_evidence([wrong], [first, second]) == []
+    third = _source(2, 3, "另一篇资料提出完全不同的研究结论与解释边界。")
+    assert sm.verified_evidence(_evidence(third, "另一篇资料提出完全不同的研究结论"),
+                                [first, third], book_id=1) == []
+
+
+def test_evidence_accepts_one_minor_copy_error_but_not_changed_negation_or_number():
+    source = _source(1, 1, "研究发现，社区参与能够改善信息公开，并提高政策讨论的透明度。")
+    typo = sm.verified_evidence(_evidence(source, "研究发现，社区参与能够改善信息公井，并提高政策讨论的透明度"), [source])
+    assert typo[0]["quote"] == "研究发现，社区参与能够改善信息公开，并提高政策讨论的透明度"
+    assert typo[0]["match_status"] == "minor_quote_error"
+    negative = _source(1, 2, "研究发现社区参与不能改善信息公开，并提高政策讨论的透明度。")
+    assert sm.verified_evidence(_evidence(negative, "研究发现社区参与能改善信息公开，并提高政策讨论的透明度"),
+                                [negative]) == []
+    number = _source(1, 3, "研究观察到三组样本的政策讨论透明度提高了百分之十。")
+    assert sm.verified_evidence(_evidence(number, "研究观察到四组样本的政策讨论透明度提高了百分之十"),
+                                [number]) == []
+
+
+def test_minor_quote_repair_requires_unique_span():
+    text = "社区参与能够改善信息公开，并提高政策讨论的透明度。"
+    source = _source(1, 1, text + "其他情况。" + text)
+    assert sm.verified_evidence(_evidence(source, "社区参与能够改善信息公井，并提高政策讨论的透明度"),
+                                [source]) == []
+
+
+def test_invalid_local_reading_has_bounded_repair_and_explicit_gap(monkeypatch):
+    from backend.app.api import sensemaking as api, study
+    from backend.app.services.llm import request_reasoning_effort
+
+    source = _source(1, 1, "网络舆论对政策议程的影响，是一个重要议题。")
+    window = {"id": "w1", "chapter_id": 1, "chapter_title": "问题提出", "page_start": 1,
+              "page_end": 1, "sources": [source]}
+    calls = []
+
+    async def invalid_answer(_provider, messages, *_args, **_kwargs):
+        calls.append((messages, request_reasoning_effort.get()))
+        return json.dumps({"role": "body", "claims": [{"statement": "无依据断言",
+            "evidence": [{"ref": source["ref"], "quote": "原文完全没有的文字"}]}]}, ensure_ascii=False)
+
+    monkeypatch.setattr(study, "_stream_answer", invalid_answer)
+    monkeypatch.setattr(api, "update_progress", lambda *_args, **_kwargs: None)
+    messages = [{"role": "system", "content": "逐段研读"},
+                {"role": "user", "content": sm.source_block([source])}]
+    result = asyncio.run(api._structured(object(), messages,
+        lambda raw: sm.normalize_reading_pass(raw, window), object(), "fulltext-reading",
+        on_validation_failure=lambda error: sm.unresolved_reading_pass(window, error)))
+    assert len(calls) == 2
+    assert [effort for _, effort in calls] == ["low", "medium"]
+    assert "无依据断言" not in calls[1][0][-1]["content"]
+    assert result["unresolved"] is True and result["claims"] == []
+    assert result["source_refs"] == [source["ref"]]
+
+
 def test_reading_keeps_only_nodes_with_literal_quotes_from_selected_sources():
     source = _source(1, 11, "研究问题是如何解释城市迁移。样本来自三个城市的访谈记录。作者把差异解释为制度边界。")
     raw = {"material_type": "qualitative", "nodes": [
@@ -126,6 +202,24 @@ def test_local_reading_pass_rejects_unlocated_claims():
     with pytest.raises(ValueError, match="没有可定位的论点"):
         sm.normalize_reading_pass({"role": "body", "claims": [{"kind": "finding", "statement": "伪造结论",
             "evidence": _evidence(source, "所有案例都证明收入增加一倍")}]}, window)
+
+
+def test_numbered_passages_restore_exact_quotes_and_reject_unknown_ids():
+    source = _source(1, 1, "网络舆论对政策议程的影响，是一个重要议题。" * 12)
+    window = {"id": "w1", "chapter_id": None, "chapter_title": "正文", "page_start": 1,
+              "page_end": 1, "sources": [source]}
+    passages = sm.reading_evidence_catalog(window)
+    assert len(passages) >= 2
+    result = sm.normalize_reading_pass({"role": "body", "claims": [
+        {"kind": "finding", "statement": "舆论影响政策议程", "evidence_ids": ["E1"]},
+        {"kind": "finding", "statement": "伪造论点", "evidence_ids": ["E999"]},
+    ]}, window, passages)
+    assert len(result["claims"]) == 1
+    assert result["claims"][0]["evidence"][0]["quote"] == passages[0]["quote"]
+    assert result["claims"][0]["evidence"][0]["ref"] == source["ref"]
+    with pytest.raises(ValueError, match="有效证据编号"):
+        sm.normalize_reading_pass({"role": "body", "claims": [
+            {"statement": "无依据断言", "evidence_ids": ["E999"]}]}, window, passages)
 
 
 def test_oversized_chunk_is_split_without_losing_extracted_text():
@@ -280,17 +374,18 @@ def test_reading_task_persists_source_bound_argument_map(monkeypatch):
         if "材料预览" in messages[-1]["content"]:
             return json.dumps({"material_type": "qualitative", "reason": "使用案例"}, ensure_ascii=False)
         if "第 1/1 段" in messages[-1]["content"]:
+            assert "[E1 |" in messages[-1]["content"]
             return json.dumps({"role": "body", "summary": "案例比较与结论", "claims": [
-                {"kind": "question", "statement": "问题", "evidence": _evidence(sources[0], "研究问题是何种机制影响组织合作")},
-                {"kind": "method", "statement": "案例比较", "evidence": _evidence(sources[1], "研究使用三个案例来比较组织之间")},
-                {"kind": "conclusion", "statement": "边界", "evidence": _evidence(sources[2], "制度安排可能改变合作边界")},
+                {"kind": "question", "statement": "问题", "evidence_ids": ["E1"]},
+                {"kind": "method", "statement": "案例比较", "evidence_ids": ["E2"]},
+                {"kind": "conclusion", "statement": "边界", "evidence_ids": ["E3"]},
             ]}, ensure_ascii=False)
         return json.dumps({"material_type": "qualitative", "nodes": [
-            {"kind": "question", "statement": "问题", "evidence": _evidence(sources[0], "研究问题是何种机制影响组织合作")},
-            {"kind": "method", "statement": "案例比较", "evidence": _evidence(sources[1], "研究使用三个案例来比较组织之间")},
-            {"kind": "conclusion", "statement": "边界", "evidence": _evidence(sources[2], "制度安排可能改变合作边界")},
+            {"kind": "question", "statement": "问题", "evidence_ids": ["E1"]},
+            {"kind": "method", "statement": "案例比较", "evidence_ids": ["E2"]},
+            {"kind": "conclusion", "statement": "边界", "evidence_ids": ["E3"]},
         ], "edges": [{"from": "n2", "to": "n3", "relation": "supports", "reason": "案例支持有限结论",
-                      "evidence": _evidence(sources[2], "制度安排可能改变合作边界")}],
+                      "evidence_ids": ["E3"]}],
             "teach_back_question": "机制如何连接案例和结论？"}, ensure_ascii=False)
 
     monkeypatch.setattr(api, "SessionLocal", lambda: Session(engine))

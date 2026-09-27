@@ -78,15 +78,16 @@
           <template v-if="artifact.kind === 'reading'">
             <div class="coverage-line">
               <el-tag size="small" effect="plain">{{ materialLabel(artifact.payload.material_type) }}</el-tag>
-              <span v-if="artifact.payload.coverage?.mode === 'all_extracted_text'">已处理提取正文 {{ artifact.payload.coverage?.text_chars?.toLocaleString() }} 字、{{ artifact.payload.coverage?.processed_chunks }}/{{ artifact.payload.coverage?.nonempty_chunks }} 个非空块、{{ artifact.payload.coverage?.processed_windows }} 个窗口。文本覆盖完成不代表论证已核实或用户已理解。</span>
+              <span v-if="artifact.payload.coverage?.mode === 'all_extracted_text'">已扫描提取正文 {{ artifact.payload.coverage?.text_chars?.toLocaleString() }} 字；取得可定位论点的文本块 {{ artifact.payload.coverage?.processed_chunks }}/{{ artifact.payload.coverage?.nonempty_chunks }}，扫描 {{ artifact.payload.coverage?.processed_windows }} 个窗口。文本覆盖不代表论证已核实或用户已理解。</span>
               <span v-else>旧版抽样阅读 {{ artifact.payload.coverage?.selected_chunks }}/{{ artifact.payload.coverage?.total_chunks }} 块；抽样覆盖不代表已理解全文。</span>
             </div>
             <el-alert v-if="artifact.payload.coverage?.missing_page_anchors" type="warning" :closable="false" :title="`${artifact.payload.coverage.missing_page_anchors} 个文本块缺少原页定位；相关判断需人工核对`" />
             <el-alert v-if="artifact.payload.coverage?.pages_without_extracted_text" type="warning" :closable="false" :title="`${artifact.payload.coverage.pages_without_extracted_text} 页未抽取到文字，请查看原页或重新 OCR`" />
+            <el-alert v-if="artifact.payload.coverage?.unresolved_window_ids?.length" type="warning" :closable="false" :title="`${artifact.payload.coverage.unresolved_window_ids.length} 个窗口未取得可核对的 AI 论点；本次论证地图覆盖不完整，请查看逐段轨迹并重试`" />
             <details v-if="artifact.payload.reading_passes?.length" class="pass-trail"><summary>查看逐段阅读轨迹（{{ artifact.payload.reading_passes.length }} 段）</summary>
               <article v-for="section in artifact.payload.reading_passes" :key="section.id">
                 <h3>{{ section.chapter_title }} · {{ section.id }} <small>第 {{ section.page_start || '?' }}–{{ section.page_end || '?' }} 页 · {{ passRoleLabel(section.role) }}</small></h3>
-                <p>AI 段落作用概述（待核对）：{{ section.summary || '该段未提取到可定位的论点' }}</p>
+                <p>{{ section.unresolved ? '本段待重新研读' : 'AI 段落作用概述（待核对）' }}：{{ section.summary || '该段未提取到可定位的论点' }}</p>
                 <ul><li v-for="(claim, index) in section.claims" :key="index"><small>{{ epistemicLabel(claim.epistemic_status) }} · AI 初判</small> {{ claim.statement }}
                   <button v-for="ev in claim.evidence" :key="ev.ref" @click="openEvidence(ev)">{{ ev.ref }} ↗</button>
                 </li></ul>
@@ -110,6 +111,7 @@
                     <el-option v-for="ev in node.evidence" :key="ev.ref" :label="ev.ref" :value="ev.ref" />
                   </el-select>
                   <el-button size="small" text @click="chooseNode(node)">用自己的话解释这一步</el-button>
+                  <el-button v-if="node.evidence?.some(ev => ev.book_id && ev.chunk_id)" size="small" text type="primary" @click="sendNodeToArchive(node)">加入项目档案</el-button>
                 </div>
               </article>
             </div>
@@ -292,6 +294,12 @@ const generateDiscovery = async () => {
 }
 const stopTask = async () => { try { await cancelTask(taskId.value); taskMessage.value = '正在取消任务' } catch (error) { ElMessage.error(error.message) } }
 const openEvidence = ev => router.push({ path: `/reader/${ev.book_id}`, query: ev.page ? { page: ev.page } : {} })
+const sendNodeToArchive = node => {
+  const evidence = node.evidence?.find(ev => ev.book_id && ev.chunk_id)
+  if (!evidence) return
+  router.push({ path: '/chat', query: { archiveBookId: evidence.book_id,
+    archiveChunkId: evidence.chunk_id, archiveQuote: evidence.quote || '', archiveStatement: node.statement } })
+}
 const chooseNode = node => { selectedNodeId.value = node.id; clearFeedback(); document.querySelector('.teachback')?.scrollIntoView({ behavior: 'smooth' }) }
 const clearFeedback = () => { feedback.value = null; coachResult.value = null }
 const requestCoach = async mode => {
@@ -406,4 +414,18 @@ onUnmounted(() => taskAbort?.abort())
 .interpret-result{padding:15px;border:1px solid #e1e5dc;border-radius:8px;background:#fff}
 .interpret-result h4{margin:0 0 12px}.interpret-result p{margin:6px 0;line-height:1.65;font-size:13px}
 .interpret-result small{color:#687c6e}.interpret-result .unanswered{color:#866943}
+.sense-page,.sense-tabs,.sense-workspace,.history-panel,.result-panel,.argument-chain,.argument-node,.node-content,.interpretation-panel,.interpret-result{min-width:0;max-width:100%;box-sizing:border-box}
+.sense-workspace{width:100%}
+.result-panel,.node-content,.interpret-result,.relation-item,.pass-trail{overflow-wrap:anywhere}
+.node-content{flex:1 1 0}
+.node-index{overflow-wrap:anywhere;text-align:center;font-size:12px}
+.evidence-row button{box-sizing:border-box;min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.evidence-row button b{flex:none}
+.evidence-row button span{min-width:0;overflow:visible;text-overflow:clip;white-space:normal;overflow-wrap:anywhere}
+.node-review{grid-template-columns:minmax(0,130px) minmax(0,1fr)}
+.node-review .el-select,.node-review .el-input,.interpret-actions .el-select{min-width:0;max-width:100%}
+.coverage-line,.result-head,.node-top,.interpret-actions{flex-wrap:wrap}
+.coverage-line>*,.result-head>div,.node-top>span{min-width:0}
+.relation-item button,.pass-trail li,.feedback-box,.history-item{overflow-wrap:anywhere}
+@media(max-width:560px){.argument-node{gap:8px}.node-index{flex-basis:30px;height:30px}.node-review{grid-template-columns:1fr}.interpret-actions{align-items:stretch}}
 </style>

@@ -184,4 +184,4 @@ def test_actual_prompt_loads_official_skill_and_respects_router(monkeypatch):
     assert asyncio.run(service.model_text(None, "outline", {"brief": BRIEF})) == "一、已知情况"
     assert service.drafting_rules() in captured["messages"][0]["content"]
     assert "不得编造" in captured["messages"][0]["content"]
-    assert captured["config"] == {"selected": "writing"}
+    assert captured["config"] == {"selected": "writing", "writing_style_profile": "official"}

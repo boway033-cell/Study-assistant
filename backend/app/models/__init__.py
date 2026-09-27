@@ -35,6 +35,18 @@ shelf_books = Table(
     Column("order_index", Integer, nullable=False, default=0),
 )
 
+assistant_project_shelves = Table(
+    "assistant_project_shelves", Base.metadata,
+    Column("project_id", ForeignKey("assistant_projects.id", ondelete="CASCADE"), primary_key=True),
+    Column("shelf_id", ForeignKey("shelves.id", ondelete="CASCADE"), primary_key=True),
+)
+
+assistant_project_books = Table(
+    "assistant_project_books", Base.metadata,
+    Column("project_id", ForeignKey("assistant_projects.id", ondelete="CASCADE"), primary_key=True),
+    Column("book_id", ForeignKey("books.id", ondelete="CASCADE"), primary_key=True),
+)
+
 
 class Book(Base):
     __tablename__ = "books"
@@ -154,6 +166,9 @@ class ChatLog(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     book_id: Mapped[int | None] = mapped_column(ForeignKey("books.id"), index=True)
+    shelf_id: Mapped[int | None] = mapped_column(ForeignKey("shelves.id", ondelete="SET NULL"), index=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("assistant_projects.id", ondelete="SET NULL"), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(64), index=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     sources_json: Mapped[str | None] = mapped_column(Text)
@@ -444,6 +459,34 @@ class Shelf(Base):
     children: Mapped[list["Shelf"]] = relationship(cascade="all, delete-orphan")
 
 
+class AssistantProject(Base):
+    """A goal that reuses shelves and individual books without copying source files."""
+
+    __tablename__ = "assistant_projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    goal: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+    shelves: Mapped[list["Shelf"]] = relationship(secondary=assistant_project_shelves)
+    books: Mapped[list["Book"]] = relationship(secondary=assistant_project_books)
+
+
+class AssistantMemory(Base):
+    """A user-confirmed observation or preference in one assistant scope."""
+
+    __tablename__ = "assistant_memories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    shelf_id: Mapped[int | None] = mapped_column(ForeignKey("shelves.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("assistant_projects.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class LiteratureResource(Base):
     """正文、SI、图表或数据集的来源与权利元数据。"""
 
@@ -596,3 +639,9 @@ class ChatSession(Base):
     state_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+# Register the research archive tables with Base.metadata at startup and in tests.
+from backend.app.models.research import (  # noqa: E402,F401
+    ResearchEvidence, ResearchItem, ResearchRevision, ResearchScopeSnapshot,
+)

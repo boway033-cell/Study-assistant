@@ -1,5 +1,6 @@
 <template>
-  <div class="settings-page study-page">
+  <div class="settings-page study-page" @pointermove="moveDots">
+    <div class="settings-dot-grid" aria-hidden="true"><div class="settings-dot-grid__wave"/><div class="settings-dot-grid__cursor"/></div>
     <header class="page-heading">
       <div><h1>设置</h1></div>
       <el-button v-if="settingsSection==='models'" :loading="probingAll" @click="probeDefault">检测默认模型</el-button>
@@ -12,7 +13,7 @@
       <template #header><div class="appearance-heading"><h2>界面</h2><el-button text @click="resetUiPreferences">恢复默认</el-button></div></template>
       <div class="appearance-grid">
         <div class="appearance-controls">
-          <div class="appearance-control"><span>发光边框</span><el-switch v-model="uiPreferences.glowBorders" aria-label="发光边框" /></div>
+          <div class="appearance-control"><span>卡片光效</span><el-switch v-model="uiPreferences.glowBorders" aria-label="卡片光效" /></div>
           <div class="appearance-control"><span>机械按键</span><el-switch v-model="uiPreferences.keycapButtons" aria-label="机械按键" /></div>
           <div class="appearance-control"><span>列表密度</span><el-radio-group v-model="uiPreferences.libraryDensity" size="small" aria-label="列表密度"><el-radio-button value="comfortable">舒适</el-radio-button><el-radio-button value="compact">紧凑</el-radio-button></el-radio-group></div>
         </div>
@@ -100,26 +101,6 @@
           <p class="usage-boundary">{{ usage.boundary }}</p>
         </el-collapse-item>
 
-        <el-collapse-item v-if="settingsSection==='models'" name="vision">
-          <template #title><div class="collapse-title"><b>页面视觉分析</b><span>可选</span><small>用于 PDF 页面、图表和公式解读</small></div></template>
-          <el-form label-position="top" class="compact-form">
-            <div class="two-columns">
-              <el-form-item label="API Key">
-                <el-input v-model="form.vision_api_key" type="password" show-password :placeholder="hasVisionKey ? '已配置，留空保持不变' : '输入视觉模型 API Key'" />
-              </el-form-item>
-              <el-form-item label="模型">
-                <el-select v-model="form.vision_model" filterable allow-create style="width: 100%">
-                  <el-option value="qwen3-vl-plus" label="qwen3-vl-plus" />
-                  <el-option value="qwen3-vl-flash" label="qwen3-vl-flash" />
-                </el-select>
-              </el-form-item>
-            </div>
-            <el-form-item label="Base URL"><el-input v-model="form.vision_base_url" /></el-form-item>
-            <div class="form-actions"><el-button type="primary" @click="saveAdvanced">保存视觉设置</el-button><el-button :loading="probingVision" @click="probeVision">检测视觉模型</el-button></div>
-            <p v-if="visionMessage" class="inline-message">{{ visionMessage }}</p>
-          </el-form>
-        </el-collapse-item>
-
         <el-collapse-item v-if="settingsSection==='local'" name="local">
           <template #title><div class="collapse-title"><b>本地检索与存储</b><span>高级</span><small>一般无需调整</small></div></template>
           <el-form label-position="top" class="compact-form">
@@ -149,31 +130,23 @@
       </el-collapse>
     </el-card>
 
-    <el-dialog v-model="deepseekDialog" title="编辑 DeepSeek" width="min(520px, 94vw)" append-to-body>
-      <el-form label-position="top">
-        <el-form-item label="API Key"><el-input v-model="form.deepseek_api_key" type="password" show-password :placeholder="hasKey ? '已配置，留空保持不变' : '输入 DeepSeek API Key'" /></el-form-item>
-        <el-form-item label="模型档位">
-          <el-radio-group v-model="form.deepseek_model"><el-radio value="flash">Flash</el-radio><el-radio value="pro">Pro</el-radio></el-radio-group>
-        </el-form-item>
-      </el-form>
-      <template #footer><el-button @click="deepseekDialog=false">取消</el-button><el-button type="primary" @click="saveDeepseek">保存</el-button></template>
-    </el-dialog>
-
     <el-dialog v-model="providerDialog" :title="providerForm.id ? `编辑 ${providerForm.name}` : '添加模型供应商'" width="min(560px, 94vw)" append-to-body>
       <el-form label-position="top">
         <el-form-item v-if="!providerForm.id" label="供应商">
           <el-select v-model="providerForm.vendor" style="width: 100%" @change="applyPreset"><el-option v-for="(preset, key) in providerPresets" :key="key" :value="key" :label="preset.label" /></el-select>
         </el-form-item>
-        <el-form-item label="显示名称"><el-input v-model="providerForm.name" /></el-form-item>
+        <el-form-item label="显示名称"><el-input v-model="providerForm.name" :disabled="providerForm.id==='deepseek'" /></el-form-item>
         <el-form-item label="API Key"><el-input v-model="providerForm.api_key" type="password" show-password :placeholder="providerForm.id ? '留空保持原 Key' : '输入 API Key；本机无鉴权服务可留空'" @blur="autoSyncModels" /></el-form-item>
         <el-form-item label="模型">
           <div class="model-input"><el-select v-model="providerForm.model" filterable allow-create default-first-option><el-option v-for="model in discoveredModels" :key="model" :label="model" :value="model" /></el-select><el-button :disabled="!providerForm.base_url" :loading="modelsLoading" @click="syncModels">识别模型</el-button></div>
           <div v-if="discoveredModels.length" class="model-discovery-hint">已识别 {{ discoveredModels.length }} 个模型，可在上方直接切换。</div>
+          <div v-if="providerForm.id==='deepseek'" class="model-discovery-hint">DeepSeek V4.1 Flash 使用模型 ID：deepseek-flash。</div>
         </el-form-item>
+        <el-form-item v-if="providerForm.id==='deepseek'" label="Base URL"><el-input v-model="providerForm.base_url" @blur="autoSyncModels" /></el-form-item>
         <el-collapse class="dialog-advanced">
           <el-collapse-item name="connection" title="自定义连接设置">
-            <el-form-item label="协议"><el-select v-model="providerForm.protocol" style="width:100%"><el-option v-for="(label, key) in protocolNames" :key="key" :label="label" :value="key" /></el-select></el-form-item>
-            <el-form-item label="Base URL"><el-input v-model="providerForm.base_url" @blur="autoSyncModels" /></el-form-item>
+            <el-form-item v-if="providerForm.id!=='deepseek'" label="协议"><el-select v-model="providerForm.protocol" style="width:100%"><el-option v-for="(label, key) in protocolNames" :key="key" :label="label" :value="key" /></el-select></el-form-item>
+            <el-form-item v-if="providerForm.id!=='deepseek'" label="Base URL"><el-input v-model="providerForm.base_url" @blur="autoSyncModels" /></el-form-item>
           </el-collapse-item>
         </el-collapse>
       </el-form>
@@ -187,13 +160,14 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import GlowBorderCard from '../components/GlowBorderCard.vue'
 import { uiPreferences, resetUiPreferences } from '../stores/uiPreferences'
-import { cleanupStorage, deleteCompatibleProvider, discoverProviderModels, getCapacityStatus, getProviderUsage, getSettings, getStorageUsage, listCompatibleProviders, probeCompatibleProvider, probeSettings, saveCompatibleProvider, updateProviderRouting, updateSettings, getDiagnostics, getAiPriceRates, updateAiPriceRate, getAiDefaultBudget, updateAiDefaultBudget } from '../api'
+import { cleanupStorage, deleteCompatibleProvider, discoverProviderModels, getCapacityStatus, getProviderUsage, getSettings, getStorageUsage, listCompatibleProviders, probeCompatibleProvider, saveCompatibleProvider, updateProviderRouting, updateSettings, getDiagnostics, getAiPriceRates, updateAiPriceRate, getAiDefaultBudget, updateAiDefaultBudget } from '../api'
 
-const taskLabels = { chat: 'AI 问答', research: '研究与跨文献分析', writing: '写作台', presentation: 'PPT 生成', utility: '题目与通用生成' }
-const settingsSections = [{id:'models',label:'模型连接',description:'供应商 · 功能分配 · 视觉分析'},{id:'cost',label:'用量与预算',description:'费率 · 调用统计 · 默认上限'},{id:'local',label:'本机与界面',description:'诊断 · 存储 · 外观'}]
+const taskLabels = { chat: 'AI 问答', research: '研究与跨文献分析', writing: '写作台', presentation: 'PPT 生成', utility: '通用生成与页面解读' }
+const settingsSections = [{id:'models',label:'模型连接',description:'供应商 · 功能分配'},{id:'cost',label:'用量与预算',description:'费率 · 调用统计 · 默认上限'},{id:'local',label:'本机与界面',description:'诊断 · 存储 · 外观'}]
 const settingsSection = ref('models')
 const protocolNames = { openai_chat: 'Chat Completions', anthropic_messages: 'Anthropic Messages', google_generate: 'Google GenerateContent' }
 const providerPresets = {
+  deepseek: { label: 'DeepSeek', name: 'DeepSeek', protocol: 'openai_chat', base_url: 'https://api.deepseek.com', model: 'deepseek-flash' },
   kimi: { label: 'Kimi / Moonshot', name: 'Kimi', protocol: 'openai_chat', base_url: 'https://api.moonshot.cn/v1', model: 'kimi-k2.6' },
   zhipu: { label: '智谱 GLM', name: '智谱 GLM', protocol: 'openai_chat', base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.2' },
   qwen: { label: '通义千问 / 阿里百炼', name: '通义千问', protocol: 'openai_chat', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3-max' },
@@ -207,11 +181,8 @@ const providers = ref([])
 const routing = ref({ default_provider_id: 'deepseek', task_routes: {}, fallback_provider_ids: [] })
 const usage = ref({items:[],totals:{},boundary:''})
 const capacity = ref({tier:'normal',books:0,chunks:0,database_bytes:0,recommendation:'',boundary:''})
-const form = ref({ deepseek_api_key: '', deepseek_model: 'flash', vision_api_key: '', vision_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', vision_model: 'qwen3-vl-plus', rag_top_k: 5, vector_search: false })
-const hasKey = ref(false)
-const hasVisionKey = ref(false)
+const form = ref({ rag_top_k: 5, vector_search: false })
 const providerDialog = ref(false)
-const deepseekDialog = ref(false)
 const providerForm = ref({ id: null, vendor: 'kimi', capability: 'text', ...providerPresets.kimi, api_key: '' })
 const discoveredModels = ref([])
 const modelsLoading = ref(false)
@@ -220,8 +191,6 @@ const probeStates = ref({})
 const probeMessages = ref({})
 const probingId = ref('')
 const probingAll = ref(false)
-const probingVision = ref(false)
-const visionMessage = ref('')
 const storage = ref({ total_bytes: 0, items: [] })
 const storageLoading = ref(false)
 const diagnostics = ref({ checks: [] })
@@ -237,12 +206,11 @@ const capacityTierText = computed(() => ({normal:'常规区间',attention:'需�
 const providerLabel = provider => `${provider.name} · ${provider.model}`
 const providerState = provider => probeStates.value[provider.id] || (provider.configured ? 'configured' : 'missing')
 const providerStatusText = provider => ({ ok: '连接正常', error: '连接失败', configured: '已保存，尚未检测', missing: '缺少 API Key' })[providerState(provider)]
+const moveDots = event => { const rect = event.currentTarget.getBoundingClientRect(); event.currentTarget.style.setProperty('--x', `${event.clientX - rect.left}px`); event.currentTarget.style.setProperty('--y', `${event.clientY - rect.top}px`) }
 
 const load = async () => {
   const settings = await getSettings()
-  hasKey.value = Boolean(settings.deepseek_configured)
-  hasVisionKey.value = Boolean(settings.vision_configured)
-  form.value = { deepseek_api_key: '', deepseek_model: settings.deepseek_model || 'flash', vision_api_key: '', vision_base_url: settings.vision_base_url || 'https://dashscope.aliyuncs.com/compatible-mode/v1', vision_model: settings.vision_model || 'qwen3-vl-plus', rag_top_k: Number.parseInt(settings.rag_top_k, 10) || 5, vector_search: Boolean(settings.vector_search) }
+  form.value = { rag_top_k: Number.parseInt(settings.rag_top_k, 10) || 5, vector_search: Boolean(settings.vector_search) }
 }
 
 const loadProviders = async () => {
@@ -266,20 +234,20 @@ const formatNumber=value=>Number(value||0).toLocaleString('zh-CN')
 const applyPreset = vendor => Object.assign(providerForm.value, providerPresets[vendor] || providerPresets.custom, { vendor })
 const openProvider = vendor => { providerForm.value = { id: null, vendor, capability: 'text', ...(providerPresets[vendor] || providerPresets.custom), api_key: '' }; discoveredModels.value = []; providerDialog.value = true }
 const editProvider = provider => {
-  if (provider.builtin) { deepseekDialog.value = true; return }
   providerForm.value = { ...provider, api_key: '' }; discoveredModels.value = []; providerDialog.value = true
   void syncModels(false)
 }
 
-const saveDeepseek = async () => {
-  await updateSettings({ deepseek_api_key: form.value.deepseek_api_key || undefined, deepseek_model: form.value.deepseek_model })
-  deepseekDialog.value = false; await Promise.all([load(), loadProviders()]); ElMessage.success('DeepSeek 配置已保存')
-}
-
 const submitProvider = async () => {
   if (!providerForm.value.name.trim() || !providerForm.value.base_url.trim() || !providerForm.value.model.trim()) return ElMessage.warning('请填写名称、模型和 Base URL')
-  await saveCompatibleProvider({ ...providerForm.value, api_key: providerForm.value.api_key || undefined })
-  providerDialog.value = false; await loadProviders(); ElMessage.success('供应商已保存')
+  try {
+    if (providerForm.value.id === 'deepseek') {
+      await updateSettings({ deepseek_api_key: providerForm.value.api_key || undefined, deepseek_base_url: providerForm.value.base_url, deepseek_model: providerForm.value.model })
+    } else {
+      await saveCompatibleProvider({ ...providerForm.value, api_key: providerForm.value.api_key || undefined })
+    }
+    providerDialog.value = false; await loadProviders(); ElMessage.success('模型连接已保存')
+  } catch (error) { ElMessage.error(error.message) }
 }
 
 const saveRouting = async () => {
@@ -303,13 +271,6 @@ const probeDefault = async () => {
     probeMessages.value[id] = result.reason || (result.ok ? '连接正常' : '未返回检测结果')
   } catch (error) { ElMessage.error(error.message) }
   finally { probingAll.value = false }
-}
-
-const probeVision = async () => {
-  probingVision.value = true
-  try { const result = await probeSettings(); visionMessage.value = result.vision?.reason || '未返回检测结果'; (result.vision?.ok ? ElMessage.success : ElMessage.warning)(visionMessage.value) }
-  catch (error) { ElMessage.error(error.message) }
-  finally { probingVision.value = false }
 }
 
 const syncModels = async (announce = true) => {
@@ -340,7 +301,7 @@ const removeProvider = async provider => {
 }
 
 const saveAdvanced = async () => {
-  try { await updateSettings({ vision_api_key: form.value.vision_api_key || undefined, vision_base_url: form.value.vision_base_url, vision_model: form.value.vision_model, rag_top_k: form.value.rag_top_k, vector_search: form.value.vector_search }); await load(); ElMessage.success('设置已保存') }
+  try { await updateSettings({ rag_top_k: form.value.rag_top_k, vector_search: form.value.vector_search }); await load(); ElMessage.success('设置已保存') }
   catch (error) { ElMessage.error(error.message) }
 }
 
@@ -359,6 +320,20 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.settings-page{--x:50%;--y:0px;position:relative;isolation:isolate;max-width:1040px;min-height:calc(100dvh - 92px);padding:28px 32px 48px;border:1px solid #e4e4e7;border-radius:20px;background:#fafafa;overflow:hidden;font-family:var(--study-font-ui)}
+.settings-page>:not(.settings-dot-grid){position:relative;z-index:1}
+.settings-page .page-heading h1{color:#18181b;text-shadow:none;font-family:var(--study-font-ui);font-size:28px;letter-spacing:-.02em}
+.settings-dot-grid,.settings-dot-grid__wave,.settings-dot-grid__cursor{position:absolute;inset:0;pointer-events:none}
+.settings-dot-grid{z-index:0;background-image:radial-gradient(circle,#d4d4d8 1px,transparent 1.2px);background-size:24px 24px;opacity:.45}
+.settings-dot-grid__wave{background-image:radial-gradient(circle,#a1a1aa 1px,transparent 1.2px);background-size:24px 24px;mask-image:radial-gradient(circle at 50% 50%,transparent calc(var(--wave-radius) - 130px),#000 var(--wave-radius),transparent calc(var(--wave-radius) + 155px));animation:dot-breathe 6s ease-in-out infinite}
+.settings-dot-grid__cursor{background-image:radial-gradient(circle,#18181b 1px,transparent 1.2px);background-size:24px 24px;mask-image:radial-gradient(120px circle at var(--x) var(--y),#000,transparent 100%)}
+@property --wave-radius{syntax:'<length>';inherits:false;initial-value:0px}
+@keyframes dot-breathe{0%{--wave-radius:0px;opacity:.2}50%{--wave-radius:460px;opacity:.8}100%{--wave-radius:900px;opacity:.2}}
+.settings-page :deep(.el-card){background:#fff}
+.settings-sections button{min-height:76px;background:rgba(255,255,255,.94)}
+.settings-sections button.active{border-color:#a1a1aa;background:#f4f4f5;box-shadow:0 0 0 2px rgba(161,161,170,.1)}
+.provider-item{background:#fff}
+@media(prefers-reduced-motion:reduce){.settings-dot-grid__wave{animation:none;--wave-radius:280px}}
 .settings-sections{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 18px}.settings-sections button{display:grid;gap:4px;padding:14px 16px;border:1px solid var(--study-card-border);border-radius:12px;background:var(--study-surface-muted);color:var(--study-text-strong);text-align:left;cursor:pointer}.settings-sections button.active{border-color:var(--el-color-primary);background:var(--el-color-primary-light-9)}.settings-sections small{color:var(--study-text-secondary);font-size:11px}.add-actions{grid-template-columns:1fr}.appearance-grid{grid-template-columns:1fr}@media(max-width:720px){.settings-sections{grid-template-columns:1fr}.settings-sections button{padding:10px 12px}}
 .settings-page{max-width:920px;margin:0 auto;padding-bottom:32px}.page-heading{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px}.page-heading h1{font-size:24px;line-height:1.3;color:#f7f2e9;font-weight:650;text-shadow:0 1px 8px rgba(0,0,0,.22)}.page-heading>div>p{margin-top:5px;color:rgba(247,242,233,.72);font-size:14px}.section-heading p{margin-top:5px;color:var(--el-text-color-secondary);font-size:14px}.model-panel,.advanced-panel{border:1px solid var(--study-card-border);border-radius:14px}.advanced-panel{margin-top:14px}.section-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.section-heading h2{font-size:17px}.provider-list{display:grid;gap:10px}.provider-item{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:12px;min-height:68px;padding:11px 14px;border:1px solid var(--study-card-border);border-radius:12px;background:var(--el-bg-color)}.status-dot{width:9px;height:9px;border-radius:50%;background:#c8cdd4}.status-dot.ok{background:#2fbf71;box-shadow:0 0 0 3px rgba(47,191,113,.12)}.status-dot.error,.status-dot.missing{background:#e46b5d}.status-dot.configured{background:#d5a83e}.provider-main{min-width:0}.provider-name{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:650}.default-badge{padding:2px 7px;border-radius:999px;background:#eef4f1;color:#396c5c;font-size:11px;font-weight:500}.provider-meta,.probe-message{margin-top:4px;color:var(--el-text-color-secondary);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.provider-meta span{margin:0 6px}.probe-message{color:var(--study-text-strong)}.provider-actions{display:flex;align-items:center}.default-row{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-top:14px;padding:14px;border-radius:12px;background:var(--el-fill-color-lighter)}.default-row>div{display:flex;flex-direction:column;gap:3px}.default-row small{color:var(--el-text-color-secondary)}.add-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}.add-button{height:44px;border-style:dashed}.advanced-panel :deep(.el-card__body){padding:0 18px}.advanced-panel :deep(.el-collapse){border:0}.collapse-title{display:flex;align-items:center;min-width:0;gap:9px}.collapse-title span{padding:1px 6px;border-radius:5px;background:var(--el-fill-color-light);color:var(--el-text-color-secondary);font-size:11px}.collapse-title small{color:var(--el-text-color-secondary);font-weight:400}.route-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:4px 0 16px}.route-grid label{display:flex;flex-direction:column;gap:6px;color:var(--el-text-color-secondary);font-size:12px}.fallback-row{display:grid;grid-template-columns:minmax(240px,1fr) minmax(260px,1fr);align-items:center;gap:18px;padding:12px 0 16px;border-top:1px solid var(--study-card-border)}.fallback-row>div{display:flex;flex-direction:column;gap:4px}.fallback-row small,.usage-boundary{color:var(--study-text-secondary);font-size:11px}.usage-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:4px 0 10px}.usage-summary span{display:flex;flex-direction:column;padding:10px;border-radius:8px;background:var(--study-surface-muted);font-size:11px}.usage-summary b{margin-top:4px;font:600 18px var(--study-font-latin)}.compact-form{padding:4px 0 16px}.two-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px}.field-hint{margin-left:10px;color:var(--el-text-color-secondary);font-size:12px}.form-actions{display:flex;gap:8px}.inline-message{margin-top:8px;color:var(--el-text-color-secondary);font-size:12px}.storage-head{display:flex;justify-content:space-between;align-items:center}.storage-head>div{display:flex;flex-direction:column;gap:3px}.storage-head small{color:var(--el-text-color-secondary)}.storage-list{margin:12px 0}.storage-row{display:grid;grid-template-columns:56px minmax(120px,1fr) 90px minmax(160px,1.4fr);align-items:center;gap:8px;min-height:40px;border-top:1px solid var(--study-card-border);font-size:12px}.storage-row span,.storage-row small{color:var(--study-text-secondary)}.protected-label{font-size:11px}.model-input{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;width:100%}.dialog-advanced{margin-top:6px;border-top:1px solid var(--study-card-border)}
 .capacity-card{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:13px;border:1px solid var(--study-card-border);border-radius:10px;background:var(--study-surface-muted)}.capacity-card>div{display:flex;flex-direction:column;gap:4px}.capacity-card span,.capacity-card small{color:var(--study-text-secondary);font-size:12px}.capacity-card b{font-size:14px}.capacity-card.attention{border-color:#d8b46b}.capacity-card.migration_review{border-color:#d98474}
@@ -377,4 +352,6 @@ onMounted(async () => {
 .appearance-preview { display: flex; align-items: center; justify-content: center; min-height: 184px; }
 @media(max-width:720px) { .appearance-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
 @media(max-width:720px){.settings-page{padding:0 2px 24px}.page-heading{align-items:center}.route-grid,.two-columns,.add-actions,.fallback-row,.usage-summary,.price-grid{grid-template-columns:1fr}.provider-item{grid-template-columns:10px minmax(0,1fr)}.provider-actions{grid-column:2;justify-content:flex-start}.default-row{align-items:stretch;flex-direction:column}.collapse-title small{display:none}.storage-row{grid-template-columns:48px 1fr 80px}.storage-row small{display:none}}
+@media(max-width:720px){.settings-page{min-height:calc(100dvh - 68px);padding:20px 14px 32px;border-radius:14px}.settings-sections{gap:8px}.settings-sections button{min-height:0}.settings-page .page-heading h1{font-size:24px}.model-panel :deep(.el-card__body){padding:16px}.provider-actions{flex-wrap:wrap;gap:4px}.provider-actions .el-button{margin-left:0}}
+.settings-page{width:100%;min-width:0}.settings-page .provider-item{background:#fff}.settings-page .page-heading{flex-wrap:wrap;gap:12px}.settings-page .page-heading>.el-button{max-width:100%}
 </style>

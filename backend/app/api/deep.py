@@ -303,7 +303,7 @@ async def classify_book(book_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "书籍不存在")
     keywords, chapters = _get_classify_inputs(db, book_id)
     cfg = load_llm_config(db, "research")
-    if not cfg.get("deepseek_api_key"):
+    if not cfg.get("configured"):
         # 本地降级分类
         category = classify_local(book.title, keywords, chapters)
         book.category = category
@@ -345,17 +345,17 @@ async def classify_all(db: Session = Depends(get_db)):
     from backend.app.services.analyzer.classify import classify_local
 
     cfg = load_llm_config(db, "research")
-    has_key = bool(cfg.get("deepseek_api_key"))
-    provider = LLMRouter.get("auto", cfg) if has_key else None
+    has_model = bool(cfg.get("configured"))
+    provider = LLMRouter.get("auto", cfg) if has_model else None
     books = db.scalars(select(Book).where(Book.status == "ready")).all()
     done = {}
-    method = "ai" if has_key else "local"
+    method = "ai" if has_model else "local"
     for book in books:
         if book.category:
             done[book.id] = book.category
             continue
         keywords, chapters = _get_classify_inputs(db, book.id)
-        if has_key:
+        if has_model:
             cat = await _classify_book(provider, book, keywords)
         else:
             cat = classify_local(book.title, keywords, chapters)

@@ -143,12 +143,25 @@ _MODE_GUIDANCE = {
 FIRST_TOKEN_TIMEOUT = 240
 
 
+def _retryable_generation_error(exc: Exception) -> bool:
+    """只重试网络抖动与限流；证书、鉴权和内容错误应立即报告。"""
+    if isinstance(exc, ValueError):
+        return False
+    detail = f"{type(exc).__name__}: {exc}".lower()
+    if any(marker in detail for marker in ("certificate verify failed", "sslcertverificationerror",
+                                            "http 400", "http 401", "http 403", "invalid_api_key")):
+        return False
+    return any(marker in detail for marker in ("timeout", "timed out", "模型连续", "connecterror",
+                                               "connection", "getaddrinfo", "http 429", "http 502",
+                                               "http 503", "http 504", "rate limit"))
+
+
 async def _stream_answer(provider, messages: list[dict], error_prefix: str, on_progress=None, on_text=None) -> str:
     """统一流式调用与短暂故障重试；不在内存保留模型隐性推理过程。"""
     import asyncio
 
     last_err = ""
-    for attempt in range(3):
+    for attempt in range(2):
         answer = ""
         last_notified_at = time.monotonic()
         last_notified_size = 0
@@ -210,7 +223,10 @@ async def _stream_answer(provider, messages: list[dict], error_prefix: str, on_p
                 on_text(answer)
                 raise RuntimeError(f'{error_prefix}：连接中断，已接收的草稿保留在任务中') from exc
             last_err = str(exc)
-        await asyncio.sleep(2 * (attempt + 1))
+            if not _retryable_generation_error(exc):
+                break
+        if attempt < 1:
+            await asyncio.sleep(2 * (attempt + 1))
     raise RuntimeError(f"{error_prefix}：{last_err}")
 
 
@@ -982,8 +998,8 @@ class TrainStartReq(BaseModel):
 @router.post("/train/start")
 async def train_start(req: TrainStartReq, db: Session = Depends(get_db)):
     cfg = load_llm_config(db, "research")
-    if not cfg.get("deepseek_api_key"):
-        raise HTTPException(400, "未配置 DeepSeek API Key")
+    if not cfg.get("configured"):
+        raise HTTPException(400, "研究模型连接尚未配置")
     context = _book_context(db, req.book_ids, limit_per_book=6000)
     if not context:
         raise HTTPException(400, "没有可用的文献")

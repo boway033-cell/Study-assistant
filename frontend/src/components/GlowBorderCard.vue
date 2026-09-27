@@ -1,5 +1,5 @@
 <template>
-  <section class="el-card glow-border-card" :class="{ 'glow-disabled': !uiPreferences.glowBorders }">
+  <section class="el-card glow-border-card" :class="{ 'glow-disabled': !uiPreferences.glowBorders }" @pointermove="moveGlow">
     <div class="glow-border-card__surface">
       <header v-if="$slots.header" class="el-card__header"><slot name="header" /></header>
       <div class="el-card__body"><slot /></div>
@@ -9,70 +9,46 @@
 
 <script setup>
 import { uiPreferences } from '../stores/uiPreferences'
+
+const moveGlow = event => {
+  const el = event.currentTarget
+  const rect = el.getBoundingClientRect()
+  el.style.setProperty('--mouse-x', `${event.clientX - rect.left}px`)
+  el.style.setProperty('--mouse-y', `${event.clientY - rect.top}px`)
+}
 </script>
 
 <style>
-@property --study-glow-angle {
-  syntax: '<angle>';
-  initial-value: 0deg;
-  inherits: false;
-}
-
 .glow-border-card {
-  --glow-border-width: 1.5px;
-  --glow-color: #6366f1;
+  --mouse-x: 50%;
+  --mouse-y: 0px;
   position: relative;
   isolation: isolate;
   min-width: 0;
-  overflow: visible;
-  padding: var(--glow-border-width);
+  padding: 1px;
   border: 0 !important;
-  border-radius: var(--study-radius-md);
-  background: var(--study-card-border);
+  border-radius: 12px;
+  background: radial-gradient(240px circle at var(--mouse-x) var(--mouse-y), rgba(161,161,170,.55), transparent 70%), #e4e4e7;
   box-shadow: none !important;
 }
-
-.glow-border-card::before,
-.glow-border-card::after {
+.glow-border-card__surface {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 11px;
+  background: #fff;
+}
+.glow-border-card__surface::before {
   position: absolute;
   inset: 0;
-  padding: var(--glow-border-width);
+  z-index: 0;
   border-radius: inherit;
-  background: conic-gradient(from var(--study-glow-angle), transparent 0deg, var(--glow-color) 45deg, transparent 90deg, transparent 360deg);
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  animation: study-card-orbit 4s linear infinite;
+  background: radial-gradient(280px circle at var(--mouse-x) var(--mouse-y), rgba(161,161,170,.14), transparent 65%);
   pointer-events: none;
   content: '';
 }
-
-.glow-border-card::before { z-index: 2; }
-.glow-border-card::after {
-  z-index: -1;
-  padding: 0;
-  -webkit-mask: none;
-  mask: none;
-  filter: blur(8px);
-  opacity: .4;
-}
-.glow-border-card:hover::before,
-.glow-border-card:hover::after { animation-duration: 2s; }
-.glow-border-card__surface {
-  position: relative;
-  z-index: 1;
-  min-width: 0;
-  border-radius: calc(var(--study-radius-md) - var(--glow-border-width));
-  background: var(--el-bg-color);
-}
-.glow-border-card__surface > .el-card__header { border-radius: inherit; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-.glow-disabled::before,
-.glow-disabled::after { display: none; animation: none; }
-
-@keyframes study-card-orbit { to { --study-glow-angle: 360deg; } }
-@media (prefers-reduced-motion: reduce) {
-  .glow-border-card::before,
-  .glow-border-card::after { animation: none; --study-glow-angle: 45deg; }
-}
+.glow-border-card__surface > * { position: relative; z-index: 1; }
+.glow-border-card__surface > .el-card__header { border-bottom: 1px solid #e4e4e7; }
+.glow-disabled { background: #e4e4e7; }
+.glow-disabled .glow-border-card__surface::before { display: none; }
 </style>

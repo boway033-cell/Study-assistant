@@ -1,4 +1,4 @@
-"""从已保存的版面证据重建目录，并用小范围 OCR 补足编号缺口。"""
+"""从版面证据重建目录；旧版 PDF 可退回原生文字层，小范围 OCR 补编号缺口。"""
 from __future__ import annotations
 
 from difflib import SequenceMatcher
@@ -134,24 +134,33 @@ def _replacement_items(db, book: Book, rows: list[dict]) -> list[dict]:
 def rebuild_book_toc(db, book: Book, record=None, *, allow_ocr: bool = True) -> dict:
     structured_path = settings.structured_dir / f"{book.file_hash or book.id}.json"
     source_path = settings.uploads_dir / book.file_path
-    if book.file_type != "pdf" or not structured_path.exists() or not source_path.exists():
-        return {"book_id": book.id, "status": "skipped", "reason": "缺少 PDF 或结构化证据"}
-    document = StructuredDocument.load_json(structured_path)
-    from backend.app.services.parser.structured import hydrate_ocr_geometry
-    from backend.app.services.parser.ocr import _file_hash, _ocr_cache_dir
-    hydrate_ocr_geometry(document, _ocr_cache_dir(_file_hash(source_path)))
-    layout = analyze_structured(document)
-    cleaned = [layout.clean_page_text(index) for index in range(len(layout.pages))]
+    if book.file_type != "pdf" or not source_path.exists():
+        return {"book_id": book.id, "status": "skipped", "reason": "缺少 PDF 原文件"}
+    document = None
+    if structured_path.exists():
+        document = StructuredDocument.load_json(structured_path)
+        from backend.app.services.parser.structured import hydrate_ocr_geometry
+        from backend.app.services.parser.ocr import _file_hash, _ocr_cache_dir
+        hydrate_ocr_geometry(document, _ocr_cache_dir(_file_hash(source_path)))
+        layout = analyze_structured(document)
+        cleaned = [layout.clean_page_text(index) for index in range(len(layout.pages))]
+    else:
+        # Legacy imports may predate persisted layout evidence. Read only the
+        # PDF text layer; never run whole-book OCR during a TOC rebuild.
+        import fitz
+        with fitz.open(source_path) as pdf:
+            cleaned = [page.get_text("text") for page in pdf]
+        layout = None
     rows = select_import_toc("pdf", _native_toc(source_path), cleaned, layout)
-    if allow_ocr:
+    if allow_ocr and document is not None:
         rows = _fill_number_gaps(source_path, rows, document, record)
     if not rows:
         return {"book_id": book.id, "status": "skipped", "reason": "未发现可信目录"}
     if record:
         from backend.app.worker.tasks import update_progress
         update_progress(record, .9, 'toc-rebuild', '正在保存目录修订与来源映射')
-    result = replace_book_toc(db, book, _replacement_items(db, book, rows), "rebuild",
-                              "版面清洗与编号缺口 OCR 重识别")
+    note = "版面清洗与编号缺口 OCR 重识别" if document is not None else "PDF 文字层与多页印刷目录重识别"
+    result = replace_book_toc(db, book, _replacement_items(db, book, rows), "rebuild", note)
     return {"book_id": book.id, "status": "rebuilt", "chapters": len(result["chapters"]),
             "revision_id": result["revision_id"]}
 

@@ -44,7 +44,7 @@
                 </div>
                 <el-tag v-if="activeFilterCount" size="small" effect="plain">{{ activeFilterCount }} 项筛选</el-tag>
               </div>
-              <div class="header-actions"><KeycapCard compact variant="warm" :loading="classifying" @click="classifyAll">智能归类</KeycapCard></div>
+              <div class="header-actions"><el-button v-if="typeof selectedShelf === 'number'" type="primary" plain @click="router.push({ path: '/chat', query: { shelfId: selectedShelf } })">书架助手</el-button><KeycapCard compact variant="warm" :loading="classifying" @click="classifyAll">智能归类</KeycapCard></div>
             </div>
           </template>
 
@@ -500,7 +500,7 @@ const createBookshelf = async (parentId) => {
     if (e !== 'cancel' && e !== 'close') ElMessage.error('创建书架失败：' + e.message)
   }
 }
-const shelfCommand = async (command,shelf) => { if(command==='child') return createBookshelf(shelf.id); if(command==='rename'){try{const {value}=await ElMessageBox.prompt('输入新名称','重命名书架',{inputValue:shelf.name});await updateShelf(shelf.id,{name:value.trim()});await loadShelves()}catch(e){if(e!=='cancel'&&e!=='close')ElMessage.error(e.message)}} else if(command==='delete'){try{await ElMessageBox.confirm('只删除书架归属，不会删除其中的文献。','删除书架',{type:'warning'});await deleteShelfApi(shelf.id);if(selectedShelf.value===shelf.id)selectedShelf.value='all';await Promise.all([loadShelves(),loadBooks()]);ElMessage.success('书架已删除，文献仍在资料库')}catch(e){if(e!=='cancel'&&e!=='close')ElMessage.error(e.message)}} }
+const shelfCommand = async (command,shelf) => { if(command==='child') return createBookshelf(shelf.id); if(command==='rename'){try{const {value}=await ElMessageBox.prompt('输入新名称','重命名书架',{inputValue:shelf.name});await updateShelf(shelf.id,{name:value.trim()});await loadShelves()}catch(e){if(e!=='cancel'&&e!=='close')ElMessage.error(e.message)}} else if(command==='delete'){try{await ElMessageBox.confirm('删除书架及其助手记忆；文献文件仍会保留，项目将不再引用此书架。','删除书架',{type:'warning'});await deleteShelfApi(shelf.id);if(selectedShelf.value===shelf.id)selectedShelf.value='all';await Promise.all([loadShelves(),loadBooks()]);ElMessage.success('书架已删除，文献仍在资料库')}catch(e){if(e!=='cancel'&&e!=='close')ElMessage.error(e.message)}} }
 const assignSelectedToShelf = async () => { if(!targetShelfId.value || !selectedBookIds.value.length)return; try{await putShelfBooks(targetShelfId.value,selectedBookIds.value,'add');await Promise.all([loadBooks(),loadShelves()]);selectedBookIds.value=[];ElMessage.success('已加入书架；原文件没有移动或复制')}catch(e){ElMessage.error(e.message)} }
 
 const handleUpload = async (file) => {

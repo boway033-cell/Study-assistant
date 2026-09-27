@@ -43,8 +43,8 @@ class DrawSessionResp(BaseModel):
 async def generate_diagram(req: DrawGenerateReq, db: Session = Depends(get_db)):
     """Generate draw.io XML from natural language."""
     cfg = load_llm_config(db, "utility")
-    if not cfg.get("deepseek_api_key"):
-        raise HTTPException(400, "DeepSeek API Key not configured")
+    if not cfg.get("configured"):
+        raise HTTPException(400, "通用模型连接尚未配置")
     if req.model:
         cfg = {**cfg, "deepseek_model": req.model}
     provider = LLMRouter.get("auto", cfg)
@@ -97,8 +97,8 @@ async def modify_diagram(req: DrawModifyReq, db: Session = Depends(get_db)):
     if not sess:
         raise HTTPException(404, "Drawing session not found")
     cfg = load_llm_config(db, "utility")
-    if not cfg.get("deepseek_api_key"):
-        raise HTTPException(400, "DeepSeek API Key not configured")
+    if not cfg.get("configured"):
+        raise HTTPException(400, "通用模型连接尚未配置")
     provider = LLMRouter.get("auto", cfg)
     modify_prompt = f"Modify request: {req.request}\n\nCurrent XML:\n{sess['xml']}\n\nOutput complete modified XML only."
     messages = [

@@ -2,7 +2,7 @@
 
 设计：独立后台线程运行事件循环（与 FastAPI 主 loop 解耦）。
 - submit 可从任意线程（sync 端点线程池）安全提交
-- OCR/解析等重型本地任务串行执行；AI 研读使用独立串行队列，避免被数百页 OCR 阻塞
+- OCR/解析等重型本地任务串行执行；交互与后台 AI 各有有限并发队列
 - 任务状态持久化到 import_tasks 表，重启后自动恢复 pending 任务
 """
 from __future__ import annotations
@@ -19,6 +19,7 @@ from sqlalchemy import select
 
 from backend.app.core.database import SessionLocal, engine
 from backend.app.models import ImportTask
+from backend.app.core.config import settings as app_settings
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,10 @@ _task_registry: dict[str, "TaskRecord"] = {}
 _TASK_REGISTRY_LOCK = threading.RLock()
 _queue: asyncio.Queue | None = None
 _interactive_queue: asyncio.Queue | None = None
+_background_ai_queue: asyncio.Queue | None = None
 _backend_loop: asyncio.AbstractEventLoop | None = None
 _interactive_loop: asyncio.AbstractEventLoop | None = None
+_background_ai_loop: asyncio.AbstractEventLoop | None = None
 _worker_started = False
 _lock = threading.Lock()
 _MAX_COMPLETED_IN_MEMORY = 128
@@ -52,6 +55,7 @@ class TaskRecord:
     cancel_requested: bool = False
     budget_max_tokens: int = 0
     budget_max_calls: int = 0
+    _last_persist_at: float = field(default=0.0, repr=False)
     _coro: "Callable[[TaskRecord], Awaitable[Any]] | None" = field(default=None, repr=False)
 
 
@@ -102,21 +106,29 @@ def _persist(record: TaskRecord) -> None:
 
 def _ensure_backend() -> asyncio.AbstractEventLoop:
     """为本地解析与交互 AI 各启动一个事件循环和线程。"""
-    global _backend_loop, _interactive_loop, _queue, _interactive_queue, _worker_started
+    global _backend_loop, _interactive_loop, _background_ai_loop
+    global _queue, _interactive_queue, _background_ai_queue, _worker_started
     with _lock:
         if (_backend_loop is not None and not _backend_loop.is_closed()
-                and _interactive_loop is not None and not _interactive_loop.is_closed()):
+                and _interactive_loop is not None and not _interactive_loop.is_closed()
+                and _background_ai_loop is not None and not _background_ai_loop.is_closed()):
             return _backend_loop
 
         _backend_loop = asyncio.new_event_loop()
         _interactive_loop = asyncio.new_event_loop()
+        _background_ai_loop = asyncio.new_event_loop()
         _queue = asyncio.Queue()
         _interactive_queue = asyncio.Queue()
-        ready = (threading.Event(), threading.Event())
+        _background_ai_queue = asyncio.Queue()
+        ready = (threading.Event(), threading.Event(), threading.Event())
 
         def _run(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, signal: threading.Event):
             asyncio.set_event_loop(loop)
-            loop.create_task(_worker(queue))
+            worker_count = (1 if queue is _queue else
+                            app_settings.ai_background_workers if queue is _background_ai_queue else
+                            app_settings.ai_interactive_workers)
+            for _ in range(worker_count):
+                loop.create_task(_worker(queue))
             signal.set()
             loop.run_forever()
 
@@ -124,6 +136,8 @@ def _ensure_backend() -> asyncio.AbstractEventLoop:
                          name="task-parse", daemon=True).start()
         threading.Thread(target=_run, args=(_interactive_loop, _interactive_queue, ready[1]),
                          name="task-ai", daemon=True).start()
+        threading.Thread(target=_run, args=(_background_ai_loop, _background_ai_queue, ready[2]),
+                         name="task-ai-background", daemon=True).start()
         if not all(signal.wait(timeout=5) for signal in ready):
             raise RuntimeError("后台任务线程未能启动")
         _worker_started = True
@@ -131,7 +145,7 @@ def _ensure_backend() -> asyncio.AbstractEventLoop:
 
 
 async def _worker(queue: asyncio.Queue) -> None:
-    """单队列 FIFO：每条资源通道一次只执行一个任务。
+    """队列 FIFO 分发；AI 通道允许多个任务在网络等待期间并行。
     
     失败自动重试：网络抖动/限流场景下重试 max_retries 次，每次间隔递增。
     """
@@ -194,18 +208,21 @@ async def _worker(queue: asyncio.Queue) -> None:
 
 
 _RESOURCE_HEAVY_TASKS = {"import", "reimport", "toc-rebuild", "deck_render"}
+_BACKGROUND_AI_TASKS = {"assistant_reading", "research_concept", "research_alignment", "research_counter", "research_reading_plan", "research_coach_question", "research_coach_feedback"}
 
 
 def _queue_for(name: str) -> asyncio.Queue:
     """隔离本地重型解析与交互式 AI，避免超长 OCR 阻塞研究和写作。"""
-    queue = _queue if name in _RESOURCE_HEAVY_TASKS else _interactive_queue
+    queue = (_queue if name in _RESOURCE_HEAVY_TASKS else
+             _background_ai_queue if name in _BACKGROUND_AI_TASKS else _interactive_queue)
     if queue is None:  # pragma: no cover - _ensure_backend 总会先初始化
         raise RuntimeError("任务队列尚未初始化")
     return queue
 
 
 def _loop_for(name: str) -> asyncio.AbstractEventLoop:
-    loop = _backend_loop if name in _RESOURCE_HEAVY_TASKS else _interactive_loop
+    loop = (_backend_loop if name in _RESOURCE_HEAVY_TASKS else
+            _background_ai_loop if name in _BACKGROUND_AI_TASKS else _interactive_loop)
     if loop is None or loop.is_closed():
         raise RuntimeError("任务事件循环尚未初始化")
     return loop
@@ -216,6 +233,9 @@ def _should_retry(exc: Exception) -> bool:
     if exc.__class__.__name__ in {"OCRPageTimeout", "TaskCancelled", "ParseError", "ValueError"}:
         return False
     text = str(exc).lower()
+    if any(token in text for token in ("certificate verify failed", "sslcertverificationerror",
+                                      "http 400", "http 401", "http 403", "invalid_api_key")):
+        return False
     return any(token in text for token in (
         "timeout", "temporarily", "connection", "429", "rate limit", "503", "502",
     ))
@@ -224,7 +244,7 @@ def _should_retry(exc: Exception) -> bool:
 def submit(name: str, coro_factory: Callable[[TaskRecord], Awaitable[Any]],
            book_id: int = 0, budget_max_tokens: int = 0,
            budget_max_calls: int = 0) -> TaskRecord:
-    """提交任务（线程安全）；同一资源通道内串行，不同通道可并行。"""
+    """提交任务（线程安全）；解析串行，AI 队列按配置有限并发。"""
     _ensure_backend()
     record = TaskRecord(
         id=f"{name}-{uuid.uuid4().hex[:8]}", name=name,
@@ -234,7 +254,7 @@ def submit(name: str, coro_factory: Callable[[TaskRecord], Awaitable[Any]],
     with _TASK_REGISTRY_LOCK:
         _task_registry[record.id] = record
     _persist(record)
-    # 入队后由 _worker 串行 await，避免多任务并发解析/并发 AI 请求
+    # 入队后由对应资源通道的 worker 消费；同一模型另有全局并发上限。
     asyncio.run_coroutine_threadsafe(_queue_for(name).put(record), _loop_for(name))
     return record
 
@@ -242,8 +262,7 @@ def submit(name: str, coro_factory: Callable[[TaskRecord], Awaitable[Any]],
 def has_active_task(name: str, book_id: int) -> bool:
     """同一书籍是否已有同名任务在排队或运行中（已结束/已取消的不算）。
 
-    队列是单 worker 串行执行的，重复提交不会并发写坏数据，但会让模型调用、
-    OCR 这些按量计费的步骤重跑一遍，并在任务中心留下两个同名进度。
+    重复任务可能并发写同一份资料，也会重复计费；提交入口必须拦截。
     这里用于在提交入口提前告知用户，而不是让他们等跑完才发现重复。
     """
     try:
@@ -336,7 +355,6 @@ def retry_task(task_id: str) -> TaskRecord:
 
 import time as _time
 
-_last_persist_time: float = 0.0
 _PERSIST_INTERVAL = 5.0  # 每 5 秒最多持久化一次进度（避免频繁 DB 写入）
 
 
@@ -361,10 +379,9 @@ def update_progress(
     if message:
         record.message = message
     # 定期持久化进度到 DB（避免中断后丢失进度信息）
-    global _last_persist_time
     now = _time.time()
-    if force or now - _last_persist_time >= _PERSIST_INTERVAL:
-        _last_persist_time = now
+    if force or now - record._last_persist_at >= _PERSIST_INTERVAL:
+        record._last_persist_at = now
         _persist(record)
 
 

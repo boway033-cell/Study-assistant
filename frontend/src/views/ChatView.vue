@@ -2,12 +2,33 @@
   <div class="chat-page study-page">
     <el-row :gutter="16" class="chat-row">
       <!-- 左：提问范围 + 历史 -->
-      <el-col :span="4">
+      <el-col :span="5">
         <el-card shadow="never" class="side-card">
           <template #header>提问范围</template>
-          <el-select v-model="bookId" placeholder="全部书籍" clearable filterable remote :remote-method="searchBooks" :loading="booksLoading" style="width: 100%">
-            <el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" />
+          <el-select v-model="scopeValue" placeholder="选择资料范围" filterable :disabled="sending" style="width: 100%">
+            <el-option label="全部资料" value="all" />
+            <el-option-group label="书架"><el-option v-for="s in shelves" :key="`shelf:${s.id}`" :label="s.name" :value="`shelf:${s.id}`" /></el-option-group>
+            <el-option-group label="项目"><el-option v-for="p in projects" :key="`project:${p.id}`" :label="p.name" :value="`project:${p.id}`" /></el-option-group>
+            <el-option-group label="单本资料"><el-option v-for="b in books" :key="`book:${b.id}`" :label="b.title" :value="`book:${b.id}`" /></el-option-group>
           </el-select>
+          <div class="scope-actions"><el-button link type="primary" @click="openProjectDialog()">＋ 项目</el-button><el-button v-if="activeScopeType==='project'" link @click="openProjectDialog(true)">编辑项目</el-button></div>
+          <div v-if="activeScopeType" class="assistant-scope-status">
+            <template v-if="assistantStatus">
+              <b>{{ assistantStatus.name }}</b>
+              <small>全文研读 {{ assistantStatus.prepared }}/{{ assistantStatus.total }} 本；问答始终限定在此范围</small>
+              <div v-if="assistantStatus.books.some(b=>b.state==='needs_source'||b.state==='no_text')" class="scope-warning">部分资料尚未解析或没有可读正文</div>
+              <div v-if="assistantStatus.books.some(b=>b.state==='stale')" class="scope-warning">资料已变化，可重新研读</div>
+              <div v-if="assistantStatus.books.some(b=>b.state==='processing')" class="scope-progress">正在后台研读，可继续提问</div>
+              <el-button size="small" plain :loading="preparing" :disabled="!assistantStatus.books.some(b=>['ready_to_prepare','stale','failed'].includes(b.state))" @click="startPrepare">研读范围资料</el-button>
+              <el-button size="small" plain @click="openMemoryDialog()">我的记忆（{{ memories.length }}）</el-button>
+              <el-button size="small" type="primary" plain @click="archiveDialog=true">项目档案</el-button>
+              <el-button v-if="connections.length" size="small" plain type="success" @click="connectionsDialog=true">可能关联（{{ connections.length }}）</el-button>
+              <el-popover placement="right" :width="300" trigger="click"><template #reference><el-button size="small" link>逐本状态</el-button></template>
+                <div v-for="b in assistantStatus.books" :key="b.book_id" class="scope-book-row"><b>{{ b.title }}</b><span>{{ bookStateLabel(b) }}</span><small v-if="b.coverage?.complete">已处理 {{ b.coverage.processed_chunks }}/{{ b.coverage.total_chunks }} 个文本块</small></div>
+                <div v-if="!assistantStatus.books.length">此范围尚无资料。</div>
+              </el-popover>
+            </template>
+          </div>
           <el-divider />
           <div class="history-title">历史记录</div>
           <div v-for="h in history" :key="h.id" class="history-item" role="button" tabindex="0"
@@ -20,11 +41,12 @@
       </el-col>
 
       <!-- 中：对话 -->
-      <el-col :span="11">
+      <el-col :span="10">
         <el-card shadow="never" class="chat-card">
           <template #header>
             <div class="chat-header">
-              <span>AI 问答（按设置中的模型路由）</span>
+              <span>我的资料助手</span>
+              <el-button link size="small" @click="newConversation">新对话</el-button>
             </div>
           </template>
           <div ref="msgBox" class="msg-box">
@@ -34,15 +56,24 @@
               <div class="msg-content">
                 <div v-if="m.streaming" class="streaming">{{ m.content }}</div>
                 <div v-else v-html="sanitizeHtml(m.content)"></div>
+                <el-button v-if="m.role==='user' && activeScopeType" link size="small" @click="rememberMessage(m)">记到我的记忆</el-button>
                 <p v-if="m.citationAudit" class="citation-audit" :class="{ 'citation-audit-warn': !m.citationAudit.verified }">
                   {{ m.citationAudit.verified ? '引用编号已核对；主张是否得到原文支持仍需核对' : '引用缺失或编号无效；请逐条核对原文' }}
                 </p>
+                <el-popover v-if="m.styleAudit?.issue_count" placement="top" :width="340" trigger="click">
+                  <template #reference><el-button link size="small">文字规范待复核（{{ m.styleAudit.issue_count }}）</el-button></template>
+                  <div class="style-audit-list">
+                    <p v-for="(issue, k) in m.styleAudit.issues" :key="k">第 {{ issue.line }} 行：{{ issue.message }}</p>
+                    <small>自动检查只标出可能的格式问题；事实和引用仍需对照原文。</small>
+                  </div>
+                </el-popover>
                 <div v-if="m.sources?.length" class="sources">
                   <el-tag v-for="(s, j) in m.sources" :key="j" size="small" type="info"
                     :effect="activeSourceIndex === i && activeSourceIdx === j ? 'dark' : 'plain'"
                     class="source-tag" @click="showSource(m, s, j)">
                     {{ (s.book_title ? '《' + s.book_title + '》' : '') + (s.chapter_title ? ' ' + s.chapter_title : '') }} {{ s.page_start && s.page_end && s.page_end !== s.page_start ? '第' + s.page_start + '-' + s.page_end + '页' : '第' + (s.page || s.page_start || '?') + '页' }} 📄
                   </el-tag>
+                  <template v-if="activeScopeType && !m.streaming"><el-button v-for="(s, j) in m.sources" :key="`archive-${j}`" link size="small" @click="prepareArchiveEvidence(m, s)">引用 {{ j + 1 }} 加入档案</el-button></template>
                 </div>
               </div>
             </div>
@@ -88,23 +119,80 @@
         </el-card>
       </el-col>
     </el-row>
+    <el-dialog v-model="memoryDialog" title="我的记忆" width="560px">
+      <p class="dialog-hint">只有你确认保存的内容会进入此范围的 AI 对话。可随时编辑或删除。</p>
+      <el-select v-model="memoryKind" style="width: 130px; margin-right: 8px"><el-option label="我的观点" value="opinion" /><el-option label="长期问题" value="question" /><el-option label="目标" value="goal" /><el-option label="偏好" value="preference" /></el-select>
+      <el-input v-model="memoryContent" type="textarea" :rows="3" maxlength="2000" show-word-limit placeholder="写下希望助手记住的内容" class="memory-input" />
+      <el-button type="primary" :disabled="memoryContent.trim().length < 2" :loading="memorySaving" @click="saveMemory">{{ editingMemoryId ? '保存修改' : '确认记住' }}</el-button>
+      <el-button v-if="editingMemoryId" @click="resetMemoryForm">取消编辑</el-button>
+      <el-divider />
+      <div v-if="!memories.length" class="dialog-hint">此范围还没有个人记忆。</div>
+      <div v-for="m in memories" :key="m.id" class="memory-item"><div><el-tag size="small">{{ memoryKindLabel(m.kind) }}</el-tag> {{ m.content }}</div><div><el-button link @click="editMemory(m)">编辑</el-button><el-button link type="danger" @click="removeMemory(m)">删除</el-button></div></div>
+    </el-dialog>
+    <el-drawer v-model="archiveDialog" title="项目理解档案" size="min(850px, 90vw)" destroy-on-close>
+      <ResearchArchivePanel v-if="activeScopeType" :scope-type="activeScopeType" :scope-id="activeScopeId" :candidate-evidence="archiveCandidate" @open-source="openArchiveSource" />
+    </el-drawer>
+    <el-dialog v-model="connectionsDialog" title="资料与我的问题" width="600px">
+      <p class="dialog-hint">以下是全文研读结果提示的可能关联。请点击原文核对，AI 尚未判断它是否真正支持你的观点。</p>
+      <div v-for="item in connections" :key="`${item.memory_id}:${item.source.chunk_id}`" class="connection-item">
+        <b>{{ item.memory }}</b><small>可能关联：《{{ item.source.book_title }}》{{ item.source.page_start ? `第 ${item.source.page_start} 页` : '' }}</small>
+        <p>{{ item.source.snippet }}</p><el-button link type="primary" @click="openConnectionSource(item)">核对原文 →</el-button>
+      </div>
+    </el-dialog>
+    <el-dialog v-model="projectDialog" :title="editingProjectId ? '编辑项目' : '新建项目'" width="560px">
+      <el-form label-width="88px"><el-form-item label="项目名称"><el-input v-model="projectForm.name" maxlength="120" /></el-form-item>
+        <el-form-item label="当前目标"><el-input v-model="projectForm.goal" type="textarea" :rows="3" maxlength="2000" placeholder="这个项目希望完成什么？" /></el-form-item>
+        <el-form-item label="引用书架"><el-select v-model="projectForm.shelf_ids" multiple filterable collapse-tags placeholder="选择书架，资料会随书架更新" style="width:100%"><el-option v-for="s in shelves" :key="s.id" :label="s.name" :value="s.id" /></el-select></el-form-item>
+        <el-form-item label="单独引用"><el-select v-model="projectForm.book_ids" multiple filterable collapse-tags placeholder="可补充单本资料" style="width:100%"><el-option v-for="b in books" :key="b.id" :label="b.title" :value="b.id" /></el-select></el-form-item>
+      </el-form>
+      <template #footer><el-button v-if="editingProjectId" type="danger" plain @click="removeProject">删除项目</el-button><el-button @click="projectDialog=false">取消</el-button><el-button type="primary" :loading="projectSaving" :disabled="!projectForm.name.trim()" @click="saveProject">保存</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { listBooks, chatStream, chatHistory, getChat, getChunkOriginal, getBook, bookFileUrl } from '../api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { listBooks, listShelves, chatStream, chatHistory, getChat, getChunkOriginal, getBook, bookFileUrl,
+  listAssistantProjects, createAssistantProject, updateAssistantProject, deleteAssistantProject,
+  getAssistantStatus, getAssistantConnections, estimateAssistantPrepare, prepareAssistant,
+  listAssistantMemories, createAssistantMemory, updateAssistantMemory, deleteAssistantMemory } from '../api'
 import PdfReader from '../components/PdfReader.vue'
 import StudyEmptyState from '../components/StudyEmptyState.vue'
+import ResearchArchivePanel from '../components/ResearchArchivePanel.vue'
 import { sanitizeHtml } from '../utils/markdown'
 
 const router = useRouter()
 const route = useRoute()
 const books = ref([])
 const booksLoading = ref(false)
-const bookId = ref(null)
+const shelves = ref([])
+const projects = ref([])
+const scopeValue = ref('all')
+const conversationId = ref('')
+const activeScopeType = computed(() => ['shelf', 'project'].includes(scopeValue.value.split(':')[0]) ? scopeValue.value.split(':')[0] : '')
+const activeScopeId = computed(() => activeScopeType.value ? Number(scopeValue.value.split(':')[1]) : null)
+const bookId = computed(() => scopeValue.value.startsWith('book:') ? Number(scopeValue.value.split(':')[1]) : null)
+const assistantStatus = ref(null)
+const preparing = ref(false)
+const memories = ref([])
+const connections = ref([])
+const connectionsDialog = ref(false)
+let connectionsKey = ''
+const memoryDialog = ref(false)
+const archiveDialog = ref(false)
+const archiveCandidate = ref(null)
+const archiveRouteHandled = ref(false)
+const memoryKind = ref('opinion')
+const memoryContent = ref('')
+const memorySaving = ref(false)
+const editingMemoryId = ref(null)
+const projectDialog = ref(false)
+const editingProjectId = ref(null)
+const projectSaving = ref(false)
+const projectForm = ref({ name: '', goal: '', shelf_ids: [], book_ids: [] })
+let statusPollTimer = null
 const question = ref('')
 const messages = ref([])
 const sending = ref(false)
@@ -135,7 +223,7 @@ const scrollBottom = () => {
   })
 }
 
-const loadSourcePanel = async (bookIdVal, chunkId) => {
+const loadSourcePanel = async (bookIdVal, chunkId, sourceMeta = null) => {
   if (!bookIdVal || !chunkId) return
   sourceLoading.value = true
   try {
@@ -144,8 +232,9 @@ const loadSourcePanel = async (bookIdVal, chunkId) => {
     const chapter = data.chapter_id ? (await fetchChapterTitle(bookIdVal, data.chapter_id)) : ''
     source.value = {
       book_id: bookIdVal,
-      book_title: book?.title || '',
-      chapter_title: chapter,
+      chunk_id: chunkId,
+      book_title: book?.title || sourceMeta?.book_title || '',
+      chapter_title: chapter || sourceMeta?.chapter_title || '',
       page_start: data.page_start || null,
       page_end: data.page_end || null,
       text: data.content || '',
@@ -186,7 +275,7 @@ const showSource = (m, s, idx) => {
   }
   activeSourceIndex.value = messages.value.indexOf(m)
   activeSourceIdx.value = idx
-  loadSourcePanel(bid, s.chunk_id)
+  loadSourcePanel(bid, s.chunk_id, s)
 }
 
 const goFullRead = () => {
@@ -197,6 +286,10 @@ const goFullRead = () => {
 const send = async () => {
   const q = question.value.trim()
   if (!q || sending.value) return
+  if (activeScopeType.value && assistantStatus.value?.total === 0) {
+    ElMessage.warning('当前范围没有资料，请先加入书籍')
+    return
+  }
   messages.value.push({ role: 'user', content: q })
   const aiMsg = ref({ role: 'assistant', content: '', streaming: true, sources: [], bookId: bookId.value })
   messages.value.push(aiMsg.value)
@@ -206,7 +299,9 @@ const send = async () => {
   const controller = new AbortController()
   streamAbort.value = controller
   try {
-    await chatStream({ book_id: bookId.value || null, question: q }, (event, data) => {
+    await chatStream({ book_id: bookId.value || null,
+      scope_type: activeScopeType.value || null, scope_id: activeScopeId.value,
+      conversation_id: conversationId.value, question: q }, (event, data) => {
       if (event === 'token') {
         aiMsg.value.content += data.text
         scrollBottom()
@@ -214,6 +309,7 @@ const send = async () => {
         aiMsg.value.streaming = false
         aiMsg.value.sources = data.sources || []
         aiMsg.value.citationAudit = data.citation_audit || null
+        aiMsg.value.styleAudit = data.style_audit || null
         scrollBottom()
         loadHistory()
         // 自动在右侧展示第一个出处的原文
@@ -221,7 +317,7 @@ const send = async () => {
           const s0 = data.sources[0]
           activeSourceIndex.value = messages.value.length - 1
           activeSourceIdx.value = 0
-          loadSourcePanel(s0.book_id || aiMsg.value.bookId || bookId.value, s0.chunk_id)
+          loadSourcePanel(s0.book_id || aiMsg.value.bookId || bookId.value, s0.chunk_id, s0)
         }
       } else if (event === 'error') {
         aiMsg.value.content = '⚠️ ' + data.message
@@ -249,7 +345,10 @@ const stopStream = () => {
 const loadHistory = async (page = 1, append = false) => {
   historyLoading.value = true
   try {
-    const resp = await chatHistory({ page, page_size: 20 })
+    const params = { page, page_size: 20 }
+    if (activeScopeType.value) { params.scope_type = activeScopeType.value; params.scope_id = activeScopeId.value }
+    else if (bookId.value) params.book_id = bookId.value
+    const resp = await chatHistory(params)
     history.value = append ? [...history.value, ...resp.items] : resp.items
     historyPage.value = page
     historyTotal.value = resp.total
@@ -261,13 +360,15 @@ const loadMoreHistory = () => loadHistory(historyPage.value + 1, true)
 const viewHistory = async (summary) => {
   let h
   try { h = await getChat(summary.id) } catch (error) { ElMessage.error('历史详情加载失败：' + error.message); return }
-  messages.value.push({ role: 'user', content: h.question })
-  const msg = { role: 'assistant', content: h.answer, sources: h.sources || [], citationAudit: h.citation_audit || null, bookId: bookId.value }
+  conversationId.value = h.conversation_id || freshConversationId()
+  saveConversationId()
+  messages.value = [{ role: 'user', content: h.question }]
+  const msg = { role: 'assistant', content: h.answer, sources: h.sources || [], citationAudit: h.citation_audit || null, styleAudit: h.style_audit || null, bookId: bookId.value }
   messages.value.push(msg)
   if (h.sources?.length) {
     activeSourceIndex.value = messages.value.length - 1
     activeSourceIdx.value = 0
-    loadSourcePanel(h.sources[0].book_id || bookId.value, h.sources[0].chunk_id)
+    loadSourcePanel(h.sources[0].book_id || bookId.value, h.sources[0].chunk_id, h.sources[0])
   }
   scrollBottom()
 }
@@ -275,24 +376,242 @@ const viewHistory = async (summary) => {
 const searchBooks = async (query = '') => {
   booksLoading.value = true
   try {
-    const resp = await listBooks({ status: 'ready', q: query.trim() || undefined, page_size: 30 })
+    const resp = await listBooks({ status: 'ready', q: query.trim() || undefined, page_size: 100 })
     const current = books.value.find(book => book.id === bookId.value)
     books.value = current && !resp.items.some(book => book.id === current.id) ? [current, ...resp.items] : resp.items
   } finally { booksLoading.value = false }
 }
 
 const formatTime = (t) => (t || '').replace('T', ' ').slice(5, 16)
+const freshConversationId = () => crypto.randomUUID().replaceAll('-', '')
+const savedConversationMap = () => {
+  try { return JSON.parse(localStorage.getItem('assistantConversationIds') || '{}') || {} } catch { return {} }
+}
+
+const prepareArchiveEvidence = async (message, citation) => {
+  const bid = citation.book_id || message.bookId || bookId.value
+  if (!bid || !citation.chunk_id) { ElMessage.warning('这条引用没有可核对的原文定位'); return }
+  try {
+    const original = await getChunkOriginal(bid, citation.chunk_id)
+    const suggested = (citation.quote || citation.snippet || '').trim()
+    archiveCandidate.value = { book_id: bid, chunk_id: citation.chunk_id,
+      quote: suggested && original.content?.includes(suggested) ? suggested : (original.content || '').slice(0, 180).trim() }
+    archiveDialog.value = true
+  } catch (e) { ElMessage.error(e.message) }
+}
+const openArchiveRoute = async () => {
+  const bid = Number(route.query.archiveBookId)
+  const chunkId = Number(route.query.archiveChunkId)
+  if (!bid || !chunkId || !activeScopeType.value || archiveRouteHandled.value) return
+  try {
+    const status = await getAssistantStatus(activeScopeType.value, activeScopeId.value)
+    if (!status.books?.some(book => book.book_id === bid)) {
+      ElMessage.warning('请选择包含该文献的书架或项目，再加入档案')
+      return
+    }
+    const original = await getChunkOriginal(bid, chunkId)
+    const suggested = String(route.query.archiveQuote || '').trim()
+    archiveCandidate.value = { book_id: bid, chunk_id: chunkId,
+      quote: suggested && original.content?.includes(suggested) ? suggested : (original.content || '').slice(0, 180).trim(),
+      statement: String(route.query.archiveStatement || '') }
+    archiveDialog.value = true
+    archiveRouteHandled.value = true
+  } catch (e) { ElMessage.error(e.message) }
+}
+const openArchiveSource = evidence => {
+  archiveDialog.value = false
+  loadSourcePanel(evidence.book_id, evidence.chunk_id, { book_title: evidence.book_title })
+  if (evidence.page_start) router.push('/reader/' + evidence.book_id + '?page=' + evidence.page_start)
+}
+const saveConversationId = () => {
+  const map = savedConversationMap()
+  map[scopeValue.value] = conversationId.value
+  localStorage.setItem('assistantConversationIds', JSON.stringify(map))
+}
+const restoreConversationId = () => {
+  conversationId.value = savedConversationMap()[scopeValue.value] || freshConversationId()
+  saveConversationId()
+}
+const newConversation = () => {
+  conversationId.value = freshConversationId()
+  saveConversationId()
+  messages.value = []
+  source.value = {}
+}
+
+const loadAssistantScope = async () => {
+  if (!activeScopeType.value) { assistantStatus.value = null; memories.value = []; connections.value = []; connectionsKey = ''; return }
+  const type = activeScopeType.value
+  const id = activeScopeId.value
+  try {
+    const [status, ownMemory] = await Promise.all([getAssistantStatus(type, id), listAssistantMemories(type, id)])
+    if (activeScopeType.value === type && activeScopeId.value === id) {
+      assistantStatus.value = status
+      memories.value = ownMemory
+      const key = JSON.stringify([type, id, status.books.filter(b => b.state === 'prepared').map(b => b.artifact_id), ownMemory.map(m => [m.id, m.updated_at]), type === 'project' ? Math.floor(Date.now() / 60000) : 0])
+      if (key !== connectionsKey) {
+        const found = status.prepared ? await getAssistantConnections(type, id) : []
+        if (activeScopeType.value === type && activeScopeId.value === id) {
+          connections.value = found
+          connectionsKey = key
+        }
+      }
+    }
+  } catch (e) { ElMessage.error('助手范围加载失败：' + e.message) }
+}
+
+const startPrepare = async () => {
+  if (!activeScopeType.value || preparing.value) return
+  preparing.value = true
+  try {
+    const estimate = await estimateAssistantPrepare(activeScopeType.value, activeScopeId.value)
+    const eligible = estimate.books.filter(item => item.window_count && item.within_budget).slice(0, estimate.batch_limit)
+    if (!eligible.length) { ElMessage.warning('没有可研读的资料；请检查解析状态与 AI 任务预算'); return }
+    const calls = eligible.reduce((sum, item) => sum + item.estimated_calls, 0)
+    const tokens = eligible.reduce((sum, item) => sum + item.estimated_tokens, 0)
+    const cost = eligible.some(item => item.estimated_cost_cny !== null)
+      ? `按设置中的费率粗估约 ¥${eligible.reduce((sum, item) => sum + (item.estimated_cost_cny || 0), 0).toFixed(2)}。`
+      : '未填写该模型费率，无法估算金额。'
+    await ElMessageBox.confirm(`本批逐本研读 ${eligible.length} 本资料；模型：${estimate.provider || '未指定'} / ${estimate.model || '未指定'}；预计约 ${calls} 次调用、${tokens.toLocaleString()} Token。${cost}实际以供应商账单为准，每本书仍受任务预算限制。确认开始？`, '全文研读预算', { type: 'warning' })
+    const result = await prepareAssistant(activeScopeType.value, activeScopeId.value, eligible.map(item => item.book_id))
+    ElMessage.success(`已提交 ${result.jobs.length} 本资料的后台研读任务`)
+    await loadAssistantScope()
+  } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message) }
+  finally { preparing.value = false }
+}
+
+const memoryKindLabel = kind => ({ opinion: '我的观点', question: '长期问题', goal: '目标', preference: '偏好' }[kind] || kind)
+const openConnectionSource = item => {
+  connectionsDialog.value = false
+  loadSourcePanel(item.source.book_id, item.source.chunk_id, item.source)
+}
+const bookStateLabel = book => ({ prepared: '已研读', processing: `研读中 ${Math.round((book.task_progress || 0) * 100)}%`,
+  stale: '原文有更新', ready_to_prepare: '待研读', needs_source: '等待解析', no_text: '缺少可读正文', failed: '研读失败' }[book.state] || book.state)
+const resetMemoryForm = () => { editingMemoryId.value = null; memoryKind.value = 'opinion'; memoryContent.value = '' }
+const openMemoryDialog = () => { resetMemoryForm(); memoryDialog.value = true }
+const rememberMessage = message => {
+  resetMemoryForm()
+  memoryKind.value = /[?？]$/.test(message.content.trim()) ? 'question' : 'opinion'
+  memoryContent.value = message.content.slice(0, 2000)
+  memoryDialog.value = true
+}
+const editMemory = memory => { editingMemoryId.value = memory.id; memoryKind.value = memory.kind; memoryContent.value = memory.content }
+const saveMemory = async () => {
+  if (!activeScopeType.value || memoryContent.value.trim().length < 2) return
+  memorySaving.value = true
+  try {
+    const data = { kind: memoryKind.value, content: memoryContent.value.trim() }
+    if (editingMemoryId.value) await updateAssistantMemory(editingMemoryId.value, data)
+    else await createAssistantMemory({ ...data, scope_type: activeScopeType.value, scope_id: activeScopeId.value })
+    memories.value = await listAssistantMemories(activeScopeType.value, activeScopeId.value)
+    connectionsKey = ''
+    loadAssistantScope()
+    resetMemoryForm()
+    ElMessage.success('个人记忆已保存')
+  } catch (e) { ElMessage.error(e.message) } finally { memorySaving.value = false }
+}
+const removeMemory = async memory => {
+  try {
+    await ElMessageBox.confirm('删除这条个人记忆？', '删除记忆')
+    await deleteAssistantMemory(memory.id)
+    memories.value = await listAssistantMemories(activeScopeType.value, activeScopeId.value)
+    connectionsKey = ''
+    loadAssistantScope()
+    if (editingMemoryId.value === memory.id) resetMemoryForm()
+  } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message) }
+}
+
+const openProjectDialog = (edit = false) => {
+  const project = edit ? projects.value.find(item => item.id === activeScopeId.value) : null
+  editingProjectId.value = project?.id || null
+  projectForm.value = project ? { name: project.name, goal: project.goal,
+    shelf_ids: [...project.shelf_ids], book_ids: [...project.book_ids] }
+    : { name: '', goal: '', shelf_ids: activeScopeType.value === 'shelf' ? [activeScopeId.value] : [], book_ids: [] }
+  projectDialog.value = true
+}
+const saveProject = async () => {
+  if (!projectForm.value.name.trim()) return
+  projectSaving.value = true
+  try {
+    const data = { ...projectForm.value, name: projectForm.value.name.trim() }
+    const project = editingProjectId.value
+      ? await updateAssistantProject(editingProjectId.value, data)
+      : await createAssistantProject(data)
+    projects.value = await listAssistantProjects()
+    projectDialog.value = false
+    scopeValue.value = `project:${project.id}`
+  } catch (e) { ElMessage.error(e.message) } finally { projectSaving.value = false }
+}
+const removeProject = async () => {
+  try {
+    await ElMessageBox.confirm('删除项目及其专属记忆？资料和书架仍会保留。', '删除项目', { type: 'warning' })
+    await deleteAssistantProject(editingProjectId.value)
+    projects.value = await listAssistantProjects()
+    projectDialog.value = false
+    scopeValue.value = 'all'
+  } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message) }
+}
+
+watch(scopeValue, () => {
+  archiveDialog.value = false
+  archiveCandidate.value = null
+  localStorage.setItem('assistantScope', scopeValue.value)
+  restoreConversationId()
+  messages.value = []
+  source.value = {}
+  history.value = []
+  connections.value = []
+  connectionsKey = ''
+  loadHistory()
+  loadAssistantScope()
+  openArchiveRoute()
+  if (route.query.archive === '1' && activeScopeType.value) archiveDialog.value = true
+})
 
 onMounted(async () => {
   try {
-      await searchBooks('')
+      await Promise.all([searchBooks(''), listShelves().then(rows => { shelves.value = rows }),
+        listAssistantProjects().then(rows => { projects.value = rows })])
       const requestedBook = Number(route.query.bookId)
-      if (requestedBook && books.value.some((book) => book.id === requestedBook)) bookId.value = requestedBook
+      const requestedShelf = Number(route.query.shelfId)
+      const requestedProject = Number(route.query.projectId)
+      if (requestedShelf && shelves.value.some(s => s.id === requestedShelf)) scopeValue.value = `shelf:${requestedShelf}`
+      else if (requestedProject && projects.value.some(p => p.id === requestedProject)) scopeValue.value = `project:${requestedProject}`
+      else if (requestedBook && books.value.some(b => b.id === requestedBook)) scopeValue.value = `book:${requestedBook}`
+      else {
+        const saved = localStorage.getItem('assistantScope')
+        if (saved && (saved === 'all' || shelves.value.some(s => saved === `shelf:${s.id}`)
+          || projects.value.some(p => saved === `project:${p.id}`)
+          || books.value.some(b => saved === `book:${b.id}`))) scopeValue.value = saved
+      }
   } catch { /* ignore */ }
+  if (!conversationId.value) restoreConversationId()
   loadHistory()
+  loadAssistantScope()
+  openArchiveRoute()
+  if (route.query.archive === '1' && activeScopeType.value) archiveDialog.value = true
+  if (route.query.archiveChunkId && !activeScopeType.value) ElMessage.info('请选择书架或项目后加入档案')
+  statusPollTimer = setInterval(() => { if (activeScopeType.value) loadAssistantScope() }, 15000)
 })
 
-onBeforeUnmount(() => { streamAbort.value?.abort() })
+watch(() => [route.query.archiveBookId, route.query.archiveChunkId], () => {
+  archiveRouteHandled.value = false
+  openArchiveRoute()
+})
+
+watch(() => [route.query.shelfId, route.query.projectId, route.query.bookId], async ([shelfId, projectId, requestedBook]) => {
+  if (Number(shelfId) && shelves.value.some(s => s.id === Number(shelfId))) scopeValue.value = `shelf:${Number(shelfId)}`
+  else if (Number(projectId) && projects.value.some(p => p.id === Number(projectId))) scopeValue.value = `project:${Number(projectId)}`
+  else if (Number(requestedBook)) {
+    const id = Number(requestedBook)
+    if (!books.value.some(b => b.id === id)) {
+      try { books.value.unshift(await getBook(id)) } catch { return }
+    }
+    scopeValue.value = `book:${id}`
+  }
+})
+
+onBeforeUnmount(() => { streamAbort.value?.abort(); clearInterval(statusPollTimer) })
 </script>
 
 <style scoped>
@@ -321,6 +640,9 @@ onBeforeUnmount(() => { streamAbort.value?.abort() })
 .citation-audit { margin-top: 8px; color: var(--study-text-secondary); font-size: 12px; line-height: 1.5; }
 .citation-audit-warn { color: var(--el-color-warning-dark-2); }
 .source-tag { cursor: pointer; }
+.style-audit-list { max-height: 260px; overflow: auto; line-height: 1.5; }
+.style-audit-list p { margin: 0 0 8px; }
+.style-audit-list small { color: var(--el-text-color-secondary); }
 .input-row { display: flex; align-items: flex-end; margin-top: 12px; }
 .history-title { font-weight: 600; margin-bottom: 8px; color: var(--el-text-color-primary); }
 .history-item { padding: 8px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; }
@@ -338,6 +660,11 @@ onBeforeUnmount(() => { streamAbort.value?.abort() })
 }
 .pdf-box { height: 480px; border-radius: 8px; overflow: hidden; border: 1px solid var(--el-border-color-extra-light); }
 .side-card,.chat-card,.source-card{border-radius:var(--study-radius-md)}
+.scope-actions{display:flex;gap:8px;margin-top:5px}.assistant-scope-status{display:flex;flex-direction:column;gap:8px;margin-top:12px;padding:10px;border-radius:8px;background:var(--el-fill-color-light)}
+.assistant-scope-status small,.dialog-hint{color:var(--el-text-color-secondary);line-height:1.5}.scope-warning{font-size:12px;color:var(--el-color-warning-dark-2)}.scope-progress{font-size:12px;color:var(--el-color-primary)}
+.memory-input{margin:10px 0}.memory-item{padding:10px 0;border-bottom:1px solid var(--el-border-color-lighter);line-height:1.6;overflow-wrap:anywhere}.memory-item>div:last-child{text-align:right}
+.scope-book-row{display:flex;flex-direction:column;padding:7px 0;border-bottom:1px solid var(--el-border-color-lighter)}.scope-book-row b{font-size:12px}.scope-book-row span,.scope-book-row small{color:var(--el-text-color-secondary);font-size:11px}
+.connection-item{padding:12px 0;border-bottom:1px solid var(--el-border-color-lighter)}.connection-item b,.connection-item small{display:block}.connection-item small{color:var(--el-text-color-secondary);margin-top:4px}.connection-item p{max-height:85px;overflow:auto;font-size:13px;line-height:1.6}
 @media(max-width:1200px){.chat-page{height:auto}.chat-row{display:grid;grid-template-columns:230px minmax(0,1fr);gap:10px}.chat-row:before,.chat-row:after{display:none}.chat-row>.el-col{width:auto;max-width:none;height:620px;padding:0!important}.chat-row>.el-col:last-child{grid-column:1/-1;height:520px}}
 @media(max-width:760px){.chat-row{grid-template-columns:1fr}.chat-row>.el-col,.chat-row>.el-col:last-child{grid-column:auto;height:auto;min-height:460px}.chat-row>.el-col:first-child{min-height:240px}.msg-content{max-width:84%}}
 </style>

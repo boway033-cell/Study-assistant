@@ -1,0 +1,44 @@
+/* Shared cursor-lit frame for standalone cards. Coordinates stay in the DOM. */
+.el-card:not(.glow-border-card),
+.agent-card,.chat-card,.kt-card,.mobile-paper-card,.preview-card,.selection-card,.settings-card,.setup-card,.side-card,.source-card,.task-card {
+  --mouse-x: 50%;
+  --mouse-y: 0px;
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  border: 1px solid #e4e4e7 !important;
+  border-radius: 12px;
+  background: #fff;
+}
+.el-card:not(.glow-border-card)::before,
+.agent-card::before,.chat-card::before,.kt-card::before,.mobile-paper-card::before,.preview-card::before,.selection-card::before,.settings-card::before,.setup-card::before,.side-card::before,.source-card::before,.task-card::before {
+  position: absolute;
+  inset: -1px;
+  z-index: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: radial-gradient(240px circle at var(--mouse-x) var(--mouse-y),rgba(161,161,170,.55),transparent 70%),#e4e4e7;
+  -webkit-mask: linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  content: '';
+}
+.el-card:not(.glow-border-card)::after,
+.agent-card::after,.chat-card::after,.kt-card::after,.mobile-paper-card::after,.preview-card::after,.selection-card::after,.settings-card::after,.setup-card::after,.side-card::after,.source-card::after,.task-card::after {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: radial-gradient(280px circle at var(--mouse-x) var(--mouse-y),rgba(161,161,170,.14),transparent 65%);
+  pointer-events: none;
+  content: '';
+}
+.el-card:not(.glow-border-card)>*,
+.agent-card>*,.chat-card>*,.kt-card>*,.mobile-paper-card>*,.preview-card>*,.selection-card>*,.settings-card>*,.setup-card>*,.side-card>*,.source-card>*,.task-card>* {position:relative;z-index:1}
+.layout.no-card-glow .el-card:not(.glow-border-card)::before,
+.layout.no-card-glow .el-card:not(.glow-border-card)::after,
+.layout.no-card-glow .agent-card::before,.layout.no-card-glow .agent-card::after,
+.layout.no-card-glow .chat-card::before,.layout.no-card-glow .chat-card::after,
+.layout.no-card-glow .kt-card::before,.layout.no-card-glow .kt-card::after {display:none}

@@ -4,7 +4,7 @@ import re
 from types import SimpleNamespace
 
 import numpy as np
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import Base
@@ -33,6 +33,157 @@ def test_contents_continuation_and_repeated_part_titles():
              '第一章 起源\n第二部中的同名章节正文。']
     result = extract_toc_heuristic(pages)
     assert [r['page'] for r in result] == [3, 4, 5]
+
+
+def test_multi_page_printed_contents_are_aggregated_without_merging_body_subheads():
+    from backend.app.services.rag.toc_heuristic import contents_page_numbers, extract_contents_entries
+
+    pages = ['封面',
+             '目录\n第一章 起源 .... 1\n第一节 问题提出 .... 10',
+             '第二章\n制度演变的起点\n20\n第二节 资料来源\n30\n第三章\n比较分析的方法\n40',
+             '作者说明\n这是正文叙述，包含很多文字，不是目录。',
+             '第一章 起源\n正文讨论起源。', '正文。',
+             '第一节 问题提出\n正文讨论问题。', '正文。',
+             '第二章 制度演变\n段落小标题\n正文说明制度。', '正文。',
+             '第二节 资料来源\n正文说明材料。', '正文。',
+             '第三章 比较分析\n正文讨论比较。']
+    detected = contents_page_numbers(pages)
+    assert detected == {2, 3}
+    printed = extract_contents_entries(pages, detected)
+    assert [row['title'] for row in printed] == [
+        '第一章 起源', '第一节 问题提出', '第二章 制度演变的起点',
+        '第二节 资料来源', '第三章 比较分析的方法',
+    ]
+    # The two wrapped titles have no identical body heading in this fixture;
+    # they must not be assigned the printed page or merged with nearby prose.
+    result = select_import_toc('pdf', [], pages)
+    assert all(row['page'] not in detected for row in result)
+    assert '段落小标题' not in [row['title'] for row in result]
+
+
+def test_printed_contents_maps_all_pages_to_body_anchors_and_restores_levels():
+    from backend.app.services.rag.toc_heuristic import contents_page_numbers, extract_contents_entries
+
+    pages = ['封面', '目录\n第一章 起源 1\n第一节 问题提出 10',
+             '第二章 制度演变\n20\n第二节 资料来源\n30\n第三章 比较分析\n40',
+             '序言文字。', '第一章 起源\n正文。', '正文。',
+             '第一节 问题提出\n正文。', '正文。',
+             '第二章 制度演变\n一、正文中未列入目录的段落小标题\n正文。', '正文。',
+             '第二节 资料来源\n正文。', '正文。',
+             '第三章 比较分析\n正文。']
+    assert contents_page_numbers(pages) == {2, 3}
+    assert len(extract_contents_entries(pages)) == 5
+    result = select_import_toc('pdf', [], pages)
+    assert [(row['title'], row['level'], row['page']) for row in result] == [
+        ('第一章 起源', 1, 5), ('第一节 问题提出', 2, 7),
+        ('第二章 制度演变', 1, 9), ('第二节 资料来源', 2, 11),
+        ('第三章 比较分析', 1, 13),
+    ]
+
+
+def test_long_book_uses_physical_native_spine_instead_of_repeated_running_headers():
+    pages = ['普通正文。'] * 80
+    pages[1] = '目录\n第一章 理论基础 .... 1\n第二章 制度设计 .... 30'
+    pages[2] = '第三章 比较研究\n58\n第四章 结论\n70\n附录\n78'
+    for page in range(10, 39):
+        pages[page - 1] = '第一章 理论基础\n这里是正文段落。'
+    native = [
+        {'title': '目录', 'level': 1, 'page': 2},
+        {'title': '第一章 理论基础', 'level': 2, 'page': 10},
+        {'title': '第二章 制度设计', 'level': 2, 'page': 40},
+        {'title': '第三章 比较研究', 'level': 2, 'page': 60},
+        {'title': '第四章 结论', 'level': 2, 'page': 72},
+    ]
+    result = select_import_toc('pdf', native, pages)
+    assert [(row['title'], row['level'], row['page']) for row in result] == [
+        ('第一章 理论基础', 1, 10), ('第二章 制度设计', 1, 40),
+        ('第三章 比较研究', 1, 60), ('第四章 结论', 1, 72),
+    ]
+
+
+def test_native_bookmarks_shift_back_only_with_repeated_exact_title_leaf_evidence():
+    pages = ['普通正文。'] * 80
+    native = []
+    for number, page, title in [(1, 10, '理论基础'), (2, 28, '制度设计'),
+                                (3, 47, '比较研究'), (4, 68, '研究结论')]:
+        pages[page - 1] = f'第{number}章\n{title}\n正文。'
+        native.append({'title': f'第{number}章 {title}', 'level': 1, 'page': page + 1})
+    result = select_import_toc('pdf', native, pages)
+    assert [(row['title'], row['page']) for row in result] == [
+        (item['title'], page) for item, page in zip(native, [10, 28, 47, 68])
+    ]
+
+
+def test_number_heavy_body_table_is_not_a_contents_continuation():
+    from backend.app.services.rag.toc_heuristic import contents_page_numbers
+
+    table = '财政收入排名\n' + '\n'.join(str(index % 20) for index in range(80))
+    pages = ['目录\n第一章 理论 .... 1\n第二章 实证 .... 20',
+             '第三章 讨论\n40\n第四章 结论\n50\n参考文献\n60',
+             '第一章 理论\n正文阐述研究问题。', table, table]
+    assert contents_page_numbers(pages) == {1, 2}
+
+
+def test_dotted_toc_pages_continue_without_undotted_heading_and_later_tables_stay_body():
+    from backend.app.services.rag.toc_heuristic import contents_page_numbers
+
+    pages = [
+        '目录\n第一章 导论 ........ 1\n第一节 对象 ........ 2',
+        '第二章 方法 ........ 20\n第二节 样本 ........ 21\n第三章 结论 ........ 40\n第四章 展望 ........ 50',
+        '正文内容。',
+        '\n'.join(['排名 6 1 5 10 3 12 4 9 14 7 11 13 8 2'] * 15
+                  + ['2.9 13.5 22.7 27.1'] * 5 + [str(x) for x in range(25)]),
+    ]
+    assert contents_page_numbers(pages) == {1, 2}
+
+
+def test_two_column_printed_toc_is_ordered_by_printed_pages():
+    from backend.app.services.rag.toc_heuristic import extract_contents_entries
+
+    pages = ['目录\n第 1 1 章 预算 .... 30\n11.1 支出 .... 31\n'
+             '第10章 人事 .... 20\n10.1 招录 .... 21\n第12章 绩效 .... 40',
+             '正文。', '第10章 人事\n正文。', '10.1 招录\n正文。', '正文。',
+             '第11章 预算\n正文。', '11.1 支出\n正文。', '正文。',
+             '第12章 绩效\n正文。']
+    assert [entry['title'] for entry in extract_contents_entries(pages)] == [
+        '第10章 人事', '10.1 招录', '第11章 预算', '11.1 支出', '第12章 绩效',
+    ]
+    assert [(row['title'], row['level'], row['page']) for row in select_import_toc('pdf', [], pages)] == [
+        ('第10章 人事', 1, 3), ('10.1 招录', 2, 4),
+        ('第11章 预算', 1, 6), ('11.1 支出', 2, 7), ('第12章 绩效', 1, 9),
+    ]
+
+
+def test_legacy_pdf_can_rebuild_toc_without_structured_cache(tmp_path, monkeypatch):
+    import fitz
+    from backend.app.core.config import settings
+    from backend.app.services.rag import fts
+    from backend.app.services.rag.toc_rebuild import rebuild_book_toc
+
+    pdf = fitz.open()
+    for heading in ('Introduction', 'Methods', 'Results'):
+        pdf.new_page().insert_text((72, 72), heading)
+    pdf.save(tmp_path / 'legacy.pdf')
+    pdf.close()
+    monkeypatch.setattr(settings, 'uploads_dir', tmp_path)
+    monkeypatch.setattr(settings, 'structured_dir', tmp_path)
+    monkeypatch.setattr(fts, 'delete_book_index', lambda *_args: None)
+    monkeypatch.setattr(fts, 'index_chunk', lambda *_args: None)
+    engine = create_engine('sqlite://')
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        book = Book(title='Legacy', file_path='legacy.pdf', file_type='pdf', total_pages=3)
+        db.add(book)
+        db.commit()
+        result = rebuild_book_toc(db, book, allow_ocr=False)
+        assert result['status'] == 'rebuilt'
+        assert result['chapters'] == 3
+        saved = db.scalars(select(Chapter).where(Chapter.book_id == book.id)
+                           .order_by(Chapter.order_index)).all()
+        assert [(row.title, row.start_page) for row in saved] == [
+            ('Introduction', 1), ('Methods', 2), ('Results', 3),
+        ]
+    engine.dispose()
 
 
 def test_rapid_new_numpy_result_preserves_text_boxes():
@@ -144,6 +295,23 @@ def test_interrupted_prose_keeps_partial_draft_without_replaying():
         asyncio.run(_stream_answer(Provider(), [], '写作失败', on_text=saved.append))
     assert calls == [1]
     assert saved[-1] == '已经写出的文章'
+
+
+def test_certificate_failure_is_not_retried_as_a_slow_generation():
+    from backend.app.api.study import _stream_answer
+    import pytest
+
+    calls = []
+
+    class Provider:
+        async def stream_chat(self, messages):
+            calls.append(1)
+            raise RuntimeError('SSL: CERTIFICATE_VERIFY_FAILED: EE certificate key too weak')
+            yield ''
+
+    with pytest.raises(RuntimeError, match='CERTIFICATE_VERIFY_FAILED'):
+        asyncio.run(_stream_answer(Provider(), [], '生成失败'))
+    assert calls == [1]
 
 
 def test_first_token_watchdog_fits_inside_outer_timeout():

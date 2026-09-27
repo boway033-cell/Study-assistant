@@ -14,7 +14,7 @@ import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import KnowledgeScopeSelector from '../components/KnowledgeScopeSelector.vue'
 const route=useRoute();const router=useRouter()
-const options=[{value:'understand',index:'01',label:'理解与发现',description:'重建论证、比较概念'},{value:'chat',index:'02',label:'问资料',description:'带来源的追问'},{value:'notes',index:'03',label:'笔记与证据',description:'捕获、核验与整理'},{value:'study',index:'04',label:'研究报告',description:'跨文献综合与审计'}]
+const options=[{value:'understand',index:'01',label:'理解与发现',description:'重建论证、比较概念'},{value:'chat',index:'02',label:'我的助手',description:'书架、项目与个人记忆'},{value:'notes',index:'03',label:'笔记与证据',description:'捕获、核验与整理'},{value:'study',index:'04',label:'研究报告',description:'跨文献综合与审计'}]
 const components={understand:defineAsyncComponent(()=>import('./SensemakingView.vue')),chat:defineAsyncComponent(()=>import('./ChatView.vue')),notes:defineAsyncComponent(()=>import('./NotesView.vue')),study:defineAsyncComponent(()=>import('./StudyView.vue')),tree:defineAsyncComponent(()=>import('./KnowledgeView.vue')),graph:defineAsyncComponent(()=>import('./GraphView.vue'))}
 const normalized=value=>components[value]?value:'understand'
 const activeView=ref(normalized(route.query.view))

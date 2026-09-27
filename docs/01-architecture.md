@@ -187,7 +187,7 @@ class GoogleGenerateProvider(LLMProvider): ...
 ## 6. 任务与并发
 
 - 后台任务用**独立后台线程 + 独立事件循环**（`worker/tasks.py`）：`run_coroutine_threadsafe` 提交 + `asyncio.wrap_future` 等待（sync 端点线程池陷阱的修复）
-- 长任务（解析、批量生成）串行执行（FIFO 队列），避免并发耗尽内存
+- 解析任务保持单 worker；交互 AI 和后台 AI 各有独立事件循环与 2 个 worker。可通过 `AI_INTERACTIVE_WORKERS`、`AI_BACKGROUND_WORKERS` 调到 1～4；同一模型连接默认最多同时发出 2 个请求，可通过 `AI_PROVIDER_PARALLEL_LIMIT` 调到 1～4。不同任务使用独立数据库会话、预算和进度落库计时，SQLite WAL 与写入等待保护短事务。
 
 ## 7. 部署与启动
 

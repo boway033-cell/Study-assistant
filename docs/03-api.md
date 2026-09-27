@@ -138,7 +138,7 @@ body: {
 
 ```
 event: meta
-data: {"mode": "deepseek", "model": "deepseek-v4-flash", "book_ids": [1]}
+data: {"mode": "deepseek", "model": "deepseek-flash", "book_ids": [1]}
 
 event: token
 data: {"text": "拉格朗日中值定理的几何意义是……"}
@@ -163,7 +163,7 @@ DELETE /api/chat/{chat_id}
 
 ```json
 {"total": 30, "items": [
-  {"id": 88, "question": "…", "answer": "…", "model": "deepseek-v4-flash",
+  {"id": 88, "question": "…", "answer": "…", "model": "deepseek-flash",
    "sources": [{"chunk_id": 320, "page": 128, "snippet": "…"}], "created_at": "…"}
 ]}
 ```
@@ -244,7 +244,7 @@ body: {"chapter_ids": [10]}     // 可选；缺省 = 全部章节；每章生成
 
 响应：`{"task_id": "t-quiz-1", "estimated": 50}`，用 `GET /api/tasks/{id}` 轮询进度，完成后 result.generated = 题目数。
 
-> 批量生成固定使用 flash 模型（速度快、省 token）。
+> 题目生成使用通用模型路由，可在设置中选择 `deepseek-flash` 或其他连接。
 
 ### 4.2 题目列表 / 4.3 提交答案 / 4.4 简答自评 / 4.5 错题本 / 4.6 管理
 
@@ -311,7 +311,8 @@ GET /api/settings
 ```json
 {
   "deepseek_api_key": "sk-***（脱敏显示）",
-  "deepseek_model": "flash",       // flash / pro
+  "deepseek_model": "deepseek-flash",
+  "deepseek_base_url": "https://api.deepseek.com",
   "rag_top_k": "5",
   "vector_search": false,
   "deepseek_configured": true
@@ -320,10 +321,10 @@ GET /api/settings
 
 ```
 PUT /api/settings
-body: {"deepseek_api_key": "sk-xxx", "deepseek_model": "pro", "vector_search": false}
+body: {"deepseek_api_key": "sk-xxx", "deepseek_model": "deepseek-flash", "deepseek_base_url": "https://api.deepseek.com", "vector_search": false}
 ```
 
-> `deepseek_api_key` 留空 = 保留已存 Key；`deepseek_model` 只能是 flash / pro。
+> 不传 `deepseek_api_key` = 保留已存 Key。旧值 `flash`/`pro` 仍可读取，分别映射为 `deepseek-flash`/`deepseek-v4-pro`；新设置直接保存模型 ID。Base URL 可改为 HTTPS 兼容接口，只有本机 loopback 可使用 HTTP。保存后用连接检测执行一次最小真实生成。
 > `vector_search`：默认 `false`（FTS5 关键词检索，零额外内存）；置 `true` 时启用 fastembed + ChromaDB（需下载嵌入模型）。
 
 ### 6.1 连接探测
@@ -333,7 +334,7 @@ GET /api/settings/probe
 ```
 
 ```json
-{"deepseek": {"ok": true, "reason": "已连接（模型: deepseek-v4-flash）"}}
+{"deepseek": {"ok": true, "reason": "已连接（DeepSeek · deepseek-flash）"}}
 ```
 
 ### 6.2 模型连接与功能路由
@@ -348,7 +349,7 @@ POST   /api/settings/providers/models/discover
 PUT    /api/settings/providers/routing
 ```
 
-`POST` 支持供应商预设标识、模型名、Base URL 与 `openai_chat`、`anthropic_messages`、`google_generate` 三种协议。远程接口必须使用 HTTPS；loopback 本机接口可使用 HTTP。
+`POST` 支持供应商预设标识、模型名、Base URL 与 `openai_chat`、`anthropic_messages`、`google_generate` 三种协议。可另建多个 DeepSeek 连接并分配给不同功能。内置 `deepseek` 的地址和模型通过 `PUT /api/settings` 编辑，保留其原有 ID、路由与密钥。远程接口必须使用 HTTPS；loopback 本机接口可使用 HTTP。
 
 `POST /api/settings/providers/models/discover` 可在保存连接前读取模型列表。请求包含 `base_url`、`protocol` 和可选的 `api_key`；编辑已有连接时可传 `provider_id` 并省略 Key，以复用本机加密保存的密钥。返回 `{"items":["model-a","model-b"],"endpoint":"https://gateway.example/v1/models"}`。接口支持常见模型列表格式与 API 根路径回退，失败时返回 502；不支持列表查询的网关仍可手动输入模型名。
 
@@ -408,8 +409,11 @@ GET    /api/books/{book_id}/pdf-text-layer/{page}?generate=true  # 扫描页 OCR
 ```
 POST /api/ai/explain     body: {"text":"选中内容","action":"explain|translate","book_title":"…","chapter_title":"…"}
 POST /api/ai/summarize   body: {"book_id":3,"chapter_id":4}        # 章节总结（本地文本 → 通用生成路由）
-POST /api/ai/vision      body: {"book_id":3,"page":4,"image":"data:image/jpeg;base64,…","prompt":null}  # Qwen-VL
+POST /api/ai/page-image  body: {"book_id":3,"page":4,"image":"data:image/jpeg;base64,…","prompt":null}  # 通用生成路由，所选模型需支持图像
+POST /api/ai/batch       body: {"task":"research","items":[{"id":"a","prompt":"问题一"},{"id":"b","prompt":"问题二"}],"provider_ids":["deepseek","glm-research"],"max_concurrency":3,"reasoning_effort":"low"}
 ```
+
+`/batch` 将任务与模型组合后并行执行，结果按输入顺序返回：`{"results":[{"id":"a","provider_id":"deepseek","model":"deepseek-flash","ok":true,"result":"…","style_audit":{…}}],"successes":1,"failures":0}`。单次最多 12 个模型调用、同时运行最多 4 个；同一模型连接默认全局最多 2 个，可用 `AI_PROVIDER_PARALLEL_LIMIT` 调整。单项失败保留其他结果。省略 `provider_ids` 时使用该功能已配置的模型路由及其降级链；显式指定时只调用所选连接。`reasoning_effort` 可选 `none`、`low`、`medium`、`high`、`max`；DeepSeek 官方接口的 `none` 关闭思考，便于短任务降低延迟。调用仍受本机默认 Token/次数预算约束，单项最长 180 秒。
 
 ## 9. 深度分析 /api（标题目录+精读+Markdown）
 

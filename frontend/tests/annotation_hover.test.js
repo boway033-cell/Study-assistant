@@ -113,9 +113,11 @@ test('a long AI note is preserved verbatim while the card caps its own size', ()
   assert.equal(HOVER_CARD_MAX_WIDTH, 320)
   // 组件侧：尺寸由正文可用区域决定，长内容仍在卡片内部滚动。
   assert.match(reader, /width: Math\.min\(HOVER_CARD_MAX_WIDTH, availableWidth\)/)
-  assert.match(reader, /maxHeight: Math\.min\(HOVER_CARD_MAX_HEIGHT, availableHeight\)/)
+  assert.match(reader, /maxHeight: Math\.min\(hoverPinned\.value \? 460 : HOVER_CARD_MAX_HEIGHT, availableHeight\)/)
   assert.match(reader, /\.pr-hover-card \{[\s\S]*?max-height: 220px; overflow: auto;/)
   assert.match(reader, /\.pr-hover-note \{ white-space: pre-wrap; word-break: break-word;/)
+  assert.match(reader, /<TextFocus v-if="hoverPinned/)
+  assert.equal(item.fullText, '原文')
 })
 
 // ---------------------------------------------------------------------------

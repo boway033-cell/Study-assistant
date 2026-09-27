@@ -21,6 +21,7 @@ from backend.app.core.config import settings
 from backend.app.core.database import SessionLocal
 from backend.app.models import (Book, Chapter, Chunk, EvidenceCard, KnowledgeNote, LiteratureResource,
                                 PaperProfile, PresentationDeck, StudyReport)
+from backend.app.services.chinese_style_audit import audit_chinese_style, normalize_chinese_format
 from backend.app.services.llm import LLMRouter, load_llm_config, parse_json_response
 from backend.app.worker.tasks import update_progress
 
@@ -356,10 +357,10 @@ bullets(0-4条，每条不超过45字), source_ids(只能引用给定ID)。封�
         if not isinstance(item, dict):
             continue
         ids = [x for x in item.get("source_ids", []) if x in allowed]
-        result.append({"title": str(item.get("title") or "未命名页面")[:70],
+        result.append({"title": normalize_chinese_format(str(item.get("title") or "未命名页面")).rstrip("。，；：")[:70],
                        "kind": str(item.get("kind") or "content")[:20],
-                       "claim": str(item.get("claim") or "")[:220],
-                       "bullets": [str(x)[:100] for x in item.get("bullets", [])[:4]],
+                       "claim": normalize_chinese_format(str(item.get("claim") or ""))[:220],
+                       "bullets": [normalize_chinese_format(str(x))[:100] for x in item.get("bullets", [])[:4]],
                        "source_ids": ids})
     return result if len(result) >= 5 else None
 
@@ -369,6 +370,13 @@ def _terms(text: str) -> set[str]:
     chinese = re.findall(r"[\u4e00-\u9fff]{2,}", text)
     bigrams = {word[i:i + 2] for word in chinese for i in range(len(word) - 1)}
     return latin | bigrams
+
+
+def audit_outline_style(outline: list[dict]) -> dict:
+    """Review audience-visible slide text without touching source IDs."""
+    prose = "\n\n".join("\n".join([str(slide.get("title") or ""), str(slide.get("claim") or ""),
+                                      *(str(item) for item in slide.get("bullets") or [])]) for slide in outline)
+    return audit_chinese_style(prose)
 
 
 def audit_claim_sources(outline: list[dict], sources: list[dict]) -> dict:
@@ -628,7 +636,7 @@ async def generate_outline_task(record, deck_id: int) -> dict:
         deck.paper_type = paper_type
         update_progress(record, .18, "deck_outline", f"已识别为{PAPER_TYPE_LABELS[paper_type]}论文")
         outline = None; cfg = load_llm_config(db, "presentation")
-        if cfg.get("deepseek_api_key"):
+        if cfg.get("configured"):
             update_progress(record, .48, "deck_outline", "AI 正在按证据链组织可编辑提纲")
             outline = await _ai_outline(LLMRouter.get("auto", cfg), book.title, paper_type, sources, options)
         try:
@@ -643,6 +651,7 @@ async def generate_outline_task(record, deck_id: int) -> dict:
         claim_audit = audit_claim_sources(outline, sources)
         deck.outline_json = json.dumps(outline, ensure_ascii=False)
         deck.qa_json = json.dumps({"stage": "outline", "claim_source": claim_audit,
+                                   "style_audit": audit_outline_style(outline),
                                    "coverage": selection.get("coverage", {})}, ensure_ascii=False)
         deck.status = "outline_ready"; db.commit()
         update_progress(record, 1, "deck_outline", "提纲已生成，等待人工确认")
@@ -685,6 +694,7 @@ async def render_deck_task(record, deck_id: int) -> dict:
         qa = {"ok": structural["ok"] and claim_audit["ok"] and (visual.get("ok", False) or not visual_required),
               "validation_status": "verified" if visual.get("ok") else "structural_only" if visual.get("skipped") else "failed",
               "issues": issues, "structural": structural, "claim_source": claim_audit,
+              "style_audit": audit_outline_style(outline),
               "coverage": selection.get("coverage", {}), "rights": rights, "visual": visual,
               "figure_fidelity": figure_fidelity}
         manifest = {"version": 2, "created_at": datetime.now().isoformat(), "book_id": book.id,

@@ -1,4 +1,4 @@
-# Study Assistant 2.4 下载、安装与更新
+# Study Assistant 2.5 下载、安装与更新
 
 本文面向 Windows 10/11。当前发布形态是本机运行的 Web 应用，不是桌面 EXE：双击启动器后由本地服务打开浏览器，资料不会上传到项目作者的服务器。
 
@@ -17,7 +17,7 @@ Release 已包含构建后的前端，因此不需要 Node.js；仍需安装 Pyt
 ```powershell
 git clone https://github.com/boway033-cell/Study-assistant.git
 cd Study-assistant
-git checkout v2.4
+git checkout v2.5
 ```
 
 源码方式需要 Node.js 22+ 来构建前端。

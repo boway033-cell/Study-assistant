@@ -42,8 +42,12 @@ def retrieve(question: str, book_id: int | None = None, book_ids: list[int] | No
     if explicitly_out_of_scope(question):
         record_retrieval_eval(0, question)
         return []
+    # [] is an explicitly empty scope. It must never become an unrestricted search.
+    if book_ids is not None and not book_ids:
+        record_retrieval_eval(0, question)
+        return []
     k = top_k or settings.rag_top_k
-    search_book_ids = book_ids if book_ids else ([book_id] if book_id else None)
+    search_book_ids = book_ids if book_ids is not None else ([book_id] if book_id else None)
 
     ranked_lists: list[list[dict]] = []
 
@@ -87,7 +91,7 @@ def retrieve(question: str, book_id: int | None = None, book_ids: list[int] | No
         enriched.append(it)
 
     # 6. 目录兜底
-    if not enriched:
+    if not enriched and book_id is not None and book_ids is None:
         enriched = [get_book_outline(book_id)]
 
     # 7. 记录检索效果
