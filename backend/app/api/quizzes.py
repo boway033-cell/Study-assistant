@@ -61,9 +61,8 @@ def generate_quizzes(book_id: int, req: QuizGenReq | None = None, db: Session = 
         db2 = SessionLocal()
         try:
             chs = db2.scalars(select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.order_index)).all()
-            # 从数据库读取 LLM 配置；批量生成固定用 flash（速度快、省 token）
+            # 从数据库读取当前通用模型路由，尊重用户选择的模型 ID。
             cfg = load_llm_config(db2, "utility")
-            cfg = {**cfg, "deepseek_model": "flash"}
             provider = LLMRouter.get("auto", cfg)
             created = 0
             for i, ch in enumerate(chs):

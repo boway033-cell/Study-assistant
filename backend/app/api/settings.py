@@ -1,4 +1,4 @@
-"""设置 API（docs/03-api.md §6）— 仅 DeepSeek 云端配置"""
+"""模型连接、任务路由与本机设置 API。"""
 from __future__ import annotations
 
 import json
@@ -15,13 +15,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core import crypto
-from backend.app.core.config import DEEPSEEK_MODELS, PROJECT_ROOT, settings as app_settings
+from backend.app.core.config import PROJECT_ROOT, settings as app_settings
 from backend.app.core.database import get_db
 from backend.app.models import Book, Chunk, Setting
 from backend.app.schemas import ProbeItem, ProbeResp, SettingsResp, SettingsUpdateReq
-from backend.app.services.llm import (LLM_TASKS, PROFILES_KEY, ROUTING_KEY, LLMRouter,
-                                      load_llm_config, load_provider_routing)
-from backend.app.services.vision import VisionProvider, load_vision_config
+from backend.app.services.llm import (LLM_TASKS, PROFILES_KEY, ROUTING_KEY, LLMRouter, resolve_model,
+                                      _tls_verify, load_llm_config, load_provider_routing)
 
 router = APIRouter(prefix="/api", tags=["settings"])
 _PROFILES_KEY = PROFILES_KEY
@@ -30,8 +29,8 @@ _PROFILES_KEY = PROFILES_KEY
 class CompatibleProviderWrite(BaseModel):
     id: str | None = Field(default=None, max_length=40)
     name: str = Field(min_length=1, max_length=80)
-    capability: str = Field(pattern="^(text|vision)$")
-    vendor: str = Field(default="custom", pattern="^(kimi|zhipu|qwen|openai|anthropic|gemini|custom)$")
+    capability: str = Field(default="text", pattern="^text$")
+    vendor: str = Field(default="custom", pattern="^(deepseek|kimi|zhipu|qwen|openai|anthropic|gemini|custom)$")
     protocol: str = Field(default="openai_chat", pattern="^(openai_chat|anthropic_messages|google_generate)$")
     base_url: str = Field(min_length=8, max_length=1000)
     model: str = Field(min_length=1, max_length=120)
@@ -70,9 +69,6 @@ _DEFAULTS = {
     "deepseek_api_key": app_settings.deepseek_api_key,
     "deepseek_base_url": app_settings.deepseek_base_url,
     "deepseek_model": app_settings.deepseek_model,
-    "vision_api_key": app_settings.vision_api_key,
-    "vision_base_url": app_settings.vision_base_url,
-    "vision_model": app_settings.vision_model,
     "rag_top_k": str(app_settings.rag_top_k),
     "vector_search": "false",
 }
@@ -162,7 +158,7 @@ async def _discover_models(cfg: dict) -> dict:
     elif api_key:
         headers = {"Authorization": f"Bearer {api_key}"}
     failures = []
-    async with httpx.AsyncClient(timeout=httpx.Timeout(12, connect=5)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(12, connect=5), verify=_tls_verify()) as client:
         for url in _model_list_urls(str(cfg.get("base_url") or "")):
             try:
                 response = await client.get(url, headers=headers, params=params)
@@ -187,18 +183,14 @@ async def _discover_models(cfg: dict) -> dict:
 @router.get("/settings", response_model=SettingsResp)
 def get_settings(db: Session = Depends(get_db)):
     cfg = load_llm_config(db)
-    vcfg = load_vision_config(db)
-    api_key = cfg["deepseek_api_key"]
+    api_key = crypto.decrypt(_get_setting(db, "deepseek_api_key"))
     return SettingsResp(
         deepseek_api_key=_mask_key(api_key),
-        deepseek_model=cfg["deepseek_model"] if cfg["deepseek_model"] in DEEPSEEK_MODELS else "flash",
-        vision_api_key=_mask_key(vcfg["vision_api_key"]),
-        vision_base_url=vcfg["vision_base_url"],
-        vision_model=vcfg["vision_model"],
+        deepseek_model=_get_setting(db, "deepseek_model"),
+        deepseek_base_url=_get_setting(db, "deepseek_base_url"),
         rag_top_k=_get_setting(db, "rag_top_k"),
         vector_search=_get_setting(db, "vector_search") == "true",
         deepseek_configured=bool(api_key),
-        vision_configured=bool(vcfg["vision_api_key"]),
         text_provider_configured=bool(cfg.get("configured")),
         active_text_provider=str(cfg.get("provider_name") or "DeepSeek"),
         active_text_model=str(cfg.get("model") or ""),
@@ -210,15 +202,12 @@ def update_settings(req: SettingsUpdateReq, db: Session = Depends(get_db)):
     if req.deepseek_api_key is not None:
         _set_setting(db, "deepseek_api_key", crypto.encrypt(req.deepseek_api_key.strip()))
     if req.deepseek_model is not None:
-        if req.deepseek_model not in DEEPSEEK_MODELS:
-            raise HTTPException(400, f"deepseek_model 只能是 {list(DEEPSEEK_MODELS)} 之一")
-        _set_setting(db, "deepseek_model", req.deepseek_model)
-    if req.vision_api_key is not None:
-        _set_setting(db, "vision_api_key", crypto.encrypt(req.vision_api_key.strip()))
-    if req.vision_base_url is not None:
-        _set_setting(db, "vision_base_url", _validate_api_base(req.vision_base_url))
-    if req.vision_model is not None:
-        _set_setting(db, "vision_model", req.vision_model.strip())
+        model = req.deepseek_model.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}", model):
+            raise HTTPException(400, "模型 ID 只能包含字母、数字、点、下划线、斜杠和连字符")
+        _set_setting(db, "deepseek_model", model)
+    if req.deepseek_base_url is not None:
+        _set_setting(db, "deepseek_base_url", _validate_api_base(req.deepseek_base_url))
     if req.rag_top_k is not None:
         if not 1 <= req.rag_top_k <= 20:
             raise HTTPException(400, "rag_top_k 范围 1-20")
@@ -238,15 +227,10 @@ def update_settings(req: SettingsUpdateReq, db: Session = Depends(get_db)):
 @router.get("/settings/probe", response_model=ProbeResp)
 async def probe(db: Session = Depends(get_db)):
     cfg = load_llm_config(db)
-    vcfg = load_vision_config(db)
     text_provider = LLMRouter.get("auto", cfg)
     text_ok, text_reason = await text_provider.check_available()
-    vision = VisionProvider(api_key=vcfg["vision_api_key"], base_url=vcfg["vision_base_url"],
-                            model=vcfg["vision_model"])
-    vision_ok, vision_reason = await vision.check_available()
     return ProbeResp(
         deepseek=ProbeItem(ok=text_ok, reason=text_reason),
-        vision=ProbeItem(ok=vision_ok, reason=vision_reason),
         text=ProbeItem(ok=text_ok, reason=text_reason),
     )
 
@@ -308,14 +292,15 @@ def list_compatible_providers(db: Session = Depends(get_db)):
     items = [{"id": "deepseek", "name": "DeepSeek", "vendor": "deepseek",
               "capability": "text", "protocol": "openai_chat",
               "base_url": _get_setting(db, "deepseek_base_url") or app_settings.deepseek_base_url,
-              "model": _get_setting(db, "deepseek_model") or app_settings.deepseek_model,
-              "configured": bool(deepseek_key), "api_key": _mask_key(deepseek_key), "builtin": True}]
+              "model": resolve_model(_get_setting(db, "deepseek_model")),
+              "configured": bool(deepseek_key) or _get_setting(db, "deepseek_base_url").startswith(("http://localhost", "http://127.0.0.1")),
+              "api_key": _mask_key(deepseek_key), "builtin": True}]
     for profile in _compatible_profiles(db):
         key = crypto.decrypt(_get_setting(db, f"compatible_provider_key:{profile.get('id', '')}"))
         local = str(profile.get("base_url") or "").startswith(("http://localhost", "http://127.0.0.1"))
         items.append({**profile, "configured": bool(key) or local, "api_key": _mask_key(key)})
     routing = load_provider_routing(db)
-    return {"default_text_provider": routing["default"], "default_vision_provider": "qwen-vl",
+    return {"default_text_provider": routing["default"],
             "routing_locked": False, "task_routes": routing["tasks"], "tasks": list(LLM_TASKS),
             "fallback_provider_ids": routing.get("fallbacks", []),
             "items": items}
@@ -324,6 +309,8 @@ def list_compatible_providers(db: Session = Depends(get_db)):
 @router.post("/settings/providers", status_code=201)
 def save_compatible_provider(req: CompatibleProviderWrite, db: Session = Depends(get_db)):
     provider_id = (req.id or uuid.uuid4().hex[:12]).strip().lower()
+    if provider_id == "deepseek":
+        raise HTTPException(400, "内置 DeepSeek 连接请使用设置接口编辑")
     if not re.fullmatch(r"[a-z0-9_-]{3,40}", provider_id):
         raise HTTPException(400, "接口 ID 只能包含小写字母、数字、_ 和 -")
     profiles = _compatible_profiles(db)

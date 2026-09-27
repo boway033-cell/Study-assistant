@@ -107,9 +107,8 @@
           <span class="pr-hover-source" :class="'pr-hover-source-' + item.origin">{{ item.sourceLabel }}</span>
           <span class="pr-hover-kind">{{ item.kindLabel }}</span>
         </div>
-        <div v-if="item.hasNote" class="pr-hover-note">{{ item.note }}</div>
-        <div v-else class="pr-hover-empty">{{ item.emptyLabel }}</div>
-        <div v-if="item.text" class="pr-hover-quote">{{ item.text }}</div>
+        <TextFocus v-if="hoverPinned && (item.hasNote || item.fullText)" :text="item.hasNote ? item.note : item.fullText" :caption="item.hasNote ? 'ANNOTATION / 批注内容' : 'SOURCE / 标注原文'" />
+        <template v-else><div v-if="item.hasNote" class="pr-hover-note">{{ item.note }}</div><div v-else class="pr-hover-empty">{{ item.emptyLabel }}</div><div v-if="item.text" class="pr-hover-quote">{{ item.text }}</div></template>
         <div v-if="hoverPinned && annById.has(item.id)" class="pr-hover-actions">
           <button type="button" @click="editHoverAnnotation(item.id)">编辑</button>
           <button type="button" class="danger" @click="removeAnn(annById.get(item.id))">删除</button>
@@ -156,6 +155,13 @@
       <div v-if="aiLoading" v-loading="true" style="height: 200px" />
       <div v-else-if="aiResult" class="ai-result" v-html="aiResultHtml"></div>
       <el-empty v-else description="等待操作" :image-size="80" />
+      <el-popover v-if="!aiLoading && aiStyleAudit?.issue_count" placement="top" :width="340" trigger="click">
+        <template #reference><el-button link size="small">文字规范待复核（{{ aiStyleAudit.issue_count }}）</el-button></template>
+        <div class="ai-style-audit">
+          <p v-for="(issue, k) in aiStyleAudit.issues" :key="k">第 {{ issue.line }} 行：{{ issue.message }}</p>
+          <small>自动检查只提示可能的格式问题；事实和引文仍需对照原文。</small>
+        </div>
+      </el-popover>
       <template #footer>
         <div v-if="!aiLoading && aiResult && !aiResult.startsWith('⚠️') && pendingSel" class="ai-footer">
           <el-button type="warning" plain size="small" @click="saveAiAsAnnotation">🖍 保存为高亮批注</el-button>
@@ -202,10 +208,11 @@ import {
   HOVER_CLOSE_DELAY_MS, HOVER_OPEN_DELAY_MS,
 } from '../utils/annotationHover'
 import { wheelNavigation } from '../utils/readerNavigation'
+import TextFocus from './TextFocus.vue'
 import {
   listAnnotations, createAnnotation, updateAnnotation, deleteAnnotation,
   repairAnnotation, getPdfTextLayer,
-  aiExplain, aiSummarize, aiVision, getBook, getKnowledgeTree,
+  aiExplain, aiSummarize, aiPageImage, getBook, getKnowledgeTree,
 } from '../api'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl
@@ -294,6 +301,7 @@ const aiPanel = ref(false)
 const aiTitle = ref('AI 解读')
 const aiLoading = ref(false)
 const aiResult = ref('')
+const aiStyleAudit = ref(null)
 const aiBusy = ref(false)
 const selToolbar = ref(false)
 const selPos = ref({ x: 0, y: 0 })
@@ -954,7 +962,7 @@ const positionHoverCard = async () => {
   if (availableWidth < 80 || availableHeight < 60) { closeHoverCard(); return }
   hoverCardSize.value = {
     width: Math.min(HOVER_CARD_MAX_WIDTH, availableWidth),
-    maxHeight: Math.min(HOVER_CARD_MAX_HEIGHT, availableHeight),
+    maxHeight: Math.min(hoverPinned.value ? 460 : HOVER_CARD_MAX_HEIGHT, availableHeight),
   }
   await nextTick()
   if (request !== hoverPositionRequest || !hoverCardEl.value) return
@@ -1340,10 +1348,12 @@ const aiAction = async (action) => {
   aiPanel.value = true
   aiLoading.value = true
   aiResult.value = ''
+  aiStyleAudit.value = null
   try {
     const resp = await aiExplain({ text: selText, action, book_title: bookTitle, chapter_title: '' })
     if (!resp.ok) throw new Error(resp.error || 'AI 调用失败')
     aiResult.value = resp.result
+    aiStyleAudit.value = resp.style_audit || null
   } catch (e) { aiResult.value = '⚠️ ' + e.message } finally { aiLoading.value = false }
 }
 
@@ -1371,6 +1381,7 @@ const summarizeChapter = async () => {
   aiPanel.value = true
   aiLoading.value = true
   aiResult.value = ''
+  aiStyleAudit.value = null
   aiBusy.value = true
   try {
     const cur = currentChapter()
@@ -1378,6 +1389,7 @@ const summarizeChapter = async () => {
     const resp = await aiSummarize({ book_id: props.bookId, chapter_id: cur.id })
     if (!resp.ok) throw new Error(resp.error || 'AI 调用失败')
     aiResult.value = resp.result
+    aiStyleAudit.value = resp.style_audit || null
   } catch (e) { aiResult.value = '⚠️ ' + e.message } finally { aiLoading.value = false; aiBusy.value = false }
 }
 
@@ -1398,10 +1410,11 @@ const analyzePage = async () => {
   if (!props.bookId) return
   const cv = canvasRefs[page.value]
   if (!cv) { ElMessage.warning('页面尚未渲染完成'); return }
-  aiTitle.value = 'AI 解读本页（Qwen-VL 视觉分析）'
+  aiTitle.value = 'AI 解读本页'
   aiPanel.value = true
   aiLoading.value = true
   aiResult.value = ''
+  aiStyleAudit.value = null
   aiBusy.value = true
   try {
     const blob = await new Promise((resolve, reject) => cv.toBlob(
@@ -1413,9 +1426,10 @@ const analyzePage = async () => {
       reader.onerror = () => reject(new Error('页面图像读取失败'))
       reader.readAsDataURL(blob)
     })
-    const resp = await aiVision({ book_id: props.bookId, page: page.value, image })
+    const resp = await aiPageImage({ book_id: props.bookId, page: page.value, image })
     if (!resp.ok) throw new Error(resp.error || '视觉分析失败')
     aiResult.value = resp.result
+    aiStyleAudit.value = resp.style_audit || null
   } catch (e) { aiResult.value = '⚠️ ' + e.message } finally { aiLoading.value = false; aiBusy.value = false }
 }
 
@@ -1618,6 +1632,9 @@ onBeforeUnmount(() => {
 .ann-color.active { border-color: #3e7fa3; }
 .ann-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
 .ai-result { font-size: 14px; line-height: 1.9; white-space: pre-wrap; color: var(--el-text-color-primary); }
+.ai-style-audit { max-height: 260px; overflow: auto; line-height: 1.5; }
+.ai-style-audit p { margin: 0 0 8px; }
+.ai-style-audit small { color: var(--el-text-color-secondary); }
 .ai-footer { text-align: right; }
 .ann-export { margin-bottom: 10px; }
 .ann-item { padding: 10px; border: 1px solid var(--el-border-color-extra-light); border-radius: 8px; margin-bottom: 8px; }

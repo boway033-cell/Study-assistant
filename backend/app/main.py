@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from backend.app.api import ai, annotations, books, chat, deep, draw, graph, knowledge, literature, official_writing, presentations, quizzes, sensemaking, settings, shelves, stats, study, tags, writing
+from backend.app.api import ai, annotations, assistant, books, chat, deep, draw, graph, knowledge, literature, official_writing, presentations, quizzes, research, research_design, sensemaking, settings, shelves, stats, study, tags, writing
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import Base, engine
 from backend.app.services.rag import fts
@@ -82,6 +82,17 @@ def _migrate():
             except Exception:  # noqa: BLE001
                 pass
             # 来源链 v2：研究报告派生的笔记/证据保留多书范围、精确锚点和报告回链。
+            # 旧版问答历史只有单书范围；新范围列保持旧记录可读。
+            chat_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(chat_logs)")).fetchall()}
+            if "shelf_id" not in chat_cols:
+                conn.execute(text("ALTER TABLE chat_logs ADD COLUMN shelf_id INTEGER"))
+            if "project_id" not in chat_cols:
+                conn.execute(text("ALTER TABLE chat_logs ADD COLUMN project_id INTEGER"))
+            if "conversation_id" not in chat_cols:
+                conn.execute(text("ALTER TABLE chat_logs ADD COLUMN conversation_id VARCHAR(64)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_chat_logs_shelf_id ON chat_logs(shelf_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_chat_logs_project_id ON chat_logs(project_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_chat_logs_conversation_id ON chat_logs(conversation_id)"))
             for table, definitions in {
                 "knowledge_notes": (
                     ("source_report_id", "INTEGER"),
@@ -251,7 +262,7 @@ async def lifespan(_app: FastAPI):
         pass
 
 
-app = FastAPI(title="Study assistant", version="2.4.0", lifespan=lifespan)
+app = FastAPI(title="Study assistant", version="2.5.0", lifespan=lifespan)
 
 
 class SPAStaticFiles(StaticFiles):
@@ -311,6 +322,9 @@ async def _guard_local_api(request: Request, call_next):
 
 app.include_router(books.router)
 app.include_router(chat.router)
+app.include_router(assistant.router)
+app.include_router(research.router)
+app.include_router(research_design.router)
 app.include_router(knowledge.router)
 app.include_router(quizzes.router)
 app.include_router(stats.router)
@@ -333,12 +347,14 @@ app.include_router(writing.router)
 @app.get("/api/health")
 def health():
     # 启动器据此区分占用端口的旧版进程，避免新前端复用缺少新 API 的后端。
+    from backend.app.services.chinese_writing_style import STYLE_VERSION
     return {
         "status": "ok",
         "app": "study-assistant",
-        "api_revision": 4,
+        "api_revision": 13,
         "capabilities": {"shelves_write": True, "knowledge_records": True, "annotation_underline": True,
-                         "writing_dna": True, "ai_tone_docx": True, "knowledge_insights": True},
+                         "writing_dna": True, "ai_tone_docx": True, "knowledge_insights": True,
+                         "assistant_scopes": True, "chinese_writing_style": STYLE_VERSION},
     }
 
 

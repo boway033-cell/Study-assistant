@@ -84,13 +84,11 @@ class Settings:
         # LLM：仅云端 DeepSeek（本地 AI 已取消）
         self.deepseek_base_url: str = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
         self.deepseek_api_key: str = _env("DEEPSEEK_API_KEY", "")
-        # 模型档位：flash=deepseek-chat（快）/ pro=deepseek-reasoner（深度思考）
+        # 旧档位仍可读取；设置页也允许直接填写供应商公布的模型 ID。
         self.deepseek_model: str = _env("DEEPSEEK_MODEL", "flash")
-
-        # 视觉分析（Qwen-VL，阿里百炼 OpenAI 兼容接口；可选增强，未配置不影响本地功能）
-        self.vision_api_key: str = _env("VISION_API_KEY", "")
-        self.vision_base_url: str = _env("VISION_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        self.vision_model: str = _env("VISION_MODEL", "qwen3-vl-plus")
+        self.ai_interactive_workers: int = _env_int("AI_INTERACTIVE_WORKERS", 2, 1, 4)
+        self.ai_background_workers: int = _env_int("AI_BACKGROUND_WORKERS", 2, 1, 4)
+        self.ai_provider_parallel_limit: int = _env_int("AI_PROVIDER_PARALLEL_LIMIT", 2, 1, 4)
 
         # 检索
         self.rag_top_k: int = int(_env("RAG_TOP_K", "5"))
@@ -149,9 +147,10 @@ class Settings:
 settings = Settings()
 
 
-# DeepSeek 模型档位映射（实测 API 返回的模型名）
-# flash → deepseek-v4-flash（快速）；pro → deepseek-v4-pro（深度推理）
+# 旧设置使用 flash/pro 档位；新设置直接保存 API 模型 ID。
 DEEPSEEK_MODELS: dict[str, str] = {
-    "flash": "deepseek-v4-flash",
+    "flash": "deepseek-flash",
     "pro": "deepseek-v4-pro",
+    "deepseek-v4-flash": "deepseek-flash",
+    "deepseek-v4-flash-vision-exp": "deepseek-flash",
 }

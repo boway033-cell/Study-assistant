@@ -20,6 +20,7 @@ from backend.app.models import (Book, Chunk, EvidenceCard, KnowledgeNote, PaperP
                                 WritingDnaRevision, WritingOutput)
 from backend.app.services.literature_access import validate_public_https_url
 from backend.app.services.llm import LLMRouter, load_llm_config, parse_json_response
+from backend.app.services.chinese_style_audit import audit_chinese_style, normalize_chinese_format
 from backend.app.services.writing_citations import (ANCHOR_RE, database_source_labels, readable_citations,
                                                     web_anchor, web_source_labels)
 from backend.app.worker.tasks import TaskRecord, update_progress
@@ -251,7 +252,7 @@ async def distill_profile_task(record: TaskRecord, profile_id: int) -> dict:
                             f"已分析 {index + 1}/{len(manifest)} 篇；仅保留有限代表片段")
         corpus = "\n\n".join(samples)
         update_progress(record, .43, "distill", "正在综合结构、选题、素材、认知与视觉规律")
-        cfg = load_llm_config(db, "writing"); cfg["deepseek_model"] = "pro"
+        cfg = load_llm_config(db, "writing")
         provider = LLMRouter.get("auto", cfg)
         prompt = f"""你在执行 Writing DNA 蒸馏。语料由 {len(manifest)} 篇完整文章构成；量化统计基于全文，
 下方每篇提供首中尾代表片段用于跨文章归纳。不要摘要具体观点，不复制独特句子，只提取可操作规律。
@@ -717,12 +718,13 @@ async def generate_literature_review(db, *, question: str, title: str, book_ids:
         question, title, review_type, discipline, length, evidence_context,
         style_context, ai_tone_constraints,
     )
-    cfg = load_llm_config(db, "writing"); cfg["deepseek_model"] = "pro"
+    cfg = load_llm_config(db, "writing")
     provider = LLMRouter.get("auto", cfg)
     output_text = await _call(provider, [
         {"role": "system", "content": "你是个人知识库内的研究作者。围绕中心问题自由综合多篇文献，写成连贯文章；忠于锚点、保留冲突，并明确标识自己的推断。"},
         {"role": "user", "content": prompt},
     ])
+    output_text = normalize_chinese_format(output_text)
     found_anchors = set(re.findall(r"\[B\d+:C\d+:P\d+(?:-\d+)?\]", output_text))
     invalid_anchors = sorted(found_anchors - valid_anchors)
     valid_found = found_anchors & valid_anchors
@@ -748,6 +750,7 @@ async def generate_literature_review(db, *, question: str, title: str, book_ids:
             "unreferenced_book_ids": [book_id for book_id in selected_ids if book_id not in cited_book_ids],
             "dna_version": dna_version, "ai_tone_constraints": ai_tone_constraints,
             "ai_tone_violations": violations,
+            "style_audit": audit_chinese_style(output_text),
             "content_policy": "selected_library_documents_only",
             "method_boundary": "closed_corpus_not_systematic_review",
             "human_review_required": True,
@@ -784,7 +787,7 @@ async def imitate(db, profile_id: int, topic: str, genre: str, length: int, brie
         f"## {title}\n{_representative_excerpt(_article_text(db, book_id), 1800)}"
         for _, title, book_id in related
     )
-    cfg = load_llm_config(db, "writing"); cfg["deepseek_model"] = "pro"
+    cfg = load_llm_config(db, "writing")
     provider = LLMRouter.get("auto", cfg)
     logic_block = f"\n【逻辑结构DNA】\n{revision.logic_dna}" if revision.logic_dna else ""
     prompt = f"""按下列 Writing DNA 写一篇新的中文文章。复刻抽象的语言、结构和视觉排版规律，
@@ -810,6 +813,7 @@ async def imitate(db, profile_id: int, topic: str, genre: str, length: int, brie
     output_text = await _call(provider, [
         {"role": "system", "content": "生成独立新作；内容只能取自已选内容来源，DNA 语料只能校准风格、不得充当事实来源。围绕中心主张直接、连贯地写作，避免近似复述、作者冒充、免责声明和修饰词堆叠。"},
         {"role": "user", "content": prompt}])
+    output_text = normalize_chinese_format(output_text)
     valid = {anchor.strip("[]") for anchor in valid_anchors}
     found = set(re.findall(ANCHOR_RE, output_text))
     invalid_anchors = sorted(f"[{anchor}]" for anchor in found - valid)
@@ -866,6 +870,7 @@ async def imitate(db, profile_id: int, topic: str, genre: str, length: int, brie
                             "external_retrieved_at": min(retrieved_times) if retrieved_times else None,
                             "citation_notes": citation_notes,
                             "ai_tone_violations": ai_flavor_violations(output_text),
+                            "style_audit": audit_chinese_style(output_text),
                             "human_review_required": True,
                         }, ensure_ascii=False))
     db.add(row); db.commit(); db.refresh(row)

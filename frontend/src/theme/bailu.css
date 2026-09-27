@@ -5,9 +5,9 @@
    ============================================ */
 
 :root {
-  /* 操作界面用清晰黑体；华文中宋只承担品牌/标题，正文使用更耐读的现代宋体。 */
+  /* 全部操作界面与标题使用同一黑体；原文阅读保留宋体。 */
   --study-font-ui: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Source Han Sans SC", sans-serif;
-  --study-font-display: "STZhongsong", "华文中宋", "Songti SC", "STSong", "SimSun", serif;
+  --study-font-display: var(--study-font-ui);
   --study-font-reading: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
   --study-font-latin: "Segoe UI", "Microsoft YaHei UI", sans-serif;
   --el-font-family: var(--study-font-ui);

@@ -174,6 +174,7 @@ class TestLLMConfig:
         cfg = load_llm_config(db)
         assert cfg["deepseek_api_key"] == "sk-test-123456"
         assert cfg["deepseek_model"] == "pro"
+        assert cfg["model"] == "deepseek-v4-pro"
 
     def test_load_config_fallback_default(self):
         """未在 DB 中设置的项回退到内存默认。"""
@@ -194,13 +195,13 @@ class TestLLMConfig:
         cfg = load_llm_config(db)
         provider = LLMRouter.get("auto", cfg)
         assert provider.name == "deepseek"
-        assert provider.model == "deepseek-v4-flash"
+        assert provider.model == "deepseek-flash"
 
     def test_resolve_model_mapping(self):
         """flash/pro 档位映射到实际 API 模型名。"""
         from backend.app.services.llm import resolve_model
 
-        assert resolve_model("flash") == "deepseek-v4-flash"
+        assert resolve_model("flash") == "deepseek-flash"
         assert resolve_model("pro") == "deepseek-v4-pro"
 
     def test_custom_provider_and_task_routing(self):

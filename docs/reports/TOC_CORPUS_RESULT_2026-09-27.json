@@ -1,0 +1,332 @@
+{
+  "corpus_version": 1,
+  "cases": 8,
+  "passed": 8,
+  "failed": 0,
+  "unavailable": 0,
+  "anchor_hits": 34,
+  "anchor_total": 34,
+  "results": [
+    {
+      "id": "harvey-capital-2",
+      "book_id": 99,
+      "kind": "native-long",
+      "status": "pass",
+      "toc_pages_expected": [
+        8
+      ],
+      "toc_pages_detected": [
+        8
+      ],
+      "forbidden_detected": [],
+      "candidate": {
+        "rows": 15,
+        "anchor_hits": 4,
+        "anchor_total": 4,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      },
+      "stored": {
+        "rows": 15,
+        "anchor_hits": 4,
+        "anchor_total": 4,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      }
+    },
+    {
+      "id": "harvey-capital-1",
+      "book_id": 100,
+      "kind": "native-long",
+      "status": "pass",
+      "toc_pages_expected": [
+        9
+      ],
+      "toc_pages_detected": [
+        9
+      ],
+      "forbidden_detected": [],
+      "candidate": {
+        "rows": 20,
+        "anchor_hits": 4,
+        "anchor_total": 4,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      },
+      "stored": {
+        "rows": 20,
+        "anchor_hits": 4,
+        "anchor_total": 4,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      }
+    },
+    {
+      "id": "harvey-grundrisse",
+      "book_id": 103,
+      "kind": "native-long-no-printed-toc",
+      "status": "pass",
+      "toc_pages_expected": [],
+      "toc_pages_detected": [],
+      "forbidden_detected": [],
+      "candidate": {
+        "rows": 16,
+        "anchor_hits": 4,
+        "anchor_total": 4,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      },
+      "stored": {
+        "rows": 18,
+        "anchor_hits": 4,
+        "anchor_total": 4,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      }
+    },
+    {
+      "id": "harvey-marx-capital",
+      "book_id": 102,
+      "kind": "native-and-unnumbered-printed",
+      "status": "pass",
+      "toc_pages_expected": [
+        3
+      ],
+      "toc_pages_detected": [
+        3
+      ],
+      "forbidden_detected": [],
+      "candidate": {
+        "rows": 12,
+        "anchor_hits": 4,
+        "anchor_total": 4,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      },
+      "stored": {
+        "rows": 12,
+        "anchor_hits": 4,
+        "anchor_total": 4,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      }
+    },
+    {
+      "id": "bourdieu-practical-sense",
+      "book_id": 85,
+      "kind": "native-multilevel-multipage",
+      "status": "pass",
+      "toc_pages_expected": [
+        7,
+        8
+      ],
+      "toc_pages_detected": [
+        7,
+        8
+      ],
+      "forbidden_detected": [],
+      "candidate": {
+        "rows": 31,
+        "anchor_hits": 4,
+        "anchor_total": 4,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      },
+      "stored": {
+        "rows": 31,
+        "anchor_hits": 4,
+        "anchor_total": 4,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      }
+    },
+    {
+      "id": "public-management-third-edition",
+      "book_id": 3,
+      "kind": "printed-four-pages-no-bookmarks",
+      "status": "pass",
+      "toc_pages_expected": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "toc_pages_detected": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "forbidden_detected": [],
+      "candidate": {
+        "rows": 104,
+        "anchor_hits": 5,
+        "anchor_total": 5,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      },
+      "stored": {
+        "rows": 104,
+        "anchor_hits": 5,
+        "anchor_total": 5,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      }
+    },
+    {
+      "id": "zhongxian-cadres",
+      "book_id": 101,
+      "kind": "printed-toc-vs-body-numeric-tables",
+      "status": "pass",
+      "toc_pages_expected": [
+        9
+      ],
+      "toc_pages_detected": [
+        9
+      ],
+      "forbidden_detected": [],
+      "candidate": {
+        "rows": 32,
+        "anchor_hits": 5,
+        "anchor_total": 5,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      },
+      "stored": {
+        "rows": 90,
+        "anchor_hits": 1,
+        "anchor_total": 5,
+        "missing": [
+          {
+            "title": "第一章 绪论",
+            "page": 10,
+            "level": 1
+          },
+          {
+            "title": "第二章 构成",
+            "page": 23,
+            "level": 1
+          },
+          {
+            "title": "第三章 进入",
+            "page": 45,
+            "level": 1
+          },
+          {
+            "title": "第七章 关系",
+            "page": 151,
+            "level": 1
+          }
+        ],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": false
+      }
+    },
+    {
+      "id": "beck-risk-society",
+      "book_id": 89,
+      "kind": "native-multilevel-long",
+      "status": "pass",
+      "toc_pages_expected": [
+        7
+      ],
+      "toc_pages_detected": [
+        7
+      ],
+      "forbidden_detected": [],
+      "candidate": {
+        "rows": 13,
+        "anchor_hits": 4,
+        "anchor_total": 4,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      },
+      "stored": {
+        "rows": 13,
+        "anchor_hits": 4,
+        "anchor_total": 4,
+        "missing": [],
+        "wrong_page": [],
+        "wrong_level": [],
+        "rows_on_toc_pages": [],
+        "duplicate_title_pages": 0,
+        "nonmonotonic_pairs": 0,
+        "row_count_ok": true
+      }
+    }
+  ]
+}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -180,6 +181,10 @@ class NoteResp(BaseModel):
 # ---------- 问答 ----------
 class ChatReq(BaseModel):
     book_id: int | None = None  # None = 全部书籍
+    scope_type: Literal["shelf", "project"] | None = None
+    scope_id: int | None = None
+    conversation_id: str | None = Field(default=None, min_length=8, max_length=64,
+                                        pattern=r"^[A-Za-z0-9_-]+$")
     question: str = Field(min_length=1)
     model: str | None = None  # flash / pro；None = 用设置页默认
 
@@ -197,6 +202,7 @@ class ChatSource(BaseModel):
 
 class ChatHistoryItem(BaseModel):
     id: int
+    conversation_id: str | None = None
     question: str
     answer_preview: str = ""
     answer_length: int = 0
@@ -207,11 +213,13 @@ class ChatHistoryItem(BaseModel):
 
 class ChatHistoryDetail(BaseModel):
     id: int
+    conversation_id: str | None = None
     question: str
     answer: str
     model: str = ""
     sources: list[ChatSource] = []
     citation_audit: dict | None = None
+    style_audit: dict | None = None
     created_at: datetime
 
 
@@ -478,7 +486,7 @@ class AiSummaryReq(BaseModel):
     chapter_id: int
 
 
-class AiVisionReq(BaseModel):
+class AiPageImageReq(BaseModel):
     book_id: int
     page: int
     image: str  # dataURL (jpeg/png base64)
@@ -489,19 +497,17 @@ class AiResp(BaseModel):
     ok: bool
     result: str = ""
     error: str = ""
+    style_audit: dict | None = None
 
 
 # ---------- 设置 ----------
 class SettingsResp(BaseModel):
     deepseek_api_key: str  # 脱敏
-    deepseek_model: str    # flash / pro
-    vision_api_key: str    # 脱敏（Qwen-VL 视觉分析）
-    vision_base_url: str
-    vision_model: str
+    deepseek_model: str    # 兼容 flash/pro，也可为 API 模型 ID
+    deepseek_base_url: str = "https://api.deepseek.com"
     rag_top_k: str
     vector_search: bool
     deepseek_configured: bool
-    vision_configured: bool
     text_provider_configured: bool = False
     active_text_provider: str = "deepseek"
     active_text_model: str = ""
@@ -509,10 +515,8 @@ class SettingsResp(BaseModel):
 
 class SettingsUpdateReq(BaseModel):
     deepseek_api_key: str | None = None
-    deepseek_model: str | None = None  # flash / pro
-    vision_api_key: str | None = None
-    vision_base_url: str | None = None
-    vision_model: str | None = None
+    deepseek_model: str | None = None
+    deepseek_base_url: str | None = None
     rag_top_k: int | None = None
     vector_search: bool | None = None
 
@@ -524,5 +528,4 @@ class ProbeItem(BaseModel):
 
 class ProbeResp(BaseModel):
     deepseek: ProbeItem
-    vision: ProbeItem
     text: ProbeItem | None = None

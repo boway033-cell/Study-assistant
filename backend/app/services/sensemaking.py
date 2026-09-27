@@ -14,7 +14,8 @@ from sqlalchemy import func, select
 
 from backend.app.models import Book, Chapter, Chunk
 
-PROMPT_VERSION = "sensemaking-v2-fulltext"
+PROMPT_VERSION = "sensemaking-v4-relaxed-alignment"
+READABLE_ARTIFACT_VERSIONS = {"sensemaking-v2-fulltext", "sensemaking-v3-evidence-ids", PROMPT_VERSION}
 NODE_KINDS = {"question", "concept", "assumption", "method", "finding", "conclusion", "boundary", "uncertainty"}
 MATERIAL_TYPES = {"quantitative", "qualitative", "theoretical", "review", "other"}
 COMPARABILITY = {"comparable", "partial", "incomparable", "unknown"}
@@ -25,6 +26,7 @@ REVIEW_STATES = {"unreviewed", "valuable", "false_conflict", "unclear"}
 PASS_ROLES = {"body", "frontmatter", "references", "appendix", "other"}
 EPISTEMIC_STATES = {"source_observation", "author_interpretation", "ai_inference"}
 READING_WINDOW_CHARS = 10000
+EVIDENCE_PASSAGE_CHARS = 120
 
 
 def source_ref(book_id: int, chunk: Chunk) -> str:
@@ -126,17 +128,61 @@ def reading_windows(db, book_id: int, *, max_chars: int = READING_WINDOW_CHARS) 
                          "pages_without_extracted_text": max(0, total_pages - len(covered_pages)) if total_pages else None}}
 
 
-def normalize_reading_pass(raw: Any, window: dict) -> dict:
+def reading_evidence_catalog(window: dict) -> list[dict]:
+    """Number exact, bounded source passages for citation without model-copied quotes."""
+    passages = []
+    for source in window["sources"]:
+        content = source["text"]
+        for start in range(0, len(content), EVIDENCE_PASSAGE_CHARS):
+            excerpt = content[start:start + EVIDENCE_PASSAGE_CHARS].strip()
+            if excerpt:
+                if len(excerpt) < 8 and passages and passages[-1]["ref"] == source["ref"]:
+                    passages[-1]["quote"] = content[start - EVIDENCE_PASSAGE_CHARS:].strip()
+                    continue
+                passages.append({"id": f"E{len(passages) + 1}", "ref": source["ref"],
+                                 "quote": excerpt})
+    return passages
+
+
+def numbered_evidence(raw_ids: Any, passages: list[dict], sources: list[dict]) -> list[dict]:
+    """Resolve only catalog IDs; source quotes still pass the literal verifier."""
+    allowed = {passage["id"]: passage for passage in passages}
+    selected = []
+    for value in raw_ids[:8] if isinstance(raw_ids, list) else []:
+        passage = allowed.get(str(value))
+        if passage:
+            selected.append({"ref": passage["ref"], "quote": passage["quote"]})
+    return verified_evidence(selected, sources)
+
+
+def claim_evidence_catalog(claims: list[dict]) -> list[dict]:
+    """Number previously verified quotes for the whole-book argument map."""
+    passages = []
+    seen = set()
+    for claim in claims:
+        for evidence in claim["evidence"]:
+            key = (evidence["ref"], evidence["quote"])
+            if key not in seen:
+                seen.add(key)
+                passages.append({"id": f"E{len(passages) + 1}", "ref": key[0], "quote": key[1]})
+    return passages
+
+
+def normalize_reading_pass(raw: Any, window: dict, passages: list[dict] | None = None) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("局部阅读未返回有效 JSON")
     role = str(raw.get("role") or "body")
     if role not in PASS_ROLES:
         role = "body"
     claims = []
+    passages = passages if passages is not None else reading_evidence_catalog(window)
+    rejected = 0
     for item in raw.get("claims", [])[:7] if isinstance(raw.get("claims"), list) else []:
         if not isinstance(item, dict):
             continue
-        evidence = verified_evidence(item.get("evidence"), window["sources"])
+        evidence = numbered_evidence(item.get("evidence_ids"), passages, window["sources"])
+        if not evidence:
+            evidence = verified_evidence(item.get("evidence"), window["sources"])
         statement = str(item.get("statement") or "").strip()[:400]
         if statement and evidence:
             kind = str(item.get("kind") or "uncertainty")
@@ -145,13 +191,25 @@ def normalize_reading_pass(raw: Any, window: dict) -> dict:
                            "statement": statement, "reasoning": str(item.get("reasoning") or "")[:350],
                            "epistemic_status": epistemic if epistemic in EPISTEMIC_STATES else "ai_inference",
                            "evidence": evidence})
+        else:
+            rejected += 1
     if role == "body" and not claims:
-        raise ValueError(f"正文窗口 {window['id']} 没有可定位的论点")
+        raise ValueError(f"正文窗口 {window['id']} 没有可定位的论点：模型返回的 {rejected} 条候选均缺少论点或有效证据编号/引文")
     return {"id": window["id"], "chapter_id": window["chapter_id"],
             "chapter_title": window["chapter_title"], "page_start": window["page_start"],
             "page_end": window["page_end"], "role": role,
             "summary": str(raw.get("summary") or "")[:500], "summary_status": "ai_unchecked",
             "claims": claims,
+            "source_refs": [source["ref"] for source in window["sources"]]}
+
+
+def unresolved_reading_pass(window: dict, reason: str) -> dict:
+    """保留未通过引文核对的窗口，让全篇结果明确标记缺口。"""
+    return {"id": window["id"], "chapter_id": window["chapter_id"],
+            "chapter_title": window["chapter_title"], "page_start": window["page_start"],
+            "page_end": window["page_end"], "role": "other", "summary": "本段未取得可核对的 AI 论点，请查阅原文。",
+            "summary_status": "unresolved", "claims": [], "unresolved": True,
+            "unresolved_reason": reason[:160],
             "source_refs": [source["ref"] for source in window["sources"]]}
 
 
@@ -276,14 +334,92 @@ def source_block(sources: list[dict]) -> str:
     return "\n\n".join(f"[{s['ref']}]\n{s['text']}" for s in sources)
 
 
+def _align_quote(quote: str, source: dict) -> str | None:
+    """对齐空白、标点、全半角及大小写差异，返回原文中的逐字片段。"""
+    import unicodedata
+
+    def indexed(value: str):
+        return [(folded, index) for index, char in enumerate(value)
+                for folded in unicodedata.normalize("NFKC", char).casefold()
+                if not folded.isspace() and not unicodedata.category(folded).startswith("P")]
+
+    source_text = source["text"]
+    source_chars = indexed(source_text)
+    quote_chars = indexed(quote)
+    if len(quote_chars) < 8:
+        return None
+    needle = "".join(char for char, _ in quote_chars)
+    haystack = "".join(char for char, _ in source_chars)
+    start = haystack.find(needle)
+    if start < 0:
+        return None
+    return source_text[source_chars[start][1]:source_chars[start + len(quote_chars) - 1][1] + 1].strip()
+
+
+def _align_minor_quote_error(quote: str, source: dict) -> str | None:
+    """Allow one non-critical OCR/copy error only when the original span is unique."""
+    import unicodedata
+
+    def indexed(value: str):
+        return [(folded, index) for index, char in enumerate(value)
+                for folded in unicodedata.normalize("NFKC", char).casefold()
+                if not folded.isspace() and not unicodedata.category(folded).startswith("P")]
+
+    quote_chars = indexed(quote)
+    source_chars = indexed(source["text"])
+    if len(quote_chars) < 16:
+        return None
+    needle = "".join(char for char, _ in quote_chars)
+    haystack = "".join(char for char, _ in source_chars)
+    critical = set("不无非未没否勿仅只可必应须零一二三四五六七八九十百千万亿两〇幺壹贰叁肆伍陆柒捌玖拾佰仟")
+
+    def one_safe_edit(candidate: str) -> bool:
+        if abs(len(candidate) - len(needle)) > 1:
+            return False
+        left = right = edits = 0
+        while left < len(needle) and right < len(candidate):
+            if needle[left] == candidate[right]:
+                left += 1
+                right += 1
+                continue
+            edits += 1
+            if edits > 1:
+                return False
+            changed = (needle[left] if len(needle) >= len(candidate) else "") + (
+                candidate[right] if len(candidate) >= len(needle) else "")
+            if any(char.isdigit() or char in critical for char in changed):
+                return False
+            if len(needle) >= len(candidate):
+                left += 1
+            if len(candidate) >= len(needle):
+                right += 1
+        if left < len(needle) or right < len(candidate):
+            trailing = needle[left:] + candidate[right:]
+            if edits or any(char.isdigit() or char in critical for char in trailing):
+                return False
+            edits = len(trailing)
+        return edits == 1
+
+    # Substitutions are more certain than insertions/deletions; only one span may qualify.
+    for length in (len(needle), len(needle) - 1, len(needle) + 1):
+        matches = []
+        for start in range(max(0, len(haystack) - length + 1)):
+            if one_safe_edit(haystack[start:start + length]):
+                matches.append(source["text"][source_chars[start][1]:source_chars[start + length - 1][1] + 1].strip())
+                if len(matches) > 1:
+                    return None
+        if matches:
+            return matches[0]
+    return None
+
+
 def _quote_in_source(quote: str, source: dict) -> bool:
-    # OCR and PDF extraction can alter whitespace; preserve all other characters.
-    normalize = lambda value: re.sub(r"\s+", "", value)
-    return len(normalize(quote)) >= 8 and normalize(quote) in normalize(source["text"])
+    return _align_quote(quote, source) is not None
 
 
 def verified_evidence(raw: Any, sources: list[dict], *, book_id: int | None = None) -> list[dict]:
-    allowed = {source["ref"]: source for source in sources}
+    eligible = [source for source in sources if book_id is None or source["book_id"] == book_id]
+    allowed = {source["ref"]: source for source in eligible}
     result = []
     for item in raw[:8] if isinstance(raw, list) else []:
         if not isinstance(item, dict):
@@ -291,26 +427,44 @@ def verified_evidence(raw: Any, sources: list[dict], *, book_id: int | None = No
         ref = str(item.get("ref") or "")
         quote = str(item.get("quote") or "").strip()[:180]
         source = allowed.get(ref)
-        if not source or (book_id is not None and source["book_id"] != book_id):
-            continue
-        if not _quote_in_source(quote, source) or any(x["ref"] == ref for x in result):
+        aligned = _align_quote(quote, source) if source else None
+        match_status = "exact_ref" if aligned else ""
+        if not aligned:
+            # Recover a missing/wrong ref only from a substantial, uniquely located quote.
+            matches = [(candidate, found) for candidate in eligible
+                       if len(quote) >= 12 and (found := _align_quote(quote, candidate))]
+            if len(matches) > 1:
+                continue
+            if len(matches) == 1:
+                source, aligned = matches[0]
+                match_status = "recovered_ref"
+        if not aligned and source:
+            aligned = _align_minor_quote_error(quote, source)
+            if aligned:
+                match_status = "minor_quote_error"
+        if not aligned or source is None or any(x["ref"] == source["ref"] for x in result):
             continue
         result.append({
-            "ref": ref, "quote": quote, "book_id": source["book_id"],
+            "ref": source["ref"], "quote": aligned, "book_id": source["book_id"],
             "chunk_id": source["chunk_id"], "page": source["page"],
             "source_hash": source["hash"], "support_status": "ai_unchecked",
+            "match_status": match_status,
         })
     return result
 
 
-def normalize_reading(raw: Any, sources: list[dict], total_chunks: int) -> dict:
+def normalize_reading(raw: Any, sources: list[dict], total_chunks: int,
+                      passages: list[dict] | None = None) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("模型没有返回有效的论证地图")
+    passages = passages or []
     nodes = []
     for index, item in enumerate(raw.get("nodes", [])[:12] if isinstance(raw.get("nodes"), list) else []):
         if not isinstance(item, dict):
             continue
-        evidence = verified_evidence(item.get("evidence"), sources)
+        evidence = numbered_evidence(item.get("evidence_ids"), passages, sources)
+        if not evidence:
+            evidence = verified_evidence(item.get("evidence"), sources)
         statement = str(item.get("statement") or "").strip()[:400]
         if not evidence or not statement:
             continue
@@ -330,7 +484,9 @@ def normalize_reading(raw: Any, sources: list[dict], total_chunks: int) -> dict:
         if not isinstance(item, dict):
             continue
         source_id, target_id = str(item.get("from") or ""), str(item.get("to") or "")
-        edge_evidence = verified_evidence(item.get("evidence"), sources)
+        edge_evidence = numbered_evidence(item.get("evidence_ids"), passages, sources)
+        if not edge_evidence:
+            edge_evidence = verified_evidence(item.get("evidence"), sources)
         reason = str(item.get("reason") or "").strip()[:350]
         if source_id in valid_ids and target_id in valid_ids and source_id != target_id and edge_evidence and reason:
             edges.append({"from": source_id, "to": target_id,

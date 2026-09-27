@@ -38,10 +38,10 @@ const canRetry = task => ['failed', 'cancelled'].includes(task.status) && ['impo
 const canResubmit = task => ['failed', 'cancelled'].includes(task.status) && !['import', 'reimport'].includes(task.name)
 const activeTasks = computed(() => taskCenter.items.filter(isActive))
 const finishedTasks = computed(() => taskCenter.items.filter((item) => !isActive(item)))
-const taskLabel = (name) => ({ import: '文献导入 / OCR', reimport: '重新解析', deep: '结构精读', study: '综合研读', 'study-overview': '综合研读', 'literature-review': '文献综述', writing_dna: '写作 DNA', imitate: '独立仿写', 'clean-text': '去 AI 味（文本）', 'clean-docx': '去 AI 味（Word）', deck: '文献汇报', deck_outline: 'PPTX 提纲', deck_render: 'PPTX 渲染' }[name] || '知识处理')
+const taskLabel = (name) => ({ import: '文献导入 / OCR', reimport: '重新解析', deep: '结构精读', study: '综合研读', 'study-overview': '综合研读', 'literature-review': '文献综述', writing_dna: '写作 DNA', imitate: '独立仿写', 'clean-text': '去 AI 味（文本）', 'clean-docx': '去 AI 味（Word）', deck: '文献汇报', deck_outline: 'PPTX 提纲', deck_render: 'PPTX 渲染', research_concept: '概念义项追踪', research_alignment: '概念可比性', research_counter: '主动寻找反证', research_reading_plan: '区分性阅读任务', research_coach_question: '研究设计陪练', research_coach_feedback: '陪练反馈' }[name] || '知识处理')
 const statusLabel = (status) => ({ pending: '排队中', running: '处理中', cancelling: '取消中', cancelled: '已取消', done: '已完成', failed: '失败' }[status] || status)
 const statusType = (status) => ({ done: 'success', failed: 'danger', cancelled: 'info', cancelling: 'warning', running: 'warning', pending: 'info' }[status] || 'info')
-const stageLabel = (stage) => ({ parsing: '正在解析原文', ocr: '正在识别扫描页', deep: '正在结构化精读', overview: '正在汇总研读材料', 'research-plan': '正在规划研究路径', evidence: '正在检索和整理证据', synthesis: '正在跨文献综合写作', writing: '正在按 Writing DNA 写作', document: '正在生成 Word 与引用审计', analyze: '正在定位可改写痕迹', clean: '正在改写白名单命中项', apply: '正在应用改写并输出文件', generate: '正在生成汇报', deck_outline: '正在生成可编辑提纲', deck_render: '正在渲染并审计 PPTX' }[stage] || stage || '等待处理')
+const stageLabel = (stage) => ({ parsing: '正在解析原文', ocr: '正在识别扫描页', deep: '正在结构化精读', overview: '正在汇总研读材料', 'research-plan': '正在规划研究路径', evidence: '正在检索和整理证据', synthesis: '正在跨文献综合写作', writing: '正在按 Writing DNA 写作', document: '正在生成 Word 与引用审计', analyze: '正在定位可改写痕迹', clean: '正在改写白名单命中项', apply: '正在应用改写并输出文件', generate: '正在生成汇报', deck_outline: '正在生成可编辑提纲', deck_render: '正在渲染并审计 PPTX', concepts: '正在提取概念义项', alignment: '正在比较义项', queries: '正在生成检索问题', retrieval: '正在检索原文', evaluation: '正在筛选候选反证', reading_plan: '正在形成区分性阅读任务', coach_question: '正在生成材料类型专属问题', coach_feedback: '正在区分原文与用户推断', saving: '正在核对来源并保存' }[stage] || stage || '等待处理')
 const percentage = (value) => Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
 const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : ''
 const isStalled = (task) => task.status === 'running' && ['ocr', 'parsing'].includes(task.stage) && Date.now() - new Date(task.updated_at || task.created_at).getTime() > 120000
@@ -68,6 +68,7 @@ const requestRetry = async task => {
 }
 const goWorkspace = (task) => {
   visible.value = false
+  if (['research_concept', 'research_alignment', 'research_counter', 'research_reading_plan', 'research_coach_question', 'research_coach_feedback'].includes(task.name)) return router.push({ path: '/chat', query: task.result?.scope_type === 'project' ? { projectId: task.result.scope_id, archive: '1' } : task.result?.scope_type === 'shelf' ? { shelfId: task.result.scope_id, archive: '1' } : { archive: '1' } })
   if (['study', 'study-overview'].includes(task.name)) return router.push({ path: '/study', query: task.result?.report_id ? { reportId: task.result.report_id } : { taskId: task.task_id } })
   if (['deck', 'deck_outline', 'deck_render'].includes(task.name)) return router.push({ path: '/literature-workbench', query: task.book_id ? { bookId: task.book_id } : {} })
   if (task.book_id) return router.push(`/reader/${task.book_id}`)
@@ -76,6 +77,7 @@ const goWorkspace = (task) => {
 }
 const openTask = (task) => {
   visible.value = false
+  if (['research_concept', 'research_alignment', 'research_counter', 'research_reading_plan', 'research_coach_question', 'research_coach_feedback'].includes(task.name)) return router.push({ path: '/chat', query: task.result?.scope_type === 'project' ? { projectId: task.result.scope_id, archive: '1' } : task.result?.scope_type === 'shelf' ? { shelfId: task.result.scope_id, archive: '1' } : { archive: '1' } })
   if (['study', 'study-overview'].includes(task.name)) {
     const reportId = Number(task.result?.report_id)
     router.push({ path: '/study', query: reportId ? { reportId } : { taskId: task.task_id } })

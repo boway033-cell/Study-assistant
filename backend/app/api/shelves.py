@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
 from backend.app.models import Book, Shelf, shelf_books
+from backend.app.services.research_archive import delete_scope_archive
 
 router = APIRouter(prefix="/api/shelves", tags=["shelves"])
 
@@ -89,6 +90,17 @@ def delete_shelf(shelf_id: int, db: Session = Depends(get_db)):
     row = db.get(Shelf, shelf_id)
     if not row:
         raise HTTPException(404, "书架不存在")
+    # Child shelves are deleted by ORM cascade; clear each owned archive first.
+    pending = [row]
+    seen = set()
+    while pending:
+        shelf = pending.pop()
+        if shelf.id in seen:
+            continue
+        seen.add(shelf.id)
+        pending.extend(shelf.children)
+    for owned_id in seen:
+        delete_scope_archive(db, "shelf", owned_id)
     db.delete(row); db.commit()
 
 

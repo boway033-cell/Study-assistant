@@ -6,11 +6,11 @@
 
 本地优先的文献阅读与研究工作台 · 全文论证重建 · 跨文献发现 · 写作与汇报
 
-[![Version](https://img.shields.io/badge/version-v2.4-8B5A2B)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v2.5-8B5A2B)](CHANGELOG.md)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions)
 [![Local first](https://img.shields.io/badge/local--first-Windows-304747)](PRIVACY.md)
 
-[认识 2.4](#24-阅读理解与发现) · [开始使用](#开始使用) · [隐私与边界](#隐私与边界) · [变更日志](CHANGELOG.md)
+[认识 2.5](#25-个人知识助手与长书目录) · [开始使用](#开始使用) · [隐私与边界](#隐私与边界) · [变更日志](CHANGELOG.md)
 
 </div>
 
@@ -20,7 +20,13 @@ Study Assistant 帮你把自己拥有的论文、书籍、报告和课件组织�
 
 ![资料库中的书架、文献与阅读进度](docs/assets/screenshots/library.jpg)
 
-<p align="center"><sub>界面示例摄于 2.3.0；其中书目与研究结果为隔离演示库中的虚构样例。2.4 的“理解与发现”入口见下文功能说明。</sub></p>
+<p align="center"><sub>界面示例摄于 2.3.0；其中书目与研究结果为隔离演示库中的虚构样例。新功能以实际安装版本为准。</sub></p>
+
+## 2.5 个人知识助手与长书目录
+
+书架或项目可以作为助手的资料范围。助手按所选资料检索与回答，展示来源，并把研究问题、阅读任务、发现和归档连接起来。AI 输出统一应用中文技术写作规范；多任务调度与可配置的模型接口改善较长任务的处理方式。
+
+长书目录识别会区分印刷目录区、正文标题和数字表格，聚合多页目录并校正有一致偏移证据的 PDF 书签。目录样本库用 4 本大卫·哈维著作及 4 本其他长书复验标题、层级和 PDF 物理页。方法与结果见[目录样本库报告](docs/reports/TOC_CORPUS_REVALIDATION_2026-09-27.md)。
 
 ## 2.4 阅读、理解与发现
 
@@ -66,7 +72,7 @@ PDF、DOCX、PPTX 可导入本机资料库，按书架、目录、阅读状态�
 
 当前版本是 **Windows 本地 Web 应用**：服务在你的电脑上运行，浏览器用于操作。没有免安装桌面 EXE。
 
-1. 从 [GitHub Releases](https://github.com/boway033-cell/Study-assistant/releases) 下载 `study-assistant-v2.4.zip`，完整解压。该附件包含已构建前端，仍需 64 位 Python 3.12+。
+1. 从 [GitHub Releases](https://github.com/boway033-cell/Study-assistant/releases) 下载 `study-assistant-v2.5.zip`，完整解压。该附件包含已构建前端，仍需 64 位 Python 3.12+。
 2. 双击 `install.bat`，按向导安装依赖并启动；中断后再次运行可继续。`diagnose.bat` 可检查安装状态。
 3. 在资料库导入自己的资料，或加载虚构演示资料体验阅读和笔记。使用 AI 功能前，到“设置 → 模型连接”添加自己的供应商连接，并检查任务路由与预算。
 
@@ -75,7 +81,7 @@ PDF、DOCX、PPTX 可导入本机资料库，按书架、目录、阅读状态�
 ```powershell
 git clone https://github.com/boway033-cell/Study-assistant.git
 cd Study-assistant
-git checkout v2.4
+git checkout v2.5
 .\install.bat
 ```
 

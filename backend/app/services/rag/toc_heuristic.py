@@ -118,6 +118,7 @@ def _clean_title(raw: str) -> str:
     # NFKC repairs full-width Latin/digits from CJK journal PDFs. Private-use
     # glyphs are font artefacts (often rendered as empty squares), never titles.
     t = unicodedata.normalize("NFKC", str(raw or ""))
+    t = re.sub(r"[\x00-\x1f]", " ", t)
     t = _PRIVATE_GLYPH_RE.sub(" ", t)
     t = re.sub(r"\s+", " ", t.strip())
     t = re.sub(r"\s+[.．·…]{2,}\s*\d+\s*$", "", t)
@@ -132,6 +133,8 @@ def _compact_heading_spacing(raw: str) -> str:
     s = re.sub(r"[\t\u3000]+", " ", s).strip()
     s = s.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
     # “第 三 节”“（ 一 ）”是 PDF 文字层最常见的标题标记拆散形式。
+    s = re.sub(rf"第(?:\s*[{_CN}0-9]){{1,6}}\s*[章节篇编部]",
+               lambda match: re.sub(r"\s+", "", match.group()), s)
     s = re.sub(rf"第\s*([{_CN}0-9]+)\s*部\s*分", r"第\1部分", s)
     s = re.sub(rf"第\s*([{_CN}0-9]+)\s*([章节篇编部])", r"第\1\2", s)
     s = re.sub(rf"[（(]\s*([{_CN}0-9]+)\s*[）)]", r"（\1）", s)
@@ -216,6 +219,20 @@ def _deduplicate(results: list[dict]) -> list[dict]:
     return out
 
 
+def _collapse_running_headings(rows: list[dict]) -> list[dict]:
+    """Keep the first occurrence of a heading repeated across adjacent pages."""
+    last_seen: dict[tuple[str, int], int] = {}
+    output = []
+    for row in rows:
+        key = (_norm_title_key(row["title"]), row["level"])
+        page = row["page"]
+        recent = page - last_seen.get(key, -1000) <= 1
+        last_seen[key] = page
+        if not recent:
+            output.append(row)
+    return output
+
+
 _HEADING_START_RE = re.compile(
     rf"^\s*(?:第\s*[{_CN}0-9]+\s*[章节篇编部]|[{_CN}]+[、.．]|[（(]\s*[{_CN}0-9]+\s*[）)]|\d{{1,3}}(?:[.．]\d{{1,3}})+)"
 )
@@ -235,6 +252,7 @@ def _join_heading_lines(lines: list[str], idx: int) -> tuple[str, int]:
     nxt = lines[idx + 1].strip()
     if (
         not nxt or len(nxt) > 30 or classify_heading(nxt) or _BODY_END.search(nxt)
+        or _SENTENCE_PUNCT.search(nxt)
         or re.fullmatch(r"\d{1,3}(?:[.．]\d{1,3}){1,3}", nxt)
     ):
         return line, 1
@@ -244,7 +262,7 @@ def _join_heading_lines(lines: list[str], idx: int) -> tuple[str, int]:
         "", title,
     )
     should_join = (
-        len(suffix) <= 2
+        not suffix
         or bool(re.search(r"[、，：:与和及的对于]$", suffix))
         or bool(_CONTINUATION_START_RE.match(_compact_heading_spacing(nxt)))
     )
@@ -254,30 +272,105 @@ def _join_heading_lines(lines: list[str], idx: int) -> tuple[str, int]:
 
 
 def contents_page_numbers(pages: list[str]) -> set[int]:
-    """识别总目录和分篇目录；印刷页码不是 PDF 物理页定位证据。"""
+    """识别目录起始页及连续的续页；印刷页码不是 PDF 物理页定位证据。"""
     found = set()
+    continuing = False
     for pno, text in enumerate(pages, 1):
         lines = [line.strip() for line in text.splitlines() if line.strip()]
-        header = any(re.fullmatch(r"(?:目\s*录|总目录|详细目录|contents|table\s+of\s+contents)",
+        header = any(re.fullmatch(r"(?:目\s*录|目次|总目录|详细目录|contents|table\s+of\s+contents)",
                                   line, re.I) for line in lines[:5])
         entries = sum(bool(re.search(r"\D.{1,90}(?:[.．·…]{2,}\s*|\s+)\d{1,4}\s*$", line))
                       for line in lines)
         headings = sum(bool(_HEADING_START_RE.match(line)) for line in lines)
+        # Number-heavy body tables can begin with decimals that resemble a
+        # chapter marker. Require real heading syntax when there is no TOC
+        # header, so a distant statistics page cannot start a new TOC region.
+        semantic_headings = sum(classify_heading(line) is not None for line in lines)
+        dotted_entries = sum(bool(re.search(r"[.．·…]{2,}", line)) for line in lines)
         separate_numbers = sum(bool(re.fullmatch(r'\d{1,4}', line)) for line in lines)
-        # 延续页可能没有“目录”字样；需要多数行呈条目形态，避免误伤正文列表。
-        if ((header and (entries >= 2 or headings >= 2))
-                or (entries >= 4 and entries >= len(lines) * .45)
-                or (headings >= 3 and separate_numbers >= 3
+        long_lines = sum(len(line) >= 45 for line in lines)
+        prose_lines = sum(bool(_SENTENCE_PUNCT.search(line)) for line in lines)
+        table_like = (len(lines) >= 6 and separate_numbers >= 3
+                      and separate_numbers <= len(lines) * .60
+                      and long_lines <= max(1, len(lines) // 8)
+                      and prose_lines <= 2)
+        # 无页码或点线的普通正文标题不足以开启目录区；续页必须紧邻已确认目录页。
+        start = ((header and (entries >= 2 or headings >= 2 or table_like))
+                 or (entries >= 4 and (semantic_headings >= 2 or dotted_entries >= 3)
+                     and entries >= len(lines) * .45)
+                or (semantic_headings >= 3 and separate_numbers >= 3
+                    and separate_numbers <= len(lines) * .60
                     and headings + separate_numbers >= len(lines) * .45
-                    and sum(bool(_SENTENCE_PUNCT.search(line)) for line in lines) <= 2)):
+                    and prose_lines <= 2))
+        if start or (continuing and table_like):
             found.add(pno)
+            continuing = True
+        else:
+            continuing = False
     return found
 
 
-def extract_toc_heuristic(pages: list[str], min_pages: int = 2) -> list[dict]:
+_TOC_INLINE_PAGE_RE = re.compile(r"^(.{2,90}?)\s*(?:[.．·…]{2,}\s*|\s+)(\d{1,4})\s*$")
+_TOC_MARKER_RE = re.compile(rf"^第\s*[{_CN}0-9]+\s*(?:章|节|篇|编|部|部分)$")
+
+
+def extract_contents_entries(pages: list[str], contents_pages: set[int] | None = None) -> list[dict]:
+    """Aggregate printed TOC rows across adjacent pages without treating them as body locations."""
+    selected = contents_page_numbers(pages) if contents_pages is None else contents_pages
+    entries: list[dict] = []
+    marker = candidate = ""
+    last_level = 1
+    for pno in sorted(selected):
+        for line_no, raw in enumerate(pages[pno - 1].splitlines()):
+            line = raw.strip()
+            if not line or re.fullmatch(r"(?:目\s*录|目次|总目录|详细目录|contents|table\s+of\s+contents)", line, re.I):
+                continue
+            match = _TOC_INLINE_PAGE_RE.match(line)
+            printed = None
+            if match:
+                title, printed = match.group(1), int(match.group(2))
+            elif re.fullmatch(r"\d{1,4}", line):
+                title, printed = candidate, int(line)
+            elif _TOC_MARKER_RE.fullmatch(_compact_heading_spacing(line)):
+                marker, candidate = line, ""
+                continue
+            elif len(line) <= 80 and not _SENTENCE_PUNCT.search(line):
+                candidate = line
+                continue
+            else:
+                marker = candidate = ""
+                continue
+            title = _clean_title((marker + " " if marker else "") + title)
+            marker = candidate = ""
+            if not title or printed is None or len(title) < 2:
+                continue
+            semantic = classify_heading(title)
+            if semantic:
+                title, level = semantic
+                last_level = level
+            else:
+                level = min(4, last_level + 1) if entries else 1
+            entries.append({"title": title, "level": level, "printed_page": printed,
+                            "toc_page": pno, "line": line_no})
+    # Two-column PDF text layers can emit the right column before the left one.
+    # Reorder only within that printed TOC page, and only for a clear page reversal.
+    ordered = []
+    for pno in sorted(selected):
+        group = [entry for entry in entries if entry["toc_page"] == pno]
+        if len(group) >= 5 and any(
+            group[index - 1]["printed_page"] - group[index]["printed_page"] >= 10
+            for index in range(1, len(group))
+        ):
+            group.sort(key=lambda entry: (entry["printed_page"], entry["line"]))
+        ordered.extend(group)
+    return ordered
+
+
+def extract_toc_heuristic(pages: list[str], min_pages: int = 2,
+                          contents_pages: set[int] | None = None) -> list[dict]:
     """扫描整页标题候选，允许同页多个层级标题。"""
     results: list[dict] = []
-    contents_pages = contents_page_numbers(pages)
+    contents_pages = contents_page_numbers(pages) if contents_pages is None else contents_pages
     for pno, text in enumerate(pages, start=1):
         if pno in contents_pages:
             continue
@@ -292,19 +385,22 @@ def extract_toc_heuristic(pages: list[str], min_pages: int = 2) -> list[dict]:
             title, level = hit
             results.append({"title": title, "level": level, "page": pno, "line": idx})
             idx += consumed
-    results = _deduplicate(results)
+    results = _collapse_running_headings(_deduplicate(results))
     if len({x["page"] for x in results}) < min_pages or len(results) < 2:
         return []
     return results
 
 
-def extract_toc_from_layout(layout) -> list[dict]:
+def extract_toc_from_layout(layout, contents_pages: set[int] | None = None) -> list[dict]:
     """从字号/坐标标题块提取，并用文本编号纠正层级。"""
     results: list[dict] = []
     if not layout or not layout.pages:
         return results
+    if contents_pages is None:
+        contents_pages = contents_page_numbers(["\n".join(blk.text for blk in blocks)
+                                                for blocks in layout.pages])
     for page_blocks in layout.pages:
-        if contents_page_numbers(["\n".join(blk.text for blk in page_blocks)]):
+        if page_blocks and page_blocks[0].page in contents_pages:
             continue
         widths = [blk.bbox[2] - blk.bbox[0] for blk in page_blocks
                   if hasattr(blk, 'bbox') and len(blk.text) >= 22 and blk.bbox[2] > blk.bbox[0]]
@@ -356,7 +452,7 @@ def extract_toc_from_layout(layout) -> list[dict]:
                 # 字号显著更大的块是章/文献题名；普通加粗短行是其下的小节。
                 level = 1 if blk.size >= layout.body_size * 1.55 else 2
             results.append({"title": title, "level": level, "page": blk.page, "line": idx})
-    results = _deduplicate(results)
+    results = _collapse_running_headings(_deduplicate(results))
     return results if len(results) >= 2 else []
 
 

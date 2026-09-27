@@ -23,6 +23,7 @@ onnxruntime==1.28.0
 
 # 云端 AI 客户端
 httpx==0.28.1
+truststore==0.10.4
 openai==3.1.0
 
 # API Key 加密存储

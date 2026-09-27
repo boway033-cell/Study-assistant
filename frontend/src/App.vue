@@ -1,5 +1,5 @@
 <template>
-  <el-container class="layout" :class="{ 'is-reader-layout': $route.name === 'reader' }">
+  <el-container class="layout" :class="{ 'is-reader-layout': $route.name === 'reader', 'no-card-glow': !uiPreferences.glowBorders }">
     <el-aside :width="sidebarCollapsed ? '76px' : '252px'" class="aside desktop-aside">
       <div class="logo">
         <span class="logo-dew">💧</span>
@@ -43,6 +43,7 @@ import { Menu, Fold, Expand, Bell } from '@element-plus/icons-vue'
 import AppNavigation from './components/AppNavigation.vue'
 import GlobalTaskCenter from './components/GlobalTaskCenter.vue'
 import { taskCenter, startTaskPolling, stopTaskPolling } from './stores/taskCenter'
+import { uiPreferences } from './stores/uiPreferences'
 
 const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
 const mobileNav = ref(false)

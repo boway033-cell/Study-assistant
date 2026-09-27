@@ -227,17 +227,21 @@ def test_fallback_app_ports_can_create_shelves():
     assert all("0.0.0.0" not in origin for origin in _ALLOWED_ORIGINS)
     payload = health()
     assert payload["app"] == "study-assistant"
-    assert payload["api_revision"] >= 4
+    assert payload["api_revision"] >= 13
     assert payload["capabilities"]["shelves_write"] is True
     assert payload["capabilities"]["knowledge_insights"] is True
+    assert payload["capabilities"]["assistant_scopes"] is True
+    assert payload["capabilities"]["chinese_writing_style"] == "2026-09-26.2"
 
 
 def test_runtime_launcher_rejects_backends_without_knowledge_insights():
     root = Path(__file__).resolve().parents[2]
     launcher = (root / "scripts" / "runtime" / "auto_start.ps1").read_text(encoding="utf-8")
 
-    assert "[int]$response.api_revision -ge 4" in launcher
+    assert "[int]$response.api_revision -ge 13" in launcher
     assert "$response.capabilities.knowledge_insights -eq $true" in launcher
+    assert "$response.capabilities.assistant_scopes -eq $true" in launcher
+    assert '$response.capabilities.chinese_writing_style -eq "2026-09-26.2"' in launcher
 
 
 def test_public_deck_excludes_unknown_rights_figures():

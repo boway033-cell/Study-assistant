@@ -19,6 +19,7 @@ from docx import Document
 from backend.app.core.config import settings
 from backend.app.models import Setting, WritingOutput
 from backend.app.services.llm import LLMRouter, load_llm_config
+from backend.app.services.chinese_style_audit import audit_chinese_style
 from backend.app.services.official_skills.lieflat.scripts import check_params
 from backend.app.services.official_skills.sanmu.scripts.common import deep_merge, flatten, load_preset, validate_override
 from backend.app.services.official_skills.sanmu.scripts.docx_engine import add_text, finalize
@@ -57,7 +58,8 @@ def serialize(row) -> dict:
 def new_version(db, *, brief, title, text, stage, parent=None, confirmed=False):
     audit = {"stage": stage, "brief": brief, "confirmed": confirmed,
              "parent_id": parent.id if parent else None, "skills": SKILLS,
-             "checks": inspect_text(text, brief) if stage == "draft" else None}
+             "checks": inspect_text(text, brief) if stage == "draft" else None,
+             "style_audit": audit_chinese_style(text)}
     row = WritingOutput(kind=KIND, title=title, source_text=brief.get("facts", ""), output_text=text,
                         audit_json=json.dumps(audit, ensure_ascii=False))
     db.add(row)
@@ -121,7 +123,9 @@ async def model_text(db, stage: str, payload: dict) -> str:
 不要调用外部工具或声称已执行文件命令。使用中文段落、必要的中文层级标题；不输出 Markdown 表格。
 以下是参考写作规则；与以上约束冲突时以上为准：
 """
-    provider = LLMRouter.get("auto", load_llm_config(db, "writing"))
+    cfg = load_llm_config(db, "writing")
+    cfg["writing_style_profile"] = "official"
+    provider = LLMRouter.get("auto", cfg)
     messages = [{"role": "system", "content": guard + drafting_rules() + "\n当前阶段：" + instructions[stage]},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
 

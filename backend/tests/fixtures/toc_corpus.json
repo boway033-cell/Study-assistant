@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "page_numbering": "PDF physical pages, one-based",
+  "note": "Only bibliographic identifiers, TOC page labels, and short verified heading anchors are stored. Source PDFs stay in the local library.",
+  "cases": [
+    {
+      "id": "harvey-capital-2",
+      "book_id": 99,
+      "sha256": "88005cd41860a03352c9201b35e462f58c1df4856acd29129e32d49566dcade9",
+      "kind": "native-long",
+      "toc_pages": [8],
+      "min_rows": 12,
+      "max_rows": 25,
+      "anchors": [
+        {"title": "一  资本循环（第二卷第1—3章）", "page": 43, "level": 1},
+        {"title": "三  固定资本问题（第二卷第7—11章）", "page": 118, "level": 1},
+        {"title": "六  马克思论信用制度（第三卷第27—37章）", "page": 224, "level": 1},
+        {"title": "十  资本的再生产（第二卷第18—20章）", "page": 334, "level": 1}
+      ]
+    },
+    {
+      "id": "harvey-capital-1",
+      "book_id": 100,
+      "sha256": "cd6a35e5296467afed0c442a9c709d21eb1774dccd9eb9baf0fa713990bf7c11",
+      "kind": "native-long",
+      "toc_pages": [9],
+      "min_rows": 15,
+      "max_rows": 35,
+      "anchors": [
+        {"title": "一  商品与交换", "page": 29, "level": 1},
+        {"title": "二  货币", "page": 69, "level": 1},
+        {"title": "三  从资本到劳动力", "page": 103, "level": 1},
+        {"title": "四  劳动过程和剩余价值的生产", "page": 131, "level": 1}
+      ]
+    },
+    {
+      "id": "harvey-grundrisse",
+      "book_id": 103,
+      "sha256": "25af13e94dcc7f0a428599557ddcf5a26f4ba55e8334cda64f092cee50f29226",
+      "kind": "native-long-no-printed-toc",
+      "toc_pages": [],
+      "min_rows": 12,
+      "max_rows": 25,
+      "anchors": [
+        {"title": "第一章 马克思的“导言”", "page": 18, "level": 1},
+        {"title": "第三章 异己的资本遇到异己的劳动", "page": 99, "level": 1},
+        {"title": "第七章 周转的时间、空间与资本的价值实现", "page": 252, "level": 1},
+        {"title": "第十二章 阶级与政治经济学", "page": 408, "level": 1}
+      ]
+    },
+    {
+      "id": "harvey-marx-capital",
+      "book_id": 102,
+      "sha256": "3322772bc633bca123bbe88fd95178be987a23d12ded0d819905964e8762097d",
+      "kind": "native-and-unnumbered-printed",
+      "toc_pages": [3],
+      "min_rows": 9,
+      "max_rows": 20,
+      "anchors": [
+        {"title": "第一章 资本作为价值运动的示意图", "page": 10, "level": 1},
+        {"title": "第四章 反价值：贬值理论", "page": 72, "level": 1},
+        {"title": "第七章 价值的空间和时间", "page": 120, "level": 1},
+        {"title": "第九章 经济逻辑的疯狂", "page": 158, "level": 1}
+      ]
+    },
+    {
+      "id": "bourdieu-practical-sense",
+      "book_id": 85,
+      "sha256": "abaaf54aec97c5d4e37f6d379f329215fbaeddf4e66ab2899b2a6c41e61a369a",
+      "kind": "native-multilevel-multipage",
+      "toc_pages": [7, 8],
+      "min_rows": 25,
+      "max_rows": 45,
+      "anchors": [
+        {"title": "卷一 理论理性批判", "page": 43, "level": 1},
+        {"title": "第一章 客观化的客观化", "page": 52, "level": 2},
+        {"title": "第五章 实践逻辑", "page": 132, "level": 2},
+        {"title": "第八章 支配方式", "page": 201, "level": 2}
+      ]
+    },
+    {
+      "id": "public-management-third-edition",
+      "book_id": 3,
+      "sha256": "714cec3a069cd5abba0b6923ddfacfee533a7f12c4d791a25e5dfebaf0de036b",
+      "kind": "printed-four-pages-no-bookmarks",
+      "toc_pages": [16, 17, 18, 19],
+      "min_rows": 80,
+      "max_rows": 150,
+      "anchors": [
+        {"title": "第1章 公共管理导论", "page": 20, "level": 1},
+        {"title": "第5章 公共部门的角色", "page": 104, "level": 1},
+        {"title": "第10章 公务人力资源管理", "page": 232, "level": 1},
+        {"title": "第11章 公共预算与财务管理", "page": 257, "level": 1},
+        {"title": "第18章 公共管理现代化:变革与发展", "page": 412, "level": 1}
+      ]
+    },
+    {
+      "id": "zhongxian-cadres",
+      "book_id": 101,
+      "sha256": "64096ac2af35494b0d61dde08ba5c7d3a37ec461783b93d9483e7774c5bade20",
+      "kind": "printed-toc-vs-body-numeric-tables",
+      "toc_pages": [9],
+      "forbidden_toc_pages": [135, 136],
+      "min_rows": 25,
+      "max_rows": 50,
+      "anchors": [
+        {"title": "第一章 绪论", "page": 10, "level": 1},
+        {"title": "第一节 研究对象和方法", "page": 10, "level": 2},
+        {"title": "第二章 构成", "page": 23, "level": 1},
+        {"title": "第三章 进入", "page": 45, "level": 1},
+        {"title": "第七章 关系", "page": 151, "level": 1}
+      ]
+    },
+    {
+      "id": "beck-risk-society",
+      "book_id": 89,
+      "sha256": "41b2d52005db71a2792a3821bd31bbd3513b6f9abf0ffdb9f8e60322bb66d34f",
+      "kind": "native-multilevel-long",
+      "toc_pages": [7],
+      "min_rows": 10,
+      "max_rows": 25,
+      "anchors": [
+        {"title": "第一部分 生活在文明的火山上：风险社会概观", "page": 20, "level": 1},
+        {"title": "第一章 论财富分配的逻辑和风险分配的逻辑", "page": 22, "level": 2},
+        {"title": "第二部分 社会不平等的个体化：生活形式和传统的消亡", "page": 110, "level": 1},
+        {"title": "第三章 超越身份和阶级？", "page": 118, "level": 2}
+      ]
+    }
+  ]
+}

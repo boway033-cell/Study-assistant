@@ -675,7 +675,6 @@ def ai_generate(req: KnowledgeAiGenerateReq, db: Session = Depends(get_db)):
         db2 = SessionLocal()
         try:
             cfg = load_llm_config(db2, "research")
-            cfg = {**cfg, "deepseek_model": "flash"}  # 批量生成固定用 flash
             provider = LLMRouter.get("auto", cfg)
             total = 0
             for material_index, material in enumerate(materials):
@@ -772,8 +771,8 @@ def expand_node(req: KnowledgeNodeExpandReq, db: Session = Depends(get_db)):
 
     node = _get_node(db, req.node_id)
     cfg = load_llm_config(db, "research")
-    if not cfg.get("deepseek_api_key"):
-        raise HTTPException(400, "未配置 DeepSeek API Key")
+    if not cfg.get("configured"):
+        raise HTTPException(400, "研究模型连接尚未配置")
 
     # 素材：节点标题 + 关联章节文本（若有）
     context = f"知识点：{node.title}"
@@ -882,8 +881,8 @@ async def review_note(node_id: int, db: Session = Depends(get_db)):
 
     node = _get_node(db, node_id)
     cfg = load_llm_config(db, "research")
-    if not cfg.get("deepseek_api_key"):
-        raise HTTPException(400, "未配置 DeepSeek API Key")
+    if not cfg.get("configured"):
+        raise HTTPException(400, "研究模型连接尚未配置")
     provider = LLMRouter.get("auto", cfg)
     # 关联章节上下文（用于核对笔记准确性）
     ctx = ""
