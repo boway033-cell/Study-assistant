@@ -237,6 +237,7 @@ export const chatStream = async (body, onEvent, options = {}) => {
 export const chatHistory = (params) => http.get('/chat/history', { params })
 export const getChat = (id) => http.get(`/chat/${id}`)
 export const deleteChat = (id) => http.delete(`/chat/${id}`)
+export const chatMetrics = (window) => http.get('/chat/metrics', { params: { window } })
 
 // ===== 题目 =====
 export const listQuizzes = (params) => http.get('/quizzes', { params })

@@ -259,7 +259,7 @@ def test_chat_model_override_reaches_custom_provider(monkeypatch):
         return SimpleNamespace(name="custom", model="requested-model")
 
     monkeypatch.setattr(chat_api.LLMRouter, "get", capture_provider)
-    asyncio.run(chat_api.chat(ChatReq(question="这是什么？", model="requested-model"), db=object()))
+    asyncio.run(chat_api.chat(ChatReq(question="资本主义是什么？", model="requested-model"), db=object()))
     assert received["config"]["model"] == "requested-model"
     assert received["actual_model"] == "requested-model"
     assert received["config"]["fallbacks"] == []
@@ -287,7 +287,7 @@ def test_chat_history_records_the_provider_that_actually_answered(monkeypatch):
     monkeypatch.setattr(chat_api, "record_citation_eval", lambda verification: None)
 
     async def consume(db):
-        response = await chat_api.chat(ChatReq(question="这是什么？"), db=db)
+        response = await chat_api.chat(ChatReq(question="资本主义是什么？"), db=db)
         return [part async for part in response.body_iterator]
 
     try:

@@ -32,6 +32,7 @@
           <el-divider />
           <div class="history-title">历史记录</div>
           <div v-for="h in history" :key="h.id" class="history-item" role="button" tabindex="0"
+            :aria-disabled="sending"
             @click="viewHistory(h)" @keydown.enter.prevent="viewHistory(h)" @keydown.space.prevent="viewHistory(h)">
             <div class="history-q">{{ h.question }}</div>
             <div class="history-time">{{ formatTime(h.created_at) }} · {{ h.model }}</div>
@@ -46,19 +47,27 @@
           <template #header>
             <div class="chat-header">
               <span>我的资料助手</span>
-              <el-button link size="small" @click="newConversation">新对话</el-button>
+              <el-button link size="small" :disabled="sending" @click="newConversation">新对话</el-button>
             </div>
           </template>
           <div ref="msgBox" class="msg-box">
             <StudyEmptyState v-if="!messages.length" compact title="从一个可核验问题开始" description="答案会标注书目、章节与页码，选择引用后可在右侧核对原文。" />
             <div v-for="(m, i) in messages" :key="i" :class="['msg', m.role]">
-              <div class="msg-label">{{ m.role === 'user' ? '我' : (m.model ? `AI · ${m.model}` : 'AI') }}</div>
+              <div class="msg-label" :title="m.model || ''">{{ m.role === 'user' ? '我' : (m.qa?.intent === 'clarify' ? '本地' : 'AI') }}</div>
               <div class="msg-content">
+                <small v-if="m.role === 'assistant' && m.model" class="msg-model">{{ m.model }}</small>
                 <div v-if="m.streaming" class="streaming">{{ m.content }}</div>
                 <div v-else v-html="sanitizeHtml(m.content)"></div>
                 <el-button v-if="m.role==='user' && activeScopeType" link size="small" @click="rememberMessage(m)">记到我的记忆</el-button>
                 <p v-if="m.citationAudit" class="citation-audit" :class="{ 'citation-audit-warn': !m.citationAudit.verified }">
-                  {{ m.citationAudit.verified ? '引用编号已核对；主张是否得到原文支持仍需核对' : '引用缺失或编号无效；请逐条核对原文' }}
+                  {{ citationAuditLabel(m.citationAudit) }}
+                </p>
+                <p v-if="m.qa" class="qa-line">
+                  <el-tag size="small" :type="intentTagType(m.qa.intent)">{{ intentLabel(m.qa.intent) }}</el-tag>
+                  <span class="qa-timing">{{ formatTiming(m.qa) }}</span>
+                  <span v-if="m.qa.citation_support_rate !== null && m.qa.citation_support_rate !== undefined"
+                        class="qa-timing">词面筛查 {{ Math.round(m.qa.citation_support_rate * 100) }}%</span>
+                  <span v-if="m.qa.abstained" class="qa-timing">已明确说明资料未覆盖</span>
                 </p>
                 <el-popover v-if="m.styleAudit?.issue_count" placement="top" :width="340" trigger="click">
                   <template #reference><el-button link size="small">文字规范待复核（{{ m.styleAudit.issue_count }}）</el-button></template>
@@ -67,6 +76,10 @@
                     <small>自动检查只标出可能的格式问题；事实和引用仍需对照原文。</small>
                   </div>
                 </el-popover>
+                <div v-if="m.clarifyOptions?.length" class="clarify-options">
+                  <span class="clarify-hint">补充对象后继续：</span>
+                  <el-button v-for="(opt, k) in m.clarifyOptions" :key="k" size="small" :disabled="sending" @click="continueClarification(m, opt)">{{ opt }}</el-button>
+                </div>
                 <div v-if="m.sources?.length" class="sources">
                   <el-tag v-for="(s, j) in m.sources" :key="j" size="small" type="info"
                     :effect="activeSourceIndex === i && activeSourceIdx === j ? 'dark' : 'plain'"
@@ -152,6 +165,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { clarCandidates, clarifiedQuestion, citationAuditLabel } from '../utils/chatQa.js'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listBooks, listShelves, chatStream, chatHistory, getChat, getChunkOriginal, getBook, bookFileUrl,
@@ -291,7 +305,7 @@ const send = async () => {
     return
   }
   messages.value.push({ role: 'user', content: q })
-  const aiMsg = ref({ role: 'assistant', content: '', streaming: true, sources: [], bookId: bookId.value })
+  const aiMsg = ref({ role: 'assistant', content: '', originalQuestion: q, streaming: true, sources: [], bookId: bookId.value })
   messages.value.push(aiMsg.value)
   question.value = ''
   sending.value = true
@@ -304,6 +318,7 @@ const send = async () => {
       conversation_id: conversationId.value, question: q }, (event, data) => {
       if (event === 'meta') {
         aiMsg.value.model = data.model || ''
+        if (data.conversation_id) { conversationId.value = data.conversation_id; saveConversationId() }
       } else if (event === 'token') {
         aiMsg.value.content += data.text
         scrollBottom()
@@ -313,6 +328,9 @@ const send = async () => {
         aiMsg.value.sources = data.sources || []
         aiMsg.value.citationAudit = data.citation_audit || null
         aiMsg.value.styleAudit = data.style_audit || null
+        aiMsg.value.qa = data.qa || null
+        // 澄清轮：把候选对象做成可点击按钮，点一下即以该对象重新提问。
+        aiMsg.value.clarifyOptions = data.qa?.intent === 'clarify' ? clarCandidates(data) : []
         scrollBottom()
         loadHistory()
         // 自动在右侧展示第一个出处的原文
@@ -323,7 +341,7 @@ const send = async () => {
           loadSourcePanel(s0.book_id || aiMsg.value.bookId || bookId.value, s0.chunk_id, s0)
         }
       } else if (event === 'error') {
-        aiMsg.value.content = '⚠️ ' + data.message
+        aiMsg.value.content += '\n\n⚠️ 生成未完成：' + data.message
         aiMsg.value.streaming = false
       }
     }, { signal: controller.signal })
@@ -332,13 +350,44 @@ const send = async () => {
       // 用户主动停止：保留已生成内容，仅结束流式态
       aiMsg.value.streaming = false
     } else {
-      aiMsg.value.content = '⚠️ 请求失败：' + e.message
+      aiMsg.value.content += '\n\n⚠️ 请求失败：' + e.message
       aiMsg.value.streaming = false
     }
   } finally {
     sending.value = false
     streamAbort.value = null
   }
+}
+
+const INTENT_LABELS = {
+  new_question: '新问题',
+  followup: '追问',
+  summarize: '摘要',
+  clarify: '澄清'
+}
+
+const continueClarification = (message, option) => {
+  if (sending.value) return
+  question.value = clarifiedQuestion(message, option)
+  send()
+}
+
+const intentLabel = (intent) => INTENT_LABELS[intent] || '问答'
+
+const intentTagType = (intent) => ({
+  new_question: 'info', followup: 'primary', summarize: 'success', clarify: 'warning'
+}[intent] || 'info')
+
+const formatDuration = (ms) => {
+  if (ms === null || ms === undefined) return ''
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
+}
+
+const formatTiming = (qa) => {
+  const parts = []
+  if (qa.ttft_ms != null && qa.intent !== 'clarify') parts.push(`首字 ${formatDuration(qa.ttft_ms)}`)
+  if (qa.e2e_ms) parts.push(`总耗时 ${formatDuration(qa.e2e_ms)}`)
+  return parts.join(' · ')
 }
 
 const stopStream = () => {
@@ -361,12 +410,15 @@ const loadHistory = async (page = 1, append = false) => {
 const loadMoreHistory = () => loadHistory(historyPage.value + 1, true)
 
 const viewHistory = async (summary) => {
+  if (sending.value) return
   let h
   try { h = await getChat(summary.id) } catch (error) { ElMessage.error('历史详情加载失败：' + error.message); return }
   conversationId.value = h.conversation_id || freshConversationId()
   saveConversationId()
   messages.value = [{ role: 'user', content: h.question }]
-  const msg = { role: 'assistant', content: h.answer, model: h.model, sources: h.sources || [], citationAudit: h.citation_audit || null, styleAudit: h.style_audit || null, bookId: bookId.value }
+  const msg = { role: 'assistant', content: h.answer, originalQuestion: h.question, model: h.model, qa: h.qa || null,
+    clarifyOptions: h.qa?.intent === 'clarify' ? clarCandidates(h) : [], sources: h.sources || [],
+    citationAudit: h.citation_audit || null, styleAudit: h.style_audit || null, bookId: bookId.value }
   messages.value.push(msg)
   if (h.sources?.length) {
     activeSourceIndex.value = messages.value.length - 1
@@ -436,6 +488,7 @@ const restoreConversationId = () => {
   saveConversationId()
 }
 const newConversation = () => {
+  if (sending.value) return
   conversationId.value = freshConversationId()
   saveConversationId()
   messages.value = []
@@ -622,6 +675,9 @@ onBeforeUnmount(() => { streamAbort.value?.abort(); clearInterval(statusPollTime
 .chat-row { height: 100%; }
 .chat-row > .el-col { height: 100%; }
 .side-card, .chat-card, .source-card { height: 100%; display: flex; flex-direction: column; }
+.chat-card :deep(.el-card__body) { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.side-card :deep(.el-card__body), .source-card :deep(.el-card__body) { flex: 1; min-height: 0; overflow-y: auto; }
+.chat-card :deep(.el-card__header) { flex-shrink: 0; }
 .chat-header { display: flex; justify-content: space-between; align-items: center; }
 .msg-box { flex: 1; overflow-y: auto; padding: 8px; }
 .msg { margin-bottom: 16px; display: flex; gap: 10px; }
@@ -636,12 +692,21 @@ onBeforeUnmount(() => { streamAbort.value?.abort(); clearInterval(statusPollTime
   max-width: 70%; padding: 10px 14px; border-radius: 8px;
   background: var(--el-fill-color-lighter); font-size: 14px; line-height: 1.7; white-space: pre-wrap;
 }
+.msg-label { flex-shrink: 0; }
+.msg-content { min-width: 0; overflow-wrap: anywhere; }
+.msg-model { display: block; color: var(--study-text-secondary); font-size: 11px; line-height: 1.5; margin-bottom: 4px; }
+.input-row { flex-shrink: 0; }
 .msg.user .msg-content { background: var(--el-color-primary-light-9); }
 .streaming::after { content: '▌'; animation: blink 1s infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .sources { margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap; }
 .citation-audit { margin-top: 8px; color: var(--study-text-secondary); font-size: 12px; line-height: 1.5; }
 .citation-audit-warn { color: var(--el-color-warning-dark-2); }
+.qa-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0 0; }
+.qa-timing { color: var(--study-text-secondary); font-size: 12px; }
+.clarify-options { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.clarify-options .el-button { max-width: 100%; height: auto; white-space: normal; padding: 7px 10px; line-height: 1.5; margin-left: 0; }
+.clarify-hint { color: var(--study-text-secondary); font-size: 12px; }
 .source-tag { cursor: pointer; }
 .style-audit-list { max-height: 260px; overflow: auto; line-height: 1.5; }
 .style-audit-list p { margin: 0 0 8px; }
@@ -669,5 +734,5 @@ onBeforeUnmount(() => { streamAbort.value?.abort(); clearInterval(statusPollTime
 .scope-book-row{display:flex;flex-direction:column;padding:7px 0;border-bottom:1px solid var(--el-border-color-lighter)}.scope-book-row b{font-size:12px}.scope-book-row span,.scope-book-row small{color:var(--el-text-color-secondary);font-size:11px}
 .connection-item{padding:12px 0;border-bottom:1px solid var(--el-border-color-lighter)}.connection-item b,.connection-item small{display:block}.connection-item small{color:var(--el-text-color-secondary);margin-top:4px}.connection-item p{max-height:85px;overflow:auto;font-size:13px;line-height:1.6}
 @media(max-width:1200px){.chat-page{height:auto}.chat-row{display:grid;grid-template-columns:230px minmax(0,1fr);gap:10px}.chat-row:before,.chat-row:after{display:none}.chat-row>.el-col{width:auto;max-width:none;height:620px;padding:0!important}.chat-row>.el-col:last-child{grid-column:1/-1;height:520px}}
-@media(max-width:760px){.chat-row{grid-template-columns:1fr}.chat-row>.el-col,.chat-row>.el-col:last-child{grid-column:auto;height:auto;min-height:460px}.chat-row>.el-col:first-child{min-height:240px}.msg-content{max-width:84%}}
+@media(max-width:760px){.chat-row{grid-template-columns:1fr}.chat-row>.el-col,.chat-row>.el-col:last-child{grid-column:auto;height:620px;min-height:460px}.chat-row>.el-col:first-child{height:360px;min-height:240px}.msg-content{max-width:84%}}
 </style>

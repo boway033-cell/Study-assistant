@@ -224,6 +224,7 @@ class ChatHistoryDetail(BaseModel):
     sources: list[ChatSource] = []
     citation_audit: dict | None = None
     style_audit: dict | None = None
+    qa: dict | None = None
     created_at: datetime
 
 

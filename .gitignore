@@ -46,6 +46,8 @@ server.log
 backup-*.zip
 # WorkBuddy 项目数据（记忆、备份、审计状态，不入库）
 .workbuddy/
+# 多轮问答的本地评测输出（固定数据集仍跟踪）
+/backend/eval/reports/qa-multiturn.json
 # PID file
 server.pid
 # runtime err log

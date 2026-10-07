@@ -1,0 +1,410 @@
+{
+  "version": "qa-multiturn-v2",
+  "description": "多轮对话上下文理解的固定评测集：意图分类、指代消解、澄清判定、检索可达性。全部为稳定字符串 ID，不访问用户数据库，不调用模型。",
+  "thresholds": {
+    "intent_accuracy": 0.9,
+    "rewrite_hit_rate": 0.85,
+    "clarify_precision": 1.0,
+    "clarify_recall": 1.0,
+    "abstention_detection_rate": 1.0,
+    "context_char_max": 2600
+  },
+  "corpus": [
+    {
+      "id": "did",
+      "text": "双重差分法通过比较处理组与对照组在政策前后的变化识别平均处理效应，关键假设是平行趋势。"
+    },
+    {
+      "id": "validity",
+      "text": "内部效度关注因果结论可信度，外部效度关注结论向其他人群与情境推广的程度。"
+    },
+    {
+      "id": "close_reading",
+      "text": "文本细读从措辞、意象、句法、叙述视角与修辞结构出发形成解释，并以具体文本细节约束阐释。"
+    },
+    {
+      "id": "rct",
+      "text": "随机对照试验通过随机分配降低已知与未知混杂，分配隐藏防止入组选择偏倚，盲法减少测量与行为偏倚。"
+    },
+    {
+      "id": "lagrange",
+      "text": "拉格朗日中值定理要求函数在闭区间连续、开区间可导，并保证存在一点使函数增量等于该点导数乘以自变量增量。"
+    },
+    {
+      "id": "binary_search",
+      "text": "二分查找要求数据已经有序，每次比较后把搜索区间缩小一半，时间复杂度为O(log n)。"
+    },
+    {
+      "id": "bfs",
+      "text": "广度优先搜索使用队列逐层访问图的顶点，在无权图中可以得到按边数计算的最短路径。"
+    },
+    {
+      "id": "en-rag",
+      "text": "Retrieval-augmented generation grounds model responses in retrieved source passages and should preserve citation links to those passages."
+    },
+    {
+      "id": "unreliable_narrator",
+      "text": "不可靠叙述者的陈述与作品呈现的事实、其他人物证词或隐含作者规范之间存在可辨认的距离。"
+    },
+    {
+      "id": "historical_context",
+      "text": "历史语境研究把作品置于出版制度、读者共同体、政治语言和同时代文献网络中，避免把后来的概念直接投射到过去。"
+    },
+    {
+      "id": "metaphor",
+      "text": "A conceptual metaphor maps structure from a source domain onto a target domain, shaping patterns of inference rather than merely decorating language."
+    },
+    {
+      "id": "selection_bias",
+      "text": "Selection bias occurs when inclusion in the analytic sample depends on factors related to both the exposure and the outcome."
+    }
+  ],
+  "cases": [
+    {
+      "id": "new-q1",
+      "turns": [],
+      "question": "双重差分法的关键假设是什么",
+      "expected_intent": "new_question",
+      "expected_doc": "did",
+      "note": "首轮独立问题：查询保持原句不改写"
+    },
+    {
+      "id": "new-q2",
+      "turns": [
+        {
+          "question": "随机对照试验怎么减少偏倚",
+          "answer": "随机分配降低混杂，分配隐藏防止入组选择偏倚，盲法减少测量与行为偏倚。"
+        }
+      ],
+      "question": "拉格朗日中值定理要求什么条件",
+      "expected_intent": "new_question",
+      "expected_doc": "lagrange",
+      "note": "换了话题的独立问题：不得把上一轮主题混入检索"
+    },
+    {
+      "id": "followup-pronoun",
+      "turns": [
+        {
+          "question": "双重差分法的关键假设是什么",
+          "answer": "关键假设是平行趋势。"
+        }
+      ],
+      "question": "它有什么前提",
+      "expected_intent": "followup",
+      "expected_doc": "did",
+      "note": "指代消解：'它'回填为双重差分"
+    },
+    {
+      "id": "followup-ellipsis",
+      "turns": [
+        {
+          "question": "二分查找的时间复杂度是多少",
+          "answer": "二分查找要求数据有序，每次比较把区间缩小一半，时间复杂度为O(log n)。"
+        }
+      ],
+      "question": "为什么是这样",
+      "expected_intent": "followup",
+      "expected_doc": "binary_search",
+      "note": "省略型追问：无指代词但缺主语，仍需补锚点"
+    },
+    {
+      "id": "followup-en",
+      "turns": [
+        {
+          "question": "What is selection bias",
+          "answer": "Inclusion in the analytic sample depends on exposure and outcome."
+        }
+      ],
+      "question": "why does it matter",
+      "expected_intent": "followup",
+      "expected_doc": "selection_bias",
+      "note": "英文追问同样需要锚点回填"
+    },
+    {
+      "id": "summarize-1",
+      "turns": [
+        {
+          "question": "双重差分法的关键假设是什么",
+          "answer": "关键假设是平行趋势。"
+        },
+        {
+          "question": "它和外部效度有关系吗",
+          "answer": "平行趋势是识别前提，外部效度是推广边界。"
+        }
+      ],
+      "question": "总结一下我们刚才讨论的内容",
+      "expected_intent": "summarize",
+      "note": "摘要意图：不走检索主路径"
+    },
+    {
+      "id": "summarize-en",
+      "turns": [
+        {
+          "question": "What does a conceptual metaphor map",
+          "answer": "It maps structure from a source domain onto a target domain."
+        }
+      ],
+      "question": "summarize the discussion",
+      "expected_intent": "summarize",
+      "note": "英文摘要关键词同样命中"
+    },
+    {
+      "id": "clarify-no-history",
+      "turns": [],
+      "question": "它的局限是什么",
+      "expected_intent": "clarify",
+      "expected_reason": "unresolved_reference",
+      "note": "首轮就带指代：必须澄清而不是硬答"
+    },
+    {
+      "id": "clarify-empty-history-summarize",
+      "turns": [],
+      "question": "总结一下",
+      "expected_intent": "new_question",
+      "note": "'总结'在无历史时不构成摘要意图，按新问题处理"
+    },
+    {
+      "id": "clarify-vague",
+      "turns": [
+        {
+          "question": "双重差分法的关键假设是什么",
+          "answer": "关键假设是平行趋势。"
+        }
+      ],
+      "question": "为什么",
+      "expected_intent": "followup",
+      "note": "有历史且有锚点时，短问句走追问而非澄清"
+    },
+    {
+      "id": "out-of-scope-reject",
+      "turns": [],
+      "question": "未上传小说的最终结局是什么",
+      "expected_intent": "new_question",
+      "expected_abstain": true,
+      "note": "越界问题应由检索层拒答，不得召回任何来源"
+    },
+    {
+      "id": "out-of-scope-followup",
+      "turns": [
+        {
+          "question": "双重差分法的关键假设是什么",
+          "answer": "关键假设是平行趋势。"
+        }
+      ],
+      "question": "那未收录药物的最佳剂量是多少",
+      "expected_intent": "followup",
+      "expected_abstain": true,
+      "note": "追问轮同样要识别越界，不得因为有锚点就强行召回"
+    },
+    {
+      "id": "hard-pronoun-chain",
+      "turns": [
+        {
+          "question": "文本细读从哪些语言细节出发",
+          "answer": "措辞、意象、句法、叙述视角与修辞结构。"
+        },
+        {
+          "question": "随机对照试验怎么减少偏倚",
+          "answer": "随机分配降低混杂，分配隐藏与盲法控制偏倚。"
+        }
+      ],
+      "question": "它的局限呢",
+      "expected_intent": "followup",
+      "expected_doc": "rct",
+      "note": "跨两轮话题：指代必须锚定到最近一轮而非最初一轮"
+    },
+    {
+      "id": "hard-ellipsis-no-hint",
+      "turns": [
+        {
+          "question": "文本细读依据哪些语言细节",
+          "answer": "措辞、意象、句法、叙述视角与修辞结构。"
+        }
+      ],
+      "question": "还有别的吗",
+      "expected_intent": "followup",
+      "expected_doc": "close_reading",
+      "note": "「还有别的吗」几乎不含实词，只能靠锚点回填到上一轮主题"
+    },
+    {
+      "id": "hard-comparison-implicit",
+      "turns": [
+        {
+          "question": "内部效度关注什么",
+          "answer": "内部效度关注因果结论可信度。"
+        },
+        {
+          "question": "外部效度与结论推广有什么关系",
+          "answer": "外部效度关注向其他人群与情境推广的程度。"
+        }
+      ],
+      "question": "两者哪个更重要",
+      "expected_intent": "clarify",
+      "expected_reason": "ambiguous_contrast",
+      "note": "「两者」指代对象在历史上是两条不同命题，必须澄清而非擅自选一个"
+    },
+    {
+      "id": "hard-summarize-after-many-turns",
+      "turns": [
+        {
+          "question": "什么是不可靠叙述者",
+          "answer": "叙述者陈述与作品事实之间存在可辨认的距离。"
+        },
+        {
+          "question": "历史语境研究如何避免时代错置",
+          "answer": "把作品放回出版制度与同时代文献网络中。"
+        },
+        {
+          "question": "交叉验证有哪些证据来源",
+          "answer": "不同方法、数据来源与理论视角的结果并置。"
+        }
+      ],
+      "question": "把刚才聊的要点梳理一下",
+      "expected_intent": "summarize",
+      "note": "多轮后请求摘要：必须走摘要路径而非当成新检索问题"
+    },
+    {
+      "id": "hard-english-ellipsis",
+      "turns": [
+        {
+          "question": "What grounds retrieval-augmented generation responses",
+          "answer": "Retrieved source passages."
+        }
+      ],
+      "question": "and citations",
+      "expected_intent": "followup",
+      "expected_doc": "en-rag",
+      "note": "英文极短省略补全：靠英文锚点回填"
+    },
+    {
+      "id": "hard-topic-switch-not-contaminated",
+      "turns": [
+        {
+          "question": "二分查找要求什么前提",
+          "answer": "数据必须已经有序。"
+        },
+        {
+          "question": "它的复杂度是多少",
+          "answer": "O(log n)。"
+        }
+      ],
+      "question": "广度优先搜索使用什么数据结构",
+      "expected_intent": "new_question",
+      "expected_doc": "bfs",
+      "note": "话题切换的新问题：不得被上一轮锚点污染，否则会召回二分查找"
+    },
+    {
+      "id": "short-topic-switch-capital",
+      "question": "什么是资本主义",
+      "turns": [
+        {
+          "question": "二分查找的前提是什么",
+          "answer": "数据必须有序。"
+        }
+      ],
+      "expected_intent": "new_question",
+      "note": "独立审查新增：短问题、词边界、明确摘要、连续追问与澄清继续。"
+    },
+    {
+      "id": "short-topic-switch-quantum",
+      "question": "量子纠缠是什么",
+      "turns": [
+        {
+          "question": "二分查找的前提是什么",
+          "answer": "数据必须有序。"
+        }
+      ],
+      "expected_intent": "new_question",
+      "note": "独立审查新增：短问题、词边界、明确摘要、连续追问与澄清继续。"
+    },
+    {
+      "id": "english-word-boundary-capital",
+      "question": "What is capital?",
+      "turns": [],
+      "expected_intent": "new_question",
+      "note": "独立审查新增：短问题、词边界、明确摘要、连续追问与澄清继续。"
+    },
+    {
+      "id": "english-word-boundary-traditional",
+      "question": "What are the limitations of traditional methods?",
+      "turns": [],
+      "expected_intent": "new_question",
+      "note": "独立审查新增：短问题、词边界、明确摘要、连续追问与澄清继续。"
+    },
+    {
+      "id": "chinese-other-is-not-pronoun",
+      "question": "其他学者如何解释资本主义",
+      "turns": [],
+      "expected_intent": "new_question",
+      "note": "独立审查新增：短问题、词边界、明确摘要、连续追问与澄清继续。"
+    },
+    {
+      "id": "explicit-material-summary",
+      "question": "总结《资本论》的观点",
+      "turns": [
+        {
+          "question": "二分查找的前提是什么",
+          "answer": "数据必须有序。"
+        }
+      ],
+      "expected_intent": "new_question",
+      "note": "独立审查新增：短问题、词边界、明确摘要、连续追问与澄清继续。"
+    },
+    {
+      "id": "explicit-concept-summary",
+      "question": "概括拉格朗日中值定理的条件",
+      "turns": [
+        {
+          "question": "二分查找的前提是什么",
+          "answer": "数据必须有序。"
+        }
+      ],
+      "expected_intent": "new_question",
+      "note": "独立审查新增：短问题、词边界、明确摘要、连续追问与澄清继续。",
+      "expected_doc": "lagrange"
+    },
+    {
+      "id": "generic-followup-chain",
+      "question": "它的局限呢",
+      "turns": [
+        {
+          "question": "二分查找的前提是什么",
+          "answer": "数据必须有序。"
+        },
+        {
+          "question": "为什么是这样",
+          "answer": "每次把区间减半。"
+        }
+      ],
+      "expected_intent": "followup",
+      "note": "独立审查新增：短问题、词边界、明确摘要、连续追问与澄清继续。",
+      "expected_doc": "binary_search"
+    },
+    {
+      "id": "clarified-comparison-keeps-question",
+      "question": "关于「内部效度关注什么」与「外部效度关注什么」：两者哪个更重要",
+      "turns": [
+        {
+          "question": "二分查找的前提是什么",
+          "answer": "数据必须有序。"
+        }
+      ],
+      "expected_intent": "new_question",
+      "note": "独立审查新增：短问题、词边界、明确摘要、连续追问与澄清继续。",
+      "expected_doc": "validity"
+    },
+    {
+      "id": "new-short-independent-search",
+      "question": "广度优先搜索是什么",
+      "turns": [
+        {
+          "question": "二分查找的前提是什么",
+          "answer": "数据必须有序。"
+        }
+      ],
+      "expected_intent": "new_question",
+      "note": "独立审查新增：短问题、词边界、明确摘要、连续追问与澄清继续。",
+      "expected_doc": "bfs"
+    }
+  ]
+}

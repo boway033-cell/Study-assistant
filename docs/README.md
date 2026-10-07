@@ -20,6 +20,8 @@
 | [01-architecture.md](01-architecture.md) | 系统分层与运行架构参考 |
 | [02-database.md](02-database.md) | SQLite 数据模型参考 |
 | [03-api.md](03-api.md) | API 端点参考；最终以 FastAPI OpenAPI 为准 |
+| [AI_QA_QUALITY_METRICS.md](AI_QA_QUALITY_METRICS.md) | 多轮问答流程、运行期代理指标、评测与验证边界 |
+| [WorkBuddy 多轮问答集成验收](reports/WORKBUDDY_QA_ACCEPTANCE_2026-10-07.md) | 独立审查发现、修复、自动测试及浏览器检查 |
 
 ## 维护规则
 

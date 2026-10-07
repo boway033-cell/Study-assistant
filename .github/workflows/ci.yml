@@ -26,6 +26,8 @@ jobs:
         run: python -m pytest -q
       - name: Fixed retrieval quality gate
         run: python scripts/evaluate_retrieval.py
+      - name: Multiturn QA quality gate
+        run: python scripts/evaluate_qa.py
 
   frontend-build:
     runs-on: ubuntu-latest

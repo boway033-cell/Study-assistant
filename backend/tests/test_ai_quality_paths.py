@@ -38,8 +38,13 @@ def test_chat_reports_reference_check_without_claiming_semantic_support(monkeypa
     done_line = next(line for line in events.splitlines() if line.startswith("data: ") and '"chat_id"' in line)
     done = json.loads(done_line.removeprefix("data: "))
     assert done["citation_reference_valid"] is True
+    # 词面筛查不等于语义校验；两种状态必须区分。
     assert done["citation_audit"]["semantic_status"] == "not_checked"
+    assert done["citation_audit"]["support_method"] == "lexical_overlap_proxy"
+    assert "support_rate" in done["citation_audit"]
+    # 引用语义仍未被判定为「已核实」——词面重合不能冒充蕴含证明。
     assert done["citation_verified"] is False
+    assert done["qa"]["intent"] == "new_question"
     assert recorded[0]["verified"] is True
     assert chat_api.verify_citations is reranker.verify_citations
 

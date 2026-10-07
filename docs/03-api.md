@@ -158,6 +158,14 @@ data: {"chat_id": 88, "provider": "deepseek", "model": "deepseek-flash", "source
 
 显式传入 `model` 时不使用备用连接降级，模型调用失败会返回错误。`done` 中的 `provider` 和 `model` 是实际完成回答的连接与模型，历史记录也保存该信息。
 
+多轮请求支持 `conversation_id`（8–64 位字母、数字、下划线或连字符）。书架/项目请求使用 `scope_type` 与 `scope_id`，不能同时指定 `book_id`。历史读取限定在同一会话及当前范围，独立新问题不把旧历史注入模型提示。
+
+`meta` 返回意图、改写查询和澄清候选；`done.qa` 返回意图、来源数、真实服务端耗时及词面筛查指标。本地澄清不调用模型，仍保存历史并返回 `chat_id`。历史详情增加可选 `qa` 字段，支持重载后的澄清继续。
+
+`citation_audit.semantic_status` 为 `not_checked`，`support_method="lexical_overlap_proxy"` 仅表示词面筛查；澄清为 `not_applicable`。词面高分不能证明原文支持主张。失败流返回 `error` 且没有 `done`，部分回答不保存成成功记录。
+
+`GET /api/chat/metrics?window=200` 返回 `thresholds`、`summary`、`gate`，窗口限 1–200。窗口最多保留 200 轮，不存用户内容，重启清空；模型和本地澄清的时延分别统计。指标定义和评测边界见 [多轮问答流程与质量指标](AI_QA_QUALITY_METRICS.md)。
+
 ### 2.2 历史记录 / 2.3 删除
 
 ```

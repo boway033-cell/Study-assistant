@@ -351,10 +351,10 @@ def health():
     return {
         "status": "ok",
         "app": "study-assistant",
-        "api_revision": 14,
+        "api_revision": 15,
         "capabilities": {"shelves_write": True, "knowledge_records": True, "annotation_underline": True,
                          "writing_dna": True, "ai_tone_docx": True, "knowledge_insights": True,
-                         "assistant_scopes": True, "research_source_audit": True,
+                         "assistant_scopes": True, "research_source_audit": True, "qa_multiturn": True,
                          "chinese_writing_style": STYLE_VERSION},
     }
 
