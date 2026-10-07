@@ -19,7 +19,8 @@ from backend.app.services import sensemaking as sm
 from backend.app.services.assistant_context import current_reading, latest_reading, reading_sources
 from backend.app.services.assistant_scope import resolve_scope
 from backend.app.services import research_archive as archive
-from backend.app.worker.tasks import has_active_task, submit
+from backend.app.worker.tasks import (DuplicateTaskError, has_active_task,
+                                      submit_unique_batch)
 
 router = APIRouter(prefix="/api/assistant", tags=["assistant"])
 ScopeType = Literal["shelf", "project"]
@@ -232,12 +233,17 @@ def prepare_scope(req: PrepareReq, db: Session = Depends(get_db)):
         estimate = _reading_estimate(sm.reading_windows(db, book_id))
         if not estimate["window_count"] or not estimate["within_budget"]:
             raise HTTPException(409, f"《{book.title}》没有可读正文或超过当前单任务预算")
-    jobs = []
-    for book_id in req.book_ids:
-        record = submit("assistant_reading", lambda task, bid=book_id: _run_reading(task, bid, ""),
-                        book_id=book_id)
-        jobs.append({"book_id": book_id, "task_id": record.id})
-    return {"jobs": jobs}
+    try:
+        records = submit_unique_batch(
+            "assistant_reading",
+            [(book_id, lambda task, bid=book_id: _run_reading(task, bid, ""))
+             for book_id in req.book_ids],
+            conflicting_names=("understanding",),
+        )
+    except DuplicateTaskError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"jobs": [{"book_id": record.book_id, "task_id": record.id}
+                     for record in records]}
 
 
 @router.get("/connections")

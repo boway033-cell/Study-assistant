@@ -189,7 +189,7 @@ def test_http_scope_and_memory_contract(db):
     db.commit()
     app.dependency_overrides[get_db] = lambda: db
     try:
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://127.0.0.1:8000") as client:
             status = client.get("/api/assistant/status", params={"scope_type": "shelf", "scope_id": shelf.id})
             assert status.status_code == 200
             assert status.json()["books"][0]["book_id"] == book.id
@@ -263,4 +263,9 @@ async def test_follow_up_uses_only_questions_from_same_scope(db, monkeypatch):
     prompt = "\n".join(message["content"] for message in captured["messages"])
     assert "公众参与如何影响治理" in prompt
     assert "秘密预算" not in prompt
-    assert "公众参与" in captured["query"]
+    # 改写后的检索查询是「同范围锚点实词 + 本轮问句」，不再是整句拼接；
+    # 这里断言行为契约：另一书架的问题不得泄漏进本轮上下文或检索查询。
+    query = captured["query"]
+    assert "它有什么限制" in query
+    assert "公众" in query and "参与" in query
+    assert "秘密" not in query and "预算" not in query

@@ -40,3 +40,5 @@ def test_explicitly_missing_library_material_is_refused_before_retrieval():
     assert explicitly_out_of_scope("未上传小说的最终结局是什么") is True
     assert explicitly_out_of_scope("当前库中某实验的原始数据链接") is True
     assert explicitly_out_of_scope("这篇已上传文献如何定义内部效度") is False
+    assert explicitly_out_of_scope("书中如何讨论不存在的社会关系？") is False
+    assert explicitly_out_of_scope("书中如何评价未上传的材料？") is False

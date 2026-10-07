@@ -16,7 +16,8 @@ from backend.app.models import Book, SensemakingArtifact, SensemakingInterpretat
 from backend.app.services.llm import LLMRouter, load_llm_config, parse_json_response, request_reasoning_effort
 from backend.app.services.llm.budget import estimate_tokens, load_default_budget
 from backend.app.services import sensemaking as sm
-from backend.app.worker.tasks import has_active_task, submit, update_progress
+from backend.app.worker.tasks import (DuplicateTaskError, has_active_task,
+                                      submit_unique, update_progress)
 
 router = APIRouter(prefix="/api/sensemaking", tags=["sensemaking"])
 
@@ -490,8 +491,12 @@ def start_reading(req: ReadingReq, db: Session = Depends(get_db)):
         raise HTTPException(409, "预计全文研读超过当前 AI 任务预算；请在设置中调整预算后重试")
     if has_active_task("understanding", req.book_id):
         raise HTTPException(409, "这篇文献已有理解任务在运行")
-    record = submit("understanding", lambda task: _run_reading(task, req.book_id, req.focus.strip()),
-                    book_id=req.book_id)
+    try:
+        record = submit_unique("understanding",
+                               lambda task: _run_reading(task, req.book_id, req.focus.strip()),
+                               req.book_id, conflicting_names=("assistant_reading",))
+    except DuplicateTaskError as exc:
+        raise HTTPException(409, str(exc)) from exc
     return {"task_id": record.id}
 
 
@@ -504,8 +509,12 @@ def start_discovery(req: DiscoveryReq, db: Session = Depends(get_db)):
     _research_config(db)
     if has_active_task("discovery", req.book_ids[0]):
         raise HTTPException(409, "这篇文献已有发现任务在运行")
-    record = submit("discovery", lambda task: _run_discovery(task, req.book_ids, req.concept.strip()),
-                    book_id=req.book_ids[0])
+    try:
+        record = submit_unique("discovery",
+                               lambda task: _run_discovery(task, req.book_ids, req.concept.strip()),
+                               req.book_ids[0])
+    except DuplicateTaskError as exc:
+        raise HTTPException(409, str(exc)) from exc
     return {"task_id": record.id}
 
 

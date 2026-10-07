@@ -1,7 +1,20 @@
 # 项目交接文档 · Study assistant（学习助手）
 
 > **用途**：供新对话/新协作者快速接管项目。阅读本文件 + 启动项目即可继续开发。
-> **最后更新**：PDF 阅读器新增高亮/划线批注悬停卡，支持本人/AI 来源、重叠批注、无批注状态、边界定位与键盘/触屏降级；此前完成 OCR 大文档稳定性、性能与 216 页真实基准收口；当前版本 **v2.3.3**
+> **最后更新**：2026 年 10 月 7 日，AI 原文核查、报告恢复及 WorkBuddy 多轮问答集成验收；当前发布版本 **v2.6.0**，包含下述 AI 通路和多轮问答改进。
+
+## v2.6.0 发布快照（2026-10-07）
+
+- 研究报告先保存有效正文，再独立核查实际原文摘句与论证；核查失败、取消或中断后可单独重跑，保留正文和人工复核。
+- 原文与用户笔记分别标注，核查最多 24 段材料、约 26,000 字和 12 条关键主张；引文文字匹配不等于结论成立，覆盖数量和人工待核查状态可见。
+- 模型协议完成态、输出上限、思考预算、路由变化、长文续写、目录失效、范围检索和原子任务去重已有修复及回归测试。
+- API revision 为 15，启动器检查 `research_source_audit` 与 `qa_multiturn` 能力，避免复用缺少新通路的旧后端。
+- 已验收 WorkBuddy 的多轮问答：修复候选续接与历史恢复、短问题切换、连续追问、摘要范围原文重读、模型路由、质量指标措辞及长会话输入区布局；本地澄清不依赖模型配置。
+- 问答指标是运行期筛查：词面重合不是语义支持，非空检索不是相关性命中，弃答精确率没有人工标签时为空。详见 [问答流程与指标](AI_QA_QUALITY_METRICS.md)。
+- 前端 95 项通过、生产构建通过；隔离浏览器完成 10 次请求的连续操作及桌面/窄屏检查，使用虚构资料和模型替身，不访问用户资料。完整测试结果见 [WorkBuddy 集成验收](reports/WORKBUDDY_QA_ACCEPTANCE_2026-10-07.md)。真实 Office 集成在本轮整套检查中通过；此前出现过偶发预览失败。未调用真实付费模型验证语义质量、延迟或账单。
+- 设计和验证边界见 [AI 通路研究与实施报告](reports/AI_PATH_RESEARCH_AND_IMPLEMENTATION_2026-10-07.md)。下方历史快照保留原日期，功能、版本和验证数字以最新快照为准。
+
+---
 
 ---
 
@@ -542,7 +555,7 @@ GitHub 首页更新为当前四个核心工作区，特别说明研究报告的�
 
 ## 12. 开源发布状态
 
-- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布版本 v2.3.3）
+- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布版本 v2.6.0）
 - 许可证 MIT、PRIVACY.md、SECURITY.md、CHANGELOG.md、CONTRIBUTING.md、.gitattributes
 - CI（ci.yml）+ Release 自动打包（release.yml）
 - 分享给朋友：下载 Release 的 zip（含前端产物，不装 Node 也能用），或 git clone 后 `cd frontend && npm i && npm run build`
@@ -559,7 +572,7 @@ cd frontend && npm run build               # 改完前端构建（需 npm.cmd）
 
 # git 推送
 git push origin main
-git tag v2.3.3 && git push origin v2.3.3  # 触发 Release 自动打包
+git tag v2.6.0 && git push origin v2.6.0  # 触发 Release 自动打包
 
 # 关键文档
 docs/README.md  docs/产品文档.md  docs/PROJECT_HANDOVER.md

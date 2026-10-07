@@ -32,11 +32,13 @@ def test_page_image_payload_uses_provider_protocol(monkeypatch, protocol):
     def handler(request):
         requests.append(json.loads(request.content))
         if protocol == "anthropic":
-            data = 'data: {"delta":{"text":"图表说明。"}}\n\n'
+            data = ('data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"图表说明。"}}\n\n'
+                    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n'
+                    'data: {"type":"message_stop"}\n\n')
         elif protocol == "google":
-            data = 'data: {"candidates":[{"content":{"parts":[{"text":"图表说明。"}]}}]}\n\n'
+            data = 'data: {"candidates":[{"content":{"parts":[{"text":"图表说明。"}]},"finishReason":"STOP"}]}\n\n'
         else:
-            data = 'data: {"choices":[{"delta":{"content":"图表说明。"}}]}\n\n'
+            data = 'data: {"choices":[{"delta":{"content":"图表说明。"}}]}\n\ndata: [DONE]\n\n'
         return httpx.Response(200, text=data)
 
     real_client = httpx.AsyncClient
@@ -68,7 +70,7 @@ def test_qwen_structured_reading_uses_low_reasoning_only_in_its_request(monkeypa
 
     def handler(request):
         captured.append(json.loads(request.content))
-        return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"好"}}]}\n\n')
+        return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"好"}}]}\n\ndata: [DONE]\n\n')
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(transport=httpx.MockTransport(handler)))

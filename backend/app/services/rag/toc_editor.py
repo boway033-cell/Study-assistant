@@ -135,12 +135,19 @@ def replace_book_toc(db: Session, book: Book, items: list[dict], source: str, no
 
     # 按页码与目录顺序重新归属 chunk；同页多标题时取当页最后一项。
     chunks = list(db.scalars(select(Chunk).where(Chunk.book_id == book.id).order_by(Chunk.chunk_index)).all())
+    previous_chunk_owners = {chunk.id: chunk.chapter_id for chunk in chunks}
     for chunk in chunks:
         page = int(chunk.page_start or 1)
         owner = next((chapter for chapter in reversed(ordered) if chapter.start_page <= page), ordered[0])
         chunk.chapter_id = owner.id
 
-    db.execute(delete(BookDeep).where(BookDeep.book_id == book.id))
+    # Retain generated work; only its chapter interpretation becomes stale.
+    deep = db.scalar(select(BookDeep).where(BookDeep.book_id == book.id))
+    mapping_changed = any(previous_chunk_owners[chunk.id] != chunk.chapter_id for chunk in chunks)
+    directory_changed = chapter_snapshot(ordered) != before
+    if deep is not None and (directory_changed or mapping_changed) and deep.status not in {"running", "pending"}:
+        deep.status = "stale"
+        deep.error_msg = "目录已更新；原有分析已保留，请重新研读以核对章节与来源。"
     db.flush()
     after = chapter_snapshot(ordered)
     revision = TocRevision(book_id=book.id, source=source, note=(note or "")[:255] or None,
@@ -151,12 +158,15 @@ def replace_book_toc(db: Session, book: Book, items: list[dict], source: str, no
     profile = db.get(PaperProfile, book.id) or PaperProfile(book_id=book.id)
     profile.source_map_json = build_source_map(book.id, chunks, {chapter.id: chapter.title for chapter in ordered})
     db.add(profile)
-    db.commit()
+
+    from backend.app.services.rag import fts
+    try:
+        db.flush()
+        fts.replace_book_index_in_session(db, book.id, chunks)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(revision)
 
-    # FTS 的 chapter_id 是冗余定位字段，目录修订后必须同步。
-    from backend.app.services.rag import fts
-    fts.delete_book_index(book.id)
-    for chunk in chunks:
-        fts.index_chunk(book.id, chunk.chapter_id, chunk.page_start, chunk.id, chunk.content, chunk.page_end)
     return {"revision_id": revision.id, "chapters": after, "audit": review_chapters(ordered)}

@@ -166,7 +166,7 @@ def test_archive_api_roundtrip():
     finally:
         db.close()
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
         detail = client.get(f"/api/books/{book_id}")
         assert detail.status_code == 200
         assert detail.json()["archive"]["reading_status"] == "unread"

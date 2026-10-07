@@ -8,7 +8,9 @@ def test_local_development_origins_remain_allowed():
     assert "http://localhost:5173" in _ALLOWED_ORIGINS
 
 
-def test_api_allows_deployed_same_origin_host():
+def test_api_allows_configured_deployed_origin(monkeypatch):
+    from backend.app import main
+    monkeypatch.setattr(main, "_ALLOWED_ORIGINS", [*main._ALLOWED_ORIGINS, "https://study.example"])
     with TestClient(app, base_url="https://study.example") as client:
         response = client.get("/api/health", headers={"Origin": "https://study.example"})
     assert response.status_code == 200
@@ -17,4 +19,10 @@ def test_api_allows_deployed_same_origin_host():
 def test_api_rejects_untrusted_cross_origin():
     with TestClient(app, base_url="https://study.example") as client:
         response = client.get("/api/health", headers={"Origin": "https://evil.example"})
+    assert response.status_code == 403
+
+
+def test_api_rejects_untrusted_same_origin_host():
+    with TestClient(app, base_url="https://study.example") as client:
+        response = client.get("/api/health", headers={"Origin": "https://study.example"})
     assert response.status_code == 403

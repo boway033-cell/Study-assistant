@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 
 from backend.app.core.database import SessionLocal, engine
 from backend.app.models import ImportTask
@@ -174,6 +174,9 @@ async def _worker(queue: asyncio.Queue) -> None:
             if record.cancel_requested:
                 raise TaskCancelled("任务已由用户取消")
             record.status = "done"
+            record.progress = 1.0
+            record.stage = "done"
+            record.message = "已完成"
             _persist(record)
         except TaskCancelled as e:
             record.status = "cancelled"
@@ -259,20 +262,65 @@ def submit(name: str, coro_factory: Callable[[TaskRecord], Awaitable[Any]],
     return record
 
 
+class DuplicateTaskError(RuntimeError):
+    """An active task already owns this book and work type."""
+
+
+def submit_unique_batch(
+    name: str,
+    jobs: list[tuple[int, Callable[[TaskRecord], Awaitable[Any]]]],
+    *,
+    conflicting_names: tuple[str, ...] = (),
+    budget_max_tokens: int = 0,
+    budget_max_calls: int = 0,
+    initial_result: dict | None = None,
+) -> list[TaskRecord]:
+    """Reserve all book jobs atomically before persisting or queueing any of them."""
+    _ensure_backend()
+    if len({book_id for book_id, _ in jobs}) != len(jobs):
+        raise DuplicateTaskError("同一批次不能重复提交同一资料")
+    names = {name, *conflicting_names}
+    with _TASK_REGISTRY_LOCK:
+        active = {task.book_id for task in _task_registry.values()
+                  if task.name in names and task.status in {"pending", "running", "cancelling"}}
+        duplicate = next((book_id for book_id, _ in jobs if book_id in active), None)
+        if duplicate is not None:
+            raise DuplicateTaskError(f"资料 {duplicate} 已有同类任务在排队或运行")
+        records = [TaskRecord(id=f"{name}-{uuid.uuid4().hex[:8]}", name=name,
+                              book_id=book_id, _coro=factory,
+                              budget_max_tokens=budget_max_tokens,
+                              budget_max_calls=budget_max_calls,
+                              result=initial_result.copy() if initial_result else None)
+                   for book_id, factory in jobs]
+        for record in records:
+            _task_registry[record.id] = record
+    for record in records:
+        _persist(record)
+        asyncio.run_coroutine_threadsafe(_queue_for(name).put(record), _loop_for(name))
+    return records
+
+
+def submit_unique(name: str, coro_factory: Callable[[TaskRecord], Awaitable[Any]],
+                  book_id: int, *, conflicting_names: tuple[str, ...] = (),
+                  budget_max_tokens: int = 0, budget_max_calls: int = 0,
+                  initial_result: dict | None = None) -> TaskRecord:
+    return submit_unique_batch(name, [(book_id, coro_factory)],
+                               conflicting_names=conflicting_names,
+                               budget_max_tokens=budget_max_tokens,
+                               budget_max_calls=budget_max_calls,
+                               initial_result=initial_result)[0]
+
+
 def has_active_task(name: str, book_id: int) -> bool:
     """同一书籍是否已有同名任务在排队或运行中（已结束/已取消的不算）。
 
     重复任务可能并发写同一份资料，也会重复计费；提交入口必须拦截。
     这里用于在提交入口提前告知用户，而不是让他们等跑完才发现重复。
     """
-    try:
-        return any(
-            task.name == name and task.book_id == book_id
-            and task.status in ("pending", "running")
-            for task in list_tasks()
-        )
-    except Exception:  # noqa: BLE001 — 查询失败时不应阻塞用户提交
-        return False
+    with _TASK_REGISTRY_LOCK:
+        return any(task.name == name and task.book_id == book_id
+                   and task.status in {"pending", "running", "cancelling"}
+                   for task in _task_registry.values())
 
 
 def get_task(task_id: str) -> TaskRecord | None:
@@ -409,6 +457,8 @@ def recover_pending_tasks() -> list[str]:
                 if book is None or book.status == "ready":
                     # 书已删或已完成，标记任务完成
                     row.status = "done"
+                    row.progress = 1.0
+                    row.stage = "done"
                     row.message = "书籍已就绪或已删除，跳过恢复"
                     continue
                 # 重新入队
@@ -422,6 +472,15 @@ def recover_pending_tasks() -> list[str]:
                 _ensure_backend()
                 asyncio.run_coroutine_threadsafe(_queue_for(record.name).put(record), _loop_for(record.name))
                 recovered.append(row.id)
+            # Legacy versions sometimes persisted terminal tasks at 94%.
+            # Normalize them on startup so task history and the live API agree.
+            db.execute(
+                update(ImportTask)
+                .where(ImportTask.status == "done")
+                .where(or_(ImportTask.progress.is_(None), ImportTask.progress != 1.0,
+                           ImportTask.stage.is_(None), ImportTask.stage != "done"))
+                .values(progress=1.0, stage="done")
+            )
             db.commit()
         finally:
             db.close()

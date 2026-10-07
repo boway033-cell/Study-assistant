@@ -1,9 +1,10 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$InputFile,
     [Parameter(Mandatory=$true)][string]$OutputPdf
 )
 
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $application = $null
 $document = $null
 try {
@@ -30,8 +31,14 @@ try {
         $application = New-Object -ComObject PowerPoint.Application
         try { $application.AutomationSecurity = 3 } catch {}
         $document = $application.Presentations.Open($inputPath, -1, 0, 0)
-        # ppFixedFormatTypePDF = 2；固定格式导出比 SaveAs(32) 跨版本更稳定。
-        $document.ExportAsFixedFormat([string]$outputPath, [int]2)
+        # ppFixedFormatTypePDF = 2；部分 Office COM 类型库无法绑定此方法的可选参数。
+        # 遇到绑定/导出错误时使用官方支持的 ppSaveAsPDF = 32，失败仍向上报告。
+        try {
+            $document.ExportAsFixedFormat([string]$outputPath, [int]2)
+        }
+        catch {
+            $document.SaveAs([string]$outputPath, [int]32)
+        }
         if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
             $document.SaveAs([string]$outputPath, [int]32)
         }

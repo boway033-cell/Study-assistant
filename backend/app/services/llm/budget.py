@@ -23,11 +23,17 @@ class TaskBudget:
     used_calls: int = 0
     output_chars: int = 0
 
+    def remaining_tokens(self) -> int | None:
+        """Estimated task headroom; None means the user configured no token limit."""
+        return max(0, self.max_tokens - self.used_tokens) if self.max_tokens else None
+
     def start_call(self, input_chars: int) -> None:
         needed = estimate_tokens(input_chars)
         if self.max_calls and self.used_calls + 1 > self.max_calls:
             raise BudgetExceeded(f"本次 AI 任务已达到 {self.max_calls} 次调用上限")
-        if self.max_tokens and self.used_tokens + needed > self.max_tokens:
+        # Starting a generation with no room for even one output token wastes
+        # a provider call and leaves no safe server-side completion cap.
+        if self.max_tokens and self.used_tokens + needed >= self.max_tokens:
             raise BudgetExceeded(f"本次 AI 任务已达到 {self.max_tokens} 估算 Token 上限")
         self.used_calls += 1
         self.used_tokens += needed

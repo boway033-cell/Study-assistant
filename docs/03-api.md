@@ -81,16 +81,18 @@ POST /api/books/{book_id}/reparse   # {"task_id": "t-xyz"}
 ### 1.8 全文搜索
 
 ```
-GET /api/search?q=拉格朗日&book_id=1&chapter_id=&page=1&page_size=20
+GET /api/search?q=拉格朗日&book_id=1&chapter_id=15&page=1&page_size=20
 ```
 
 ```json
-{"total": 45, "items": [
+{"total": 21, "has_more": true, "truncated": false, "window_limit": 1000, "items": [
   {"chunk_id": 320, "book_id": 1, "book_title": "高等数学（上）",
    "chapter_id": 15, "chapter_title": "3.2 中值定理", "page": 128,
    "snippet": "……拉格朗日中值定理：若函数 f(x) 在闭区间 [a,b] 上连续……"}
 ]}
 ```
+
+`book_id` 与逗号分隔的 `book_ids` 只能选一个；非法编号返回 422。`chapter_id` 将结果限定在对应章节；与所选书籍范围不相交时返回空结果。混合检索按需扩展候选，`total` 是当前已检索到的数量；`has_more=true` 或 `truncated=true` 时为下界，不能当作全库精确总数。最多访问前 1000 条，触及上限时返回 `truncated=true`，请缩小书籍、分类或关键词范围。超过该窗口的页码返回 422。
 
 ### 1.9 原文定位
 
@@ -130,7 +132,7 @@ POST /api/chat
 body: {
   "book_id": 1,          // null 或省略 = 全部书籍
   "question": "解释拉格朗日中值定理的几何意义",
-  "model": "flash"       // flash / pro；省略 = 用设置页默认档位
+  "model": "deepseek-flash" // 可选：覆盖当前连接的模型名；省略则使用设置中的路由
 }
 ```
 
@@ -144,7 +146,7 @@ event: token
 data: {"text": "拉格朗日中值定理的几何意义是……"}
 
 event: done
-data: {"chat_id": 88, "sources": [
+data: {"chat_id": 88, "provider": "deepseek", "model": "deepseek-flash", "sources": [
         {"chunk_id": 320, "page": 128, "snippet": "……"},
         {"chunk_id": 331, "page": 130, "snippet": "……"}
       ]}
@@ -153,6 +155,16 @@ data: {"chat_id": 88, "sources": [
 错误时：`event: error` + `data: {"message": "…"}`
 
 > 前端收到 `done` 后，用 `sources[0].chunk_id` 调 `/books/{id}/chunk/{cid}` 在右侧展示原文。
+
+显式传入 `model` 时不使用备用连接降级，模型调用失败会返回错误。`done` 中的 `provider` 和 `model` 是实际完成回答的连接与模型，历史记录也保存该信息。
+
+多轮请求支持 `conversation_id`（8–64 位字母、数字、下划线或连字符）。书架/项目请求使用 `scope_type` 与 `scope_id`，不能同时指定 `book_id`。历史读取限定在同一会话及当前范围，独立新问题不把旧历史注入模型提示。
+
+`meta` 返回意图、改写查询和澄清候选；`done.qa` 返回意图、来源数、真实服务端耗时及词面筛查指标。本地澄清不调用模型，仍保存历史并返回 `chat_id`。历史详情增加可选 `qa` 字段，支持重载后的澄清继续。
+
+`citation_audit.semantic_status` 为 `not_checked`，`support_method="lexical_overlap_proxy"` 仅表示词面筛查；澄清为 `not_applicable`。词面高分不能证明原文支持主张。失败流返回 `error` 且没有 `done`，部分回答不保存成成功记录。
+
+`GET /api/chat/metrics?window=200` 返回 `thresholds`、`summary`、`gate`，窗口限 1–200。窗口最多保留 200 轮，不存用户内容，重启清空；模型和本地澄清的时延分别统计。指标定义和评测边界见 [多轮问答流程与质量指标](AI_QA_QUALITY_METRICS.md)。
 
 ### 2.2 历史记录 / 2.3 删除
 
@@ -415,6 +427,8 @@ POST /api/ai/batch       body: {"task":"research","items":[{"id":"a","prompt":"�
 
 `/batch` 将任务与模型组合后并行执行，结果按输入顺序返回：`{"results":[{"id":"a","provider_id":"deepseek","model":"deepseek-flash","ok":true,"result":"…","style_audit":{…}}],"successes":1,"failures":0}`。单次最多 12 个模型调用、同时运行最多 4 个；同一模型连接默认全局最多 2 个，可用 `AI_PROVIDER_PARALLEL_LIMIT` 调整。单项失败保留其他结果。省略 `provider_ids` 时使用该功能已配置的模型路由及其降级链；显式指定时只调用所选连接。`reasoning_effort` 可选 `none`、`low`、`medium`、`high`、`max`；DeepSeek 官方接口的 `none` 关闭思考，便于短任务降低延迟。调用仍受本机默认 Token/次数预算约束，单项最长 180 秒。
 
+流式模型连接只有在收到该协议的正常结束标记后才将输出视为完成。达到输出上限、内容过滤或连接中断时，任务报错；模型明确拒绝或触发安全过滤时不会自动换用备用模型。综述与独立新作在输出长度受限时最多续写数次，仍无法完成则不保存为成品。预算按字符估算，思考增量也会扣除估算额度；官方 DeepSeek、已核验的 OpenAI Chat Completions 模型、Anthropic Messages 和 Gemini GenerateContent 会收到服务端生成上限。其他兼容网关是否支持上限参数取决于网关实现。
+
 ## 9. 深度分析 /api（标题目录+精读+Markdown）
 
 ```
@@ -429,11 +443,23 @@ GET  /api/deep/status                    # 全部书籍深度状态
 ## 10. AI 研读 /api/study
 
 ```
-POST /api/study/overview        # 综合阅读报告（后台任务，book_ids 可空=全部）
+POST /api/study/overview/estimate # 先估算材料量、调用次数、Token 与费用
+POST /api/study/overview        # 综合阅读报告（后台任务，至少选择一本资料）
 GET  /api/study/reports         # 历史报告
+GET  /api/study/reports/{report_id}           # 正文、主张、核查状态和论证检查
+POST /api/study/reports/{report_id}/audit/estimate # 单独核查原文的模型、材料量与用量预估
+POST /api/study/reports/{report_id}/audit     # 202，仅重跑核查，不重写正文
 POST /api/study/train/start     # 思维训练开始 {book_ids, mode: quiz|free, topic}
 POST /api/study/train/ask       # 回答一轮 {session_id, answer} → {message, round, done}
 ```
+
+估算响应包含 `route_signature`。提交报告时将它与确认后的 `budget_max_tokens`、`budget_max_calls` 一并回传；若模型连接在估算、提交或排队期间变化，任务会明确拒绝并要求重新估算。深度模式先分批研读所选范围，再规划问题、逐项核对证据需求、成文并审计主张。长报告依据研究提纲给各段分配明确主题，生成的段落分工保存在 `research_plan.writing_sections`。格式损坏的 JSON 不会作为报告正文入库。`evidence_need_checks` 的“找到候选”仅表示检出了原文片段，不等于该主张已获语义支持。
+
+有效正文先保存，再通过独立调用核对原文与论证。短报告和长报告均适用；核查失败、取消或进程中断时保留已保存正文。报告返回 `source_audit`，包含 `status`（`not_checked | running | complete | failed`）、核查版本、覆盖数量、失败原因及 `logic_review`（中心判断、推理跳步、重复论证、超出证据的结论）。重启后无法继续的核查不会一直显示运行中。自动核查完成不表示全文已被证明正确。
+
+核查最多使用 24 段原文或用户笔记、合计约 26,000 字，优先选用正文中的来源；最多检查 12 条关键主张。主张的 `evidence_quotes` 含 `source_ref`、`quote`、`matched` 和 `source_kind`。代码验证引文存在于实际提交的片段，容忍空格、换行和常见标点差异，保留数字、符号和否定词；无法匹配时降为 `needs_review`。引文存在与主张语义成立分别判断，仍需人工复核。用户笔记不视为书籍原文。
+
+单独核查请求体为 `{budget_max_tokens, budget_max_calls, route_signature}`，三个字段均必填。正常核查预计 1 次模型调用，失败重试受预算上限限制。同一报告已有核查在运行、原文被修改或删除、模型路由发生变化时返回 `409`；排队期间变化也会使任务明确失败。已经人工复核的主张保持不变，新的 AI 判断保存为 `source_audit.suggested_claims`；核查期间人工修改也不会被覆盖。旧报告首次核查只能使用当前来源，响应会提示无法确认生成时的来源版本。原文快照与含机器锚点的核查稿保存在本机，常规报告接口不返回这些大字段。
 
 ## 11. 虚拟书架 `/api/shelves`
 

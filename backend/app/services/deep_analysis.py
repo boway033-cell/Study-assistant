@@ -397,6 +397,16 @@ async def summarize_by_toc(provider, book_title: str, toc: list[dict],
     if max_chars < 100:
         raise ValueError("章节分批长度过小")
     chapters = [t for t in toc if t["level"] == 1]
+    chapter_outlines: list[list[str]] = [[] for _ in chapters]
+    current_root = -1
+    for entry in toc:
+        if entry["level"] == 1:
+            current_root += 1
+        elif 0 <= current_root < len(chapter_outlines):
+            page = f"（PDF 第 {entry['page']} 页）" if entry.get("page") else ""
+            chapter_outlines[current_root].append(
+                f"{'  ' * max(0, entry['level'] - 2)}- {entry['title']}{page}"
+            )
     total = len(chapters)
     out: list[dict] = []
     for i, ch in enumerate(chapters, start=1):
@@ -433,6 +443,12 @@ async def summarize_by_toc(provider, book_title: str, toc: list[dict],
                 notes = await reduce_notes(provider, notes, _bounded_stream,
                     lambda *_: notify(" · 正在综合分批笔记"), len(text), len(text))
         material = "\n\n".join(notes) if notes else text
+        outline_lines = chapter_outlines[i - 1]
+        outline_text = "\n".join(outline_lines)
+        if len(outline_text) > 6000:
+            outline_text = outline_text[:6000].rsplit("\n", 1)[0] + "\n（其余子节标题已省略）"
+        outline_context = (f"章内目录（仅用于组织结构，论点仍须依据原文）：\n{outline_text}\n\n"
+                           if outline_text else "")
         prompt = [
             {"role": "system", "content": (
                 "你是文献精读助手。根据本章完整原文或覆盖全部原文的分批笔记，写成逻辑连贯的中文分析，"
@@ -440,7 +456,7 @@ async def summarize_by_toc(provider, book_title: str, toc: list[dict],
                 "允许有依据的延伸，清楚区别作者观点与分析判断；不堆叠免责声明，不套考试提纲。"
                 "600-1200字，保留材料中的来源标记，不捏造原文。"
             )},
-            {"role": "user", "content": f"《{book_title}》{ch['title']}\n已完整读取{len(text)}字、{batch_count}批。\n\n{material}"},
+            {"role": "user", "content": f"《{book_title}》{ch['title']}\n已完整读取{len(text)}字、{batch_count}批。\n\n{outline_context}{material}"},
         ]
         answer = await _bounded_stream(provider, prompt, "章节精读失败", on_progress=lambda _: notify(" · 正在成文"))
         result = {"title": ch["title"], "key": section_key(ch), "summary": answer.strip(),

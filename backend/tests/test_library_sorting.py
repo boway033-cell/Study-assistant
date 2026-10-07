@@ -39,7 +39,7 @@ def test_library_sorting_and_subset_reorder_are_persistent():
         ])
         db.commit()
 
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1:8000")
         by_year = client.get("/api/books", params=[
             ("ids", alpha.id), ("ids", beta.id), ("ids", gamma.id),
             ("sort_by", "year_desc"), ("page_size", 10),
@@ -100,7 +100,7 @@ def test_shelf_reorder_does_not_change_global_order():
         db.commit()
         global_before = [book.library_order for book in books]
 
-        response = TestClient(app).put("/api/books/order", json={
+        response = TestClient(app, base_url="http://127.0.0.1:8000").put("/api/books/order", json={
             "book_ids": [books[2].id, books[0].id, books[1].id], "shelf_id": shelf.id,
         })
         assert response.status_code == 200

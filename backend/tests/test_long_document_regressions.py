@@ -4,7 +4,7 @@ import re
 from types import SimpleNamespace
 
 import numpy as np
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import Base
@@ -167,10 +167,10 @@ def test_legacy_pdf_can_rebuild_toc_without_structured_cache(tmp_path, monkeypat
     pdf.close()
     monkeypatch.setattr(settings, 'uploads_dir', tmp_path)
     monkeypatch.setattr(settings, 'structured_dir', tmp_path)
-    monkeypatch.setattr(fts, 'delete_book_index', lambda *_args: None)
-    monkeypatch.setattr(fts, 'index_chunk', lambda *_args: None)
     engine = create_engine('sqlite://')
     Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(text(fts._CREATE_SQL))
     with Session(engine) as db:
         book = Book(title='Legacy', file_path='legacy.pdf', file_type='pdf', total_pages=3)
         db.add(book)
@@ -246,6 +246,7 @@ def test_overview_long_scope_saves_prose_coverage_and_audit(monkeypatch):
         db.commit()
     seen = set()
     anchors = []
+    section_focus = []
     class Provider:
         async def stream_chat(self, messages):
             system = messages[0]['content']
@@ -261,6 +262,8 @@ def test_overview_long_scope_saves_prose_coverage_and_audit(monkeypatch):
                 yield json.dumps({'claims': [{'claim': '跨材料判断', 'source_refs': [anchors[-1]],
                                               'status': 'partial', 'synthesis_relation': 'complementary'}]})
             else:
+                assigned = re.search(r'本段只承担这些论证主题：(\[[^\]]+\])。', body)
+                section_focus.append(json.loads(assigned.group(1)))
                 yield '# 连贯论证\n' + '证据支持这个判断。' * 100 + f'[{anchors[-1]}]'
     def update(record, progress, stage, message, **kwargs):
         record.progress, record.stage, record.message = progress, stage, message
@@ -279,6 +282,8 @@ def test_overview_long_scope_saves_prose_coverage_and_audit(monkeypatch):
         assert report.content.startswith('# 连贯论证')
         assert result['claims'] == 1
         assert record.result['draft_markdown']
+        assert section_focus == [['机制'], ['比较', '结论']]
+        assert [item['focus'] for item in selection['research_plan']['writing_sections']] == section_focus
     engine.dispose()
 
 

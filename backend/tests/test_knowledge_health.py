@@ -54,7 +54,7 @@ def test_knowledge_health_reports_actionable_local_issues():
         ])
         db.commit()
 
-        response = TestClient(app).get("/api/books/health")
+        response = TestClient(app, base_url="http://127.0.0.1:8000").get("/api/books/health")
         assert response.status_code == 200
         payload = response.json()
         relevant = [item for item in payload["items"] if item["book_id"] in created_ids]

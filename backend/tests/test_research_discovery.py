@@ -217,7 +217,7 @@ def test_research_api_scope_and_manual_alignment_review(db):
         {"status": "partial", "reason": "二者都讨论自主性，但测量和分析单位并不一致。", "unresolved": "需要同一指标"})
     app.dependency_overrides[get_db] = lambda: db
     try:
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://127.0.0.1:8000") as client:
             params = {"scope_type": "shelf", "scope_id": shelf.id, "snapshot_id": snapshot.id}
             preview = client.post("/api/assistant/research/concepts/preview", json={**params, "term": "自主性"})
             assert preview.status_code == 200 and preview.json()["matched_books"] == 2

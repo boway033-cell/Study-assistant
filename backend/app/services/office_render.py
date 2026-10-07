@@ -84,7 +84,7 @@ def render_office_pdf(source: Path, file_type: str, file_hash: str | None, timeo
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             try:
                 proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                       creationflags=flags, text=True)
+                                       creationflags=flags, text=True, encoding='utf-8', errors='replace')
                 out, err = proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
                 # 仅回收本模块自己拉起的进程树（powershell + 其子 COM 进程），

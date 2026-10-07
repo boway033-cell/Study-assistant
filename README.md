@@ -6,11 +6,11 @@
 
 本地优先的个人知识库：管理书籍与论文，沿原文研读，在书架或项目范围内提问，再把判断写成可回溯的研究成果。
 
-[![Version](https://img.shields.io/badge/version-v2.5-8B5A2B)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v2.6.0-8B5A2B)](CHANGELOG.md)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml)
 [![Platform](https://img.shields.io/badge/platform-Windows-304747)](docs/DOWNLOAD_AND_INSTALL.md)
 
-[下载 v2.5](https://github.com/boway033-cell/Study-assistant/releases/tag/v2.5) · [开始使用](#开始使用) · [资料与隐私](#资料与隐私) · [开发与文档](#开发与文档)
+[下载 v2.6.0](https://github.com/boway033-cell/Study-assistant/releases/tag/v2.6.0) · [开始使用](#开始使用) · [资料与隐私](#资料与隐私) · [开发与文档](#开发与文档)
 
 </div>
 
@@ -34,7 +34,7 @@ flowchart LR
 
 1. **建立资料范围。** 导入 PDF、DOCX 或 PPTX，把相关文献放进书架；研究项目可以引用书架和单本资料。解析后的正文、目录和检索索引留在本机。
 2. **读懂并标记原文。** 阅读器支持目录跳转、高亮、批注和来源定位。长书可结合 PDF 书签、印刷目录及正文标题识别章节；识别有误时可以人工修订。
-3. **让助手使用所选资料。** 在“我的助手”选择书架或项目，查看逐本状态和全文研读预算。问答限定在当前范围；已有有效研读结果时，助手还可参考论证节点。它会区分原文、用户保存的记录和 AI 推断。
+3. **让助手使用所选资料。** 在“我的助手”选择书架或项目，查看逐本状态和全文研读预算。问答限定在当前范围；已有有效研读结果时，助手还可参考论证节点。支持连续追问、会话总结和对象澄清，历史记录可继续提问；它会区分原文、用户保存的记录和 AI 推断。引用编号与词面筛查分别显示，结论仍需核对原文。
 4. **把问题变成可修订的判断。** 研究档案可保存问题、竞争解释、阅读任务和复核结果。带原页的线索可以回跳；资料变化后，相关结果会提示重新核对。
 5. **形成作品。** 研究报告比较所选材料中的共识、分歧和反例，作品库承接人工编辑、表达审阅和 Word 输出；汇报工作区从已选材料制作可编辑的 PPTX。
 
@@ -54,7 +54,7 @@ flowchart LR
 
 ## 开始使用
 
-1. 从 [v2.5 Release](https://github.com/boway033-cell/Study-assistant/releases/tag/v2.5) 下载 <code>study-assistant-v2.5.zip</code>，完整解压到固定目录。需要 Windows 10/11 和 64 位 Python 3.12+。
+1. 从 [v2.6.0 Release](https://github.com/boway033-cell/Study-assistant/releases/tag/v2.6.0) 下载 <code>study-assistant-v2.6.0.zip</code>，完整解压到固定目录。需要 Windows 10/11 和 64 位 Python 3.12+。
 2. 双击 <code>install.bat</code>。安装向导会建立虚拟环境、安装依赖并启动应用；中断后可以继续。需要排查环境时运行 <code>diagnose.bat</code>。
 3. 在“资料库”导入自己的文件。没有模型密钥也能使用阅读、标注和本地搜索，并可加载虚构演示资料。
 4. 使用 AI 功能前，到“设置 → 模型连接”配置自己的供应商连接，检查任务路由、发送范围和预算。
@@ -64,7 +64,7 @@ flowchart LR
 ~~~powershell
 git clone https://github.com/boway033-cell/Study-assistant.git
 cd Study-assistant
-git checkout v2.5
+git checkout v2.6.0
 .\install.bat
 ~~~
 
@@ -87,9 +87,13 @@ git checkout v2.5
 
 长书目录的可复验样本目前覆盖 4 本大卫·哈维著作和 4 本其他书籍；结果及尚未覆盖的扫描书场景见[目录样本库报告](docs/reports/TOC_CORPUS_REVALIDATION_2026-09-27.md)。
 
+研究报告会先保存正文，再独立核查原文与论证。核查失败时可单独重试；界面显示引文匹配、推理跳步及覆盖范围，保留人工复核结果。具体设计、公开方案对比和验证边界见[AI 通路改进报告](docs/reports/AI_PATH_RESEARCH_AND_IMPLEMENTATION_2026-10-07.md)。
+
 ## 开发与文档
 
 后端使用 FastAPI、SQLite 与本地任务队列；前端使用 Vue。模型连接按任务路由，支持多供应商和自定义接口。代码仓库不包含用户的数据库、原始文献或 API Key。
+
+如通过反向代理部署在自有域名，须在 `CORS_ALLOWED_ORIGINS` 中填写完整站点源（例如 `https://study.example`），并让代理保留原始 `Host`。本机默认地址已内置，无须设置此项。
 
 ~~~powershell
 .\.venv\Scripts\python.exe -m pytest backend\tests -q
