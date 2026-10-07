@@ -52,7 +52,7 @@
           <div ref="msgBox" class="msg-box">
             <StudyEmptyState v-if="!messages.length" compact title="从一个可核验问题开始" description="答案会标注书目、章节与页码，选择引用后可在右侧核对原文。" />
             <div v-for="(m, i) in messages" :key="i" :class="['msg', m.role]">
-              <div class="msg-label">{{ m.role === 'user' ? '我' : 'AI' }}</div>
+              <div class="msg-label">{{ m.role === 'user' ? '我' : (m.model ? `AI · ${m.model}` : 'AI') }}</div>
               <div class="msg-content">
                 <div v-if="m.streaming" class="streaming">{{ m.content }}</div>
                 <div v-else v-html="sanitizeHtml(m.content)"></div>
@@ -302,11 +302,14 @@ const send = async () => {
     await chatStream({ book_id: bookId.value || null,
       scope_type: activeScopeType.value || null, scope_id: activeScopeId.value,
       conversation_id: conversationId.value, question: q }, (event, data) => {
-      if (event === 'token') {
+      if (event === 'meta') {
+        aiMsg.value.model = data.model || ''
+      } else if (event === 'token') {
         aiMsg.value.content += data.text
         scrollBottom()
       } else if (event === 'done') {
         aiMsg.value.streaming = false
+        aiMsg.value.model = data.model || aiMsg.value.model
         aiMsg.value.sources = data.sources || []
         aiMsg.value.citationAudit = data.citation_audit || null
         aiMsg.value.styleAudit = data.style_audit || null
@@ -363,7 +366,7 @@ const viewHistory = async (summary) => {
   conversationId.value = h.conversation_id || freshConversationId()
   saveConversationId()
   messages.value = [{ role: 'user', content: h.question }]
-  const msg = { role: 'assistant', content: h.answer, sources: h.sources || [], citationAudit: h.citation_audit || null, styleAudit: h.style_audit || null, bookId: bookId.value }
+  const msg = { role: 'assistant', content: h.answer, model: h.model, sources: h.sources || [], citationAudit: h.citation_audit || null, styleAudit: h.style_audit || null, bookId: bookId.value }
   messages.value.push(msg)
   if (h.sources?.length) {
     activeSourceIndex.value = messages.value.length - 1

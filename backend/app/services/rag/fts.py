@@ -101,6 +101,24 @@ def index_chunk(book_id: int, chapter_id: int | None, page: int | None, chunk_id
         })
 
 
+def replace_book_index_in_session(db, book_id: int, chunks: list) -> None:
+    """Replace one book's index within the caller's database transaction."""
+    payload = []
+    for chunk in chunks:
+        page = chunk.page_start if chunk.page_start is not None else 0
+        payload.append({
+            "content": tokenize(chunk.content or ""),
+            "book_id": book_id,
+            "chapter_id": chunk.chapter_id if chunk.chapter_id is not None else -1,
+            "page": page,
+            "page_end": chunk.page_end if chunk.page_end is not None else page,
+            "chunk_id": chunk.id,
+        })
+    db.execute(text(f"DELETE FROM {FTS_TABLE} WHERE book_id = :book_id"), {"book_id": book_id})
+    for start in range(0, len(payload), REBUILD_BATCH_SIZE):
+        db.execute(text(_INSERT_SQL), payload[start:start + REBUILD_BATCH_SIZE])
+
+
 def search(
     query: str,
     book_id: int | None = None,
@@ -118,6 +136,8 @@ def search(
     """
     match_expr = tokenize_query(query)
     if not match_expr:
+        return {"total": 0, "items": []}
+    if book_ids is not None and not book_ids:
         return {"total": 0, "items": []}
 
     limit = top_k or page_size
@@ -199,12 +219,15 @@ def get_chunk_text(chunk_id: int) -> str:
 
 # ---------- 宽定位检索辅助 ----------
 def fallback_search(query: str, book_id: int | None = None, book_ids: list[int] | None = None,
-                    limit: int = 5) -> list[dict]:
+                    limit: int = 5, chapter_id: int | None = None) -> list[dict]:
     """LIKE 子串匹配兜底检索：任何包含查询词片段的 chunk 都能命中。
 
     当 FTS5 关键词检索因分词/同义表述差异而漏检时，用子串匹配保证召回。
     """
     from backend.app.services.rag.chunker import _get_jieba
+
+    if book_ids is not None and not book_ids:
+        return []
 
     jb = _get_jieba()
     words = [w.strip() for w in jb.cut_for_search(query) if w.strip() and len(w.strip()) >= 2]
@@ -234,6 +257,9 @@ def fallback_search(query: str, book_id: int | None = None, book_ids: list[int] 
     elif book_id is not None:
         where += " AND c.book_id = :book_id"
         params["book_id"] = book_id
+    if chapter_id is not None:
+        where += " AND c.chapter_id = :chapter_id"
+        params["chapter_id"] = chapter_id
 
     sql = f"""
     SELECT c.id AS chunk_id, c.book_id, c.chapter_id, c.page_start, c.page_end,

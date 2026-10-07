@@ -43,7 +43,7 @@ def client(monkeypatch):
     app.include_router(api.router)
     app.include_router(writing_router)
     app.dependency_overrides[get_db] = db
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://127.0.0.1:8000") as c:
         yield c
     engine.dispose()
 

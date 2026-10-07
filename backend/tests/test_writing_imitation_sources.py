@@ -109,6 +109,8 @@ async def test_imitation_accepts_content_outside_dna_corpus_and_keeps_dna_as_cal
         # prompt 分区：风格约束与内容证据分开，且用户要求优先
         assert "【风格约束：Writing DNA" in captured["prompt"]
         assert "【内容证据：本次已选内容来源" in captured["prompt"]
+        assert "【论证安排】" in captured["prompt"]
+        assert "每段只推进一个主要论点" in captured["prompt"]
         assert "用户本次明确要求高于 Writing DNA 风格约束" in captured["prompt"]
         assert "[NOTE:" in output.output_text or "来源索引" in output.output_text
     finally:

@@ -317,7 +317,7 @@ class BookDeep(Base):
     paper_card: Mapped[str | None] = mapped_column(Text)      # 01-16 节证据型阅读卡
     card_audit_json: Mapped[str | None] = mapped_column(Text) # 阅读卡结构/来源审计
     chapter_hashes_json: Mapped[str | None] = mapped_column(Text)  # 各章内容哈希（增量缓存用）
-    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/running/done/failed
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/running/done/failed/stale
     error_msg: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

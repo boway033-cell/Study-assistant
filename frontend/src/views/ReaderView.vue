@@ -87,6 +87,8 @@
               <button @click="wideText = !wideText">{{ wideText ? '窄栏' : '宽栏' }}</button>
             </div>
           </div>
+          <el-alert v-if="deepData.status === 'stale'" type="warning" :closable="false"
+            title="目录已更新，以下内容是保留的旧版分析；请重新研读以核对章节与来源。" />
           <div v-if="artifactText" v-html="renderMarkdown(artifactText)"></div>
           <div v-else-if="mdLoading" v-loading="true" class="artifact-loading" />
           <el-empty v-else description="尚未生成结构化阅读材料">
@@ -353,6 +355,7 @@ const applyTocResultInPlace = async (result) => {
   if (result?.audit) setTocDraftFromAudit(result.audit)
   tocRevisions.value = await listTocRevisions(book.value.id)
   tocHistory.value = []
+  await loadDeep()
 }
 const loadTocEditor = async () => {
   tocEditorLoading.value = true

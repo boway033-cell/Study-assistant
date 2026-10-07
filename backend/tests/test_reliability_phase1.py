@@ -57,7 +57,7 @@ def test_global_task_center_reads_persisted_tasks():
         ))
         db.commit()
         book_id = book.id
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1:8000")
         response = client.get("/api/tasks", params={"active_only": True})
         client.close()
         assert response.status_code == 200
@@ -82,7 +82,7 @@ def test_persisted_task_can_be_cancelled():
         db.flush()
         db.add(ImportTask(id="import-cancellable", book_id=book.id, name="import", status="pending", stage="ocr"))
         db.commit()
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1:8000")
         response = client.post("/api/tasks/import-cancellable/cancel")
         client.close()
         assert response.status_code == 200

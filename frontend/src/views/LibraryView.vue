@@ -104,6 +104,7 @@
                 <button class="category-link" @click.stop="editCategory(row)">{{ row.category || '添加分类' }}</button>
                 <span v-if="row.deep_status === 'done'" class="deep-done">已完成深度分析</span>
                 <span v-else-if="row.deep_status === 'running'" class="warning-state">深度分析中</span>
+                <button v-else-if="row.deep_status === 'stale'" class="analysis-link" @click.stop="runDeep(row)">目录已更新 · 重新研读</button>
                 <button v-else class="analysis-link" @click.stop="runDeep(row)">开始深度分析</button>
               </div>
               <div class="paper-actions" @click.stop>
@@ -122,7 +123,7 @@
         <el-dialog v-model="searchPanelOpen" title="全文检索" class="fulltext-dialog" width="min(860px, calc(100vw - 24px))" top="6vh" append-to-body :close-on-click-modal="false" @opened="searchInput?.focus()">
           <div class="fulltext-content">
           <div class="search-filters">
-            <el-select v-model="searchCategory" placeholder="全部分类" clearable size="small" style="width: 120px">
+            <el-select v-model="searchCategory" placeholder="全部分类" clearable size="small" style="width: 120px" @change="clearSearchResults">
               <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
             </el-select>
           </div>
@@ -133,7 +134,7 @@
             placeholder="输入关键词，跨全部资料搜索（向量+全文+子串三路融合）"
             clearable
             @keyup.enter="doSearch()"
-            @clear="results = null"
+            @clear="clearSearchResults"
             style="margin-top: 8px"
           >
             <template #append>
@@ -143,7 +144,8 @@
 
           <div v-if="searching" v-loading="true" style="height: 60px" />
           <div v-else-if="results" style="margin-top: 12px">
-            <div class="result-count">共 {{ results.total }} 条结果</div>
+            <div class="result-count">{{ results.has_more || results.truncated ? `至少 ${results.total} 条结果` : `共 ${results.total} 条结果` }}</div>
+            <el-alert v-if="results.truncated" type="info" :closable="false" title="已显示前 1000 条，请选分类或使用更具体的关键词继续查找。" />
             <el-card v-for="r in results.items" :key="r.chunk_id" shadow="never" class="result-item">
               <div class="result-meta">
                 <el-tag size="small" type="info">《{{ r.book_title }}》</el-tag>
@@ -155,6 +157,9 @@
               </div>
               <div class="result-snippet" v-html="sanitizeHtml(r.snippet)" />
             </el-card>
+            <el-pagination v-if="results.has_more || searchPage > 1" :current-page="searchPage"
+              :page-size="20" :total="results.truncated ? results.window_limit : results.total" layout="prev, pager, next"
+              @current-change="doSearch" />
           </div>
           </div>
         </el-dialog>
@@ -302,6 +307,8 @@ const loadDemo = async () => {
 const classifying = ref(false)
 const searchQ = ref('')
 const results = ref(null)
+const searchPage = ref(1)
+let searchRequestId = 0
 const searching = ref(false)
 const searchCategory = ref(null)
 const categories = ref([])
@@ -660,17 +667,26 @@ const selectBook = async (row, forceDrawer = false) => {
 }
 const openBook = (row) => selectBook(row, true)
 
-const doSearch = async () => {
+const clearSearchResults = () => {
+  searchRequestId++
+  results.value = null
+  searchPage.value = 1
+  searching.value = false
+}
+const doSearch = async (page = 1) => {
   if (!searchQ.value.trim()) return
+  const requestId = ++searchRequestId
+  searchPage.value = Number(page) || 1
   searching.value = true
   try {
-    const params = { q: searchQ.value, page_size: 20 }
+    const params = { q: searchQ.value, page: searchPage.value, page_size: 20 }
     if (searchCategory.value) params.category = searchCategory.value
-    results.value = await searchBooks(params)
+    const result = await searchBooks(params)
+    if (requestId === searchRequestId) results.value = result
   } catch (e) {
-    ElMessage.error(`全文检索没有完成：${e.message}。请尝试缩短关键词或确认本地索引已就绪。`)
+    if (requestId === searchRequestId) ElMessage.error(`全文检索没有完成：${e.message}。请尝试缩短关键词或确认本地索引已就绪。`)
   } finally {
-    searching.value = false
+    if (requestId === searchRequestId) searching.value = false
   }
 }
 

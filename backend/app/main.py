@@ -309,14 +309,14 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 @app.middleware("http")
 async def _guard_local_api(request: Request, call_next):
-    """允许可信跨源及当前部署域名的同源 API 请求。"""
+    """Only accept API requests addressed to an explicitly trusted host."""
     if request.url.path.startswith("/api/"):
         origin = (request.headers.get("origin") or "").rstrip("/")
-        forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",", 1)[0].strip()
-        request_host = forwarded_host or request.headers.get("host", "").strip()
-        origin_host = urlsplit(origin).netloc if origin else ""
-        is_same_origin = bool(origin_host and request_host and origin_host.casefold() == request_host.casefold())
-        if origin and origin not in _ALLOWED_ORIGINS and not is_same_origin:
+        request_host = request.headers.get("host", "").strip().casefold()
+        trusted_hosts = {urlsplit(allowed).netloc.casefold() for allowed in _ALLOWED_ORIGINS}
+        if request_host not in trusted_hosts:
+            return JSONResponse(status_code=403, content={"detail": "请求主机未获授权"})
+        if origin and origin not in _ALLOWED_ORIGINS:
             return JSONResponse(status_code=403, content={"detail": "跨源请求被拒绝"})
     return await call_next(request)
 
@@ -351,10 +351,11 @@ def health():
     return {
         "status": "ok",
         "app": "study-assistant",
-        "api_revision": 13,
+        "api_revision": 14,
         "capabilities": {"shelves_write": True, "knowledge_records": True, "annotation_underline": True,
                          "writing_dna": True, "ai_tone_docx": True, "knowledge_insights": True,
-                         "assistant_scopes": True, "chinese_writing_style": STYLE_VERSION},
+                         "assistant_scopes": True, "research_source_audit": True,
+                         "chinese_writing_style": STYLE_VERSION},
     }
 
 

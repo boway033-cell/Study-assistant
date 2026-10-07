@@ -19,7 +19,7 @@ from backend.app.core.database import SessionLocal
 from backend.app.models import (Book, Chunk, EvidenceCard, KnowledgeNote, PaperProfile, StudyReport, WritingDnaProfile,
                                 WritingDnaRevision, WritingOutput)
 from backend.app.services.literature_access import validate_public_https_url
-from backend.app.services.llm import LLMRouter, load_llm_config, parse_json_response
+from backend.app.services.llm import LLMOutputIncomplete, LLMRouter, load_llm_config, parse_json_response
 from backend.app.services.chinese_style_audit import audit_chinese_style, normalize_chinese_format
 from backend.app.services.writing_citations import (ANCHOR_RE, database_source_labels, readable_citations,
                                                     web_anchor, web_source_labels)
@@ -90,6 +90,73 @@ async def _call(provider, messages: list[dict]) -> str:
     if not answer.strip():
         raise RuntimeError("AI 返回为空")
     return answer.strip()
+
+
+def _append_continuation(existing: str, addition: str) -> str:
+    """Remove an exact repeated seam without changing either generated passage."""
+    overlap = min(2000, len(existing), len(addition))
+    while overlap >= 6:
+        if existing.endswith(addition[:overlap]):
+            return existing + addition[overlap:]
+        overlap -= 1
+    return existing + addition
+
+
+async def _call_long_writing(provider, messages: list[dict], target_length: int) -> tuple[str, int]:
+    """Continue output-limit cuts; publish only after a normal model completion."""
+    original_messages = list(messages)
+    current_messages = original_messages
+    answer = ""
+    max_continuations = min(5, max(2, (target_length + 3999) // 4000))
+    max_output_chars = max(12000, target_length * 2)
+
+    def continuation_messages(reason: str) -> list[dict]:
+        headings = "\n".join(line for line in answer.splitlines()
+                             if line.lstrip().startswith("#"))[-1200:]
+        return [*original_messages,
+            {"role": "assistant", "content": answer[-16000:]},
+            {"role": "user", "content": (
+                f"上文{reason}。请从末尾直接续写正文，不重复已有文字、标题或证据，"
+                "也不要输出解释、续写说明或新的写作计划。继续遵守最初的事实来源、引文锚点和风格要求；"
+                "完成尚未写完的章节与结论。\n"
+                f"整体目标约 {target_length} 字，已生成约 {len(answer)} 字。\n"
+                f"已写标题：\n{headings or '无'}"
+            )},
+        ]
+
+    for attempt in range(max_continuations + 1):
+        fragment = ""
+        try:
+            async for delta in provider.stream_chat(current_messages):
+                fragment += delta
+                if len(answer) + len(fragment) > max_output_chars:
+                    raise RuntimeError("长文输出超过预设安全长度；稿件未保存")
+        except LLMOutputIncomplete as exc:
+            if exc.reason != "length":
+                raise
+            continued = _append_continuation(answer, fragment)
+            if len(continued) <= len(answer):
+                raise RuntimeError("模型达到输出上限且未生成可续写内容；稿件未保存") from exc
+            answer = continued
+            if attempt >= max_continuations:
+                raise RuntimeError("长文多次达到模型输出上限；稿件未保存，请缩短目标长度或更换模型") from exc
+            current_messages = continuation_messages("因模型单次输出长度上限而中断")
+            continue
+        continued = _append_continuation(answer, fragment)
+        if answer and len(continued) <= len(answer):
+            raise RuntimeError("模型续写没有增加正文内容；稿件未保存")
+        answer = continued
+        if not answer.strip():
+            raise RuntimeError("AI 返回为空")
+        # A model may report a normal stop after a short draft. For genuinely
+        # long requests, continue until it reaches a conservative floor.
+        if target_length >= 6000 and len(answer) < target_length * 0.6:
+            if attempt >= max_continuations:
+                raise RuntimeError("长文未达到目标篇幅的 60%；稿件未保存，请缩短目标长度或更换模型")
+            current_messages = continuation_messages("已正常停止，但正文仍明显短于目标篇幅")
+            continue
+        return answer.strip(), attempt + 1
+    raise RuntimeError("长文生成未完成；稿件未保存")
 
 
 async def _call_json(provider, messages: list[dict]) -> dict:
@@ -720,10 +787,10 @@ async def generate_literature_review(db, *, question: str, title: str, book_ids:
     )
     cfg = load_llm_config(db, "writing")
     provider = LLMRouter.get("auto", cfg)
-    output_text = await _call(provider, [
+    output_text, generation_segments = await _call_long_writing(provider, [
         {"role": "system", "content": "你是个人知识库内的研究作者。围绕中心问题自由综合多篇文献，写成连贯文章；忠于锚点、保留冲突，并明确标识自己的推断。"},
         {"role": "user", "content": prompt},
-    ])
+    ], length)
     output_text = normalize_chinese_format(output_text)
     found_anchors = set(re.findall(r"\[B\d+:C\d+:P\d+(?:-\d+)?\]", output_text))
     invalid_anchors = sorted(found_anchors - valid_anchors)
@@ -749,6 +816,7 @@ async def generate_literature_review(db, *, question: str, title: str, book_ids:
             "cited_book_ids": sorted(cited_book_ids),
             "unreferenced_book_ids": [book_id for book_id in selected_ids if book_id not in cited_book_ids],
             "dna_version": dna_version, "ai_tone_constraints": ai_tone_constraints,
+            "generation_segments": generation_segments,
             "ai_tone_violations": violations,
             "style_audit": audit_chinese_style(output_text),
             "content_policy": "selected_library_documents_only",
@@ -796,6 +864,11 @@ async def imitate(db, profile_id: int, topic: str, genre: str, length: int, brie
 【优先级】用户本次明确要求高于 Writing DNA 风格约束。
 题目：{topic}\n体裁：{genre}\n目标长度：约{length}字\n补充要求：{brief or '无'}
 
+【论证安排】
+先从本次已选来源确定可支撑的中心判断，再按体裁安排问题、主张、证据、解释与必要的反例或边界。
+每段只推进一个主要论点，段落之间交代因果、递进或回应关系。事实、数字与作者观点要能回到来源锚点；
+如果补充要求超出了材料支持范围，应收缩主张。只输出成文，不输出准备过程或论证计划。
+
 【风格约束：Writing DNA（只校准表达、结构与论证习惯，不得作为事实、数字、观点或案例来源）】
 【语言DNA】\n{revision.language_dna}\n【结构模板】\n{revision.structure_patterns}{logic_block}
 【认知框架】\n{revision.cognitive_framework}\n【视觉指南】\n{revision.visual_style_guide}
@@ -810,9 +883,9 @@ async def imitate(db, profile_id: int, topic: str, genre: str, length: int, brie
 - 联网来源使用 [WEB:provider:记录号]，其证据层级是“摘要级依据”，相关主张不得超出摘要给出的事实、数字与限定条件；
 - 锚点只是机器审计标记，系统会自动转成脚注编号；不要让锚点参与句法，也不要为了形式在每段重复堆叠。
 【已选内容来源】\n{content_context}"""
-    output_text = await _call(provider, [
+    output_text, generation_segments = await _call_long_writing(provider, [
         {"role": "system", "content": "生成独立新作；内容只能取自已选内容来源，DNA 语料只能校准风格、不得充当事实来源。围绕中心主张直接、连贯地写作，避免近似复述、作者冒充、免责声明和修饰词堆叠。"},
-        {"role": "user", "content": prompt}])
+        {"role": "user", "content": prompt}], length)
     output_text = normalize_chinese_format(output_text)
     valid = {anchor.strip("[]") for anchor in valid_anchors}
     found = set(re.findall(ANCHOR_RE, output_text))
@@ -854,6 +927,7 @@ async def imitate(db, profile_id: int, topic: str, genre: str, length: int, brie
                         audit_json=json.dumps({
                             "dna_profile_id": profile_id,
                             "dna_version": revision.version,
+                            "generation_segments": generation_segments,
                             "dna_corpus_book_ids": profile_book_ids,
                             "calibration_books": [title for _, title, _ in related],
                             "calibration_policy": "dna_corpus_style_only",

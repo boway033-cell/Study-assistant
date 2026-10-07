@@ -364,6 +364,8 @@ export const studyReports = (page = 1, pageSize = 20) => http.get('/study/report
 export const updateStudyReportClaims = (id, claims) => http.patch(`/study/reports/${id}/claims`, { claims })
 export const depositStudyReport = (id, data = {}) => http.post(`/study/reports/${id}/deposit`, data)
 export const getStudyReport = (id) => http.get(`/study/reports/${id}`)
+export const estimateStudyReportAudit = (id) => http.post(`/study/reports/${id}/audit/estimate`)
+export const auditStudyReport = (id, data) => http.post(`/study/reports/${id}/audit`, data)
 export const deleteStudyReport = (id) => http.delete(`/study/reports/${id}`)
 export const studyTrainStart = (data) => http.post('/study/train/start', data)
 export const studyTrainAsk = (data) => http.post('/study/train/ask', data)

@@ -169,7 +169,7 @@ def test_api_scope_and_workflow_guards(db):
     db.commit()
     app.dependency_overrides[get_db] = lambda: db
     try:
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://127.0.0.1:8000") as client:
             payload = {"scope_type": "shelf", "scope_id": shelf.id, "item_id": parent.id}
             assert client.post("/api/assistant/research/reading-tasks/preview", json=payload).status_code == 200
             assert client.get(f"/api/assistant/research/items/{parent.id}/reading-tasks",

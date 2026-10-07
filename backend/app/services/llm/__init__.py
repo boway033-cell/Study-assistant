@@ -26,6 +26,23 @@ request_reasoning_effort: ContextVar[str | None] = ContextVar("request_reasoning
 _provider_gates: dict[str, threading.BoundedSemaphore] = {}
 _provider_gates_lock = threading.Lock()
 _MAX_PARALLEL_PER_PROVIDER = settings.ai_provider_parallel_limit
+# Only models with a checked official Chat Completions output limit receive
+# max_completion_tokens. Other model names keep their existing payload.
+_OPENAI_OUTPUT_LIMITS = {
+    "gpt-3.5-turbo": 4096,
+    "gpt-4o": 16384,
+    "gpt-4.1": 32768,
+    "gpt-5": 128000,
+    "gpt-6-astra": 128000,
+    "o3": 100000,
+}
+
+
+def _openai_output_limit(model: str) -> int | None:
+    for family in sorted(_OPENAI_OUTPUT_LIMITS, key=len, reverse=True):
+        if model == family or model.startswith((family + "-", family + ".")):
+            return _OPENAI_OUTPUT_LIMITS[family]
+    return None
 
 
 @asynccontextmanager
@@ -190,6 +207,14 @@ class LLMProvider(ABC):
         return True, ""
 
 
+class LLMOutputIncomplete(RuntimeError):
+    """The transport finished without a complete answer; reason is stable for callers."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        self.reason = reason
+        super().__init__(message)
+
+
 class OpenAIChatProvider(LLMProvider):
     """Chat Completions 协议，供 DeepSeek、Kimi、GLM、通义等供应商复用。"""
 
@@ -209,11 +234,24 @@ class OpenAIChatProvider(LLMProvider):
         self.last_delta_at = time.monotonic()
         self.reasoning_chars = 0
         payload: dict[str, Any] = {"model": self.model, "messages": messages, "stream": True}
+        from backend.app.services.llm.budget import current_budget
+        budget = current_budget.get()
+        remaining = budget.remaining_tokens() if budget is not None else None
+        host = urlparse(self.base_url).hostname
+        # These two official Chat Completions APIs document different parameter names.
+        # A generic compatible gateway may reject either, so keep its payload unchanged.
+        if remaining is not None and remaining > 0:
+            if host == "api.deepseek.com":
+                payload["max_tokens"] = min(remaining, 393216)
+            elif host == "api.openai.com":
+                model_limit = _openai_output_limit(self.model)
+                if model_limit is not None:
+                    payload["max_completion_tokens"] = min(remaining, model_limit)
         effort = request_reasoning_effort.get()
         if (effort in {"low", "medium", "xhigh"} and self.model.startswith("qwen3.8-")
-                and urlparse(self.base_url).hostname == "dashscope.aliyuncs.com"):
+                and host == "dashscope.aliyuncs.com"):
             payload["reasoning_effort"] = effort
-        if (self.model.startswith("deepseek-") and urlparse(self.base_url).hostname == "api.deepseek.com"
+        if (self.model.startswith("deepseek-") and host == "api.deepseek.com"
                 and effort in {"none", "low", "medium", "high", "max"}):
             payload["reasoning_effort"] = {"medium": "high"}.get(effort, effort)
             if effort == "none":
@@ -225,11 +263,14 @@ class OpenAIChatProvider(LLMProvider):
                 if response.status_code != 200:
                     body = (await response.aread()).decode("utf-8", errors="replace")[:500]
                     raise RuntimeError(f"{self.display_name} 返回 {response.status_code}: {body}")
+                completed = False
+                has_content = False
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
                     raw = line[5:].strip()
                     if raw == "[DONE]":
+                        completed = True
                         break
                     # 任何一帧（含思考增量）都算端点存活，与是否产出正文无关。
                     self.last_delta_at = time.monotonic()
@@ -237,16 +278,37 @@ class OpenAIChatProvider(LLMProvider):
                         frame = json.loads(raw)
                         if frame.get("error"):
                             raise RuntimeError(f"{self.display_name} 流式返回错误：{str(frame['error'])[:300]}")
-                        delta_obj = frame.get("choices", [{}])[0].get("delta", {}) or {}
+                        choice = frame.get("choices", [{}])[0]
+                        delta_obj = choice.get("delta", {}) or {}
                     except (ValueError, TypeError, IndexError):
                         continue
+                    finish_reason = choice.get("finish_reason")
+                    if finish_reason and finish_reason != "stop":
+                        reasons = {"length": "输出达到模型长度上限", "content_filter": "输出被内容过滤",
+                                   "tool_calls": "模型请求了当前接口不支持的工具调用",
+                                   "function_call": "模型请求了当前接口不支持的函数调用"}
+                        raise LLMOutputIncomplete(
+                            str(finish_reason),
+                            f"{self.display_name} 未完成回答：{reasons.get(finish_reason, str(finish_reason))}"
+                        )
+                    if finish_reason == "stop":
+                        completed = True
                     # 思考型模型（如通义 Qwen3 系）先吐 reasoning_content 再吐 content。
                     # 只统计不落库：既给进度文案一个「还在思考」的可见信号，
                     # 又不把隐性推理过程留进任何输出。
-                    self.reasoning_chars += len(str(delta_obj.get("reasoning_content") or ""))
+                    reasoning_delta = str(delta_obj.get("reasoning_content") or "")
+                    if reasoning_delta:
+                        if budget is not None:
+                            budget.output(len(reasoning_delta))
+                        self.reasoning_chars += len(reasoning_delta)
                     delta = delta_obj.get("content") or ""
                     if delta:
+                        has_content = True
                         yield delta
+                if not completed:
+                    raise LLMOutputIncomplete("interrupted", f"{self.display_name} 的流式响应中断：未收到结束标记")
+                if not has_content:
+                    raise LLMOutputIncomplete("empty", f"{self.display_name} 未返回回答正文")
 
     async def check_available(self) -> tuple[bool, str]:
         if not self.api_key and not self.base_url.startswith(("http://localhost", "http://127.0.0.1")):
@@ -294,6 +356,8 @@ class AnthropicMessagesProvider(LLMProvider):
     async def stream_chat(self, messages: list[dict]) -> AsyncIterator[str]:
         if not self.api_key:
             raise RuntimeError(f"未配置 {self.display_name} API Key")
+        self.last_delta_at = time.monotonic()
+        self.reasoning_chars = 0
         system = "\n\n".join(str(m.get("content", "")) for m in messages if m.get("role") == "system")
         chat = []
         for message in messages:
@@ -309,7 +373,12 @@ class AnthropicMessagesProvider(LLMProvider):
                         blocks.append(part)
                 content = blocks
             chat.append({"role": message.get("role", "user"), "content": content})
-        payload: dict[str, Any] = {"model": self.model, "messages": chat, "max_tokens": 8192, "stream": True}
+        from backend.app.services.llm.budget import current_budget
+        budget = current_budget.get()
+        remaining = budget.remaining_tokens() if budget is not None else None
+        payload: dict[str, Any] = {"model": self.model, "messages": chat,
+                                   "max_tokens": min(8192, remaining) if remaining is not None else 8192,
+                                   "stream": True}
         if system:
             payload["system"] = system
         headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01"}
@@ -318,15 +387,46 @@ class AnthropicMessagesProvider(LLMProvider):
                 if response.status_code != 200:
                     body = (await response.aread()).decode("utf-8", errors="replace")[:500]
                     raise RuntimeError(f"{self.display_name} 返回 {response.status_code}: {body}")
+                stop_reason = None
+                saw_message_stop = False
+                has_content = False
                 async for line in response.aiter_lines():
-                    if line.startswith("data:"):
-                        self.last_delta_at = time.monotonic()
-                        try:
-                            text = json.loads(line[5:].strip()).get("delta", {}).get("text", "")
-                        except (ValueError, TypeError):
+                    if not line.startswith("data:"):
+                        continue
+                    self.last_delta_at = time.monotonic()
+                    try:
+                        event = json.loads(line[5:].strip())
+                    except (ValueError, TypeError):
+                        continue
+                    event_type = event.get("type")
+                    if event_type == "error":
+                        raise RuntimeError(f"{self.display_name} 流式返回错误：{str(event.get('error'))[:300]}")
+                    if event_type == "message_delta":
+                        stop_reason = (event.get("delta") or {}).get("stop_reason") or stop_reason
+                    elif event_type == "message_stop":
+                        saw_message_stop = True
+                        break
+                    elif event_type == "content_block_delta":
+                        delta = event.get("delta") or {}
+                        if delta.get("type") == "thinking_delta":
+                            thought = str(delta.get("thinking") or "")
+                            if budget is not None and thought:
+                                budget.output(len(thought))
+                            self.reasoning_chars = getattr(self, "reasoning_chars", 0) + len(thought)
                             continue
+                        text = delta.get("text") or ""
                         if text:
+                            has_content = True
                             yield text
+                if stop_reason == "max_tokens" or stop_reason == "model_context_window_exceeded":
+                    raise LLMOutputIncomplete("length", f"{self.display_name} 达到输出或上下文长度上限")
+                if stop_reason not in {"end_turn", "stop_sequence"}:
+                    reason = stop_reason or "interrupted"
+                    raise LLMOutputIncomplete(reason, f"{self.display_name} 未正常完成回答：{reason}")
+                if not saw_message_stop:
+                    raise LLMOutputIncomplete("interrupted", f"{self.display_name} 的流式响应中断：未收到结束事件")
+                if not has_content:
+                    raise LLMOutputIncomplete("empty", f"{self.display_name} 未返回回答正文")
 
     async def check_available(self) -> tuple[bool, str]:
         if not self.api_key:
@@ -349,6 +449,8 @@ class GoogleGenerateProvider(LLMProvider):
     async def stream_chat(self, messages: list[dict]) -> AsyncIterator[str]:
         if not self.api_key:
             raise RuntimeError(f"未配置 {self.display_name} API Key")
+        self.last_delta_at = time.monotonic()
+        self.reasoning_chars = 0
         system = "\n\n".join(str(m.get("content", "")) for m in messages if m.get("role") == "system")
         contents = []
         for message in messages:
@@ -361,7 +463,12 @@ class GoogleGenerateProvider(LLMProvider):
                 else:
                     parts.append({"text": part["text"]})
             contents.append({"role": "model" if message.get("role") == "assistant" else "user", "parts": parts})
+        from backend.app.services.llm.budget import current_budget
+        budget = current_budget.get()
+        remaining = budget.remaining_tokens() if budget is not None else None
         payload: dict[str, Any] = {"contents": contents}
+        if remaining is not None:
+            payload["generationConfig"] = {"maxOutputTokens": min(8192, remaining)}
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
         url = f"{self.base_url}/models/{self.model}:streamGenerateContent"
@@ -370,17 +477,39 @@ class GoogleGenerateProvider(LLMProvider):
                 if response.status_code != 200:
                     body = (await response.aread()).decode("utf-8", errors="replace")[:500]
                     raise RuntimeError(f"{self.display_name} 返回 {response.status_code}: {body}")
+                completed = False
+                has_content = False
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
                     self.last_delta_at = time.monotonic()
                     try:
-                        parts = json.loads(line[5:].strip()).get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                        frame = json.loads(line[5:].strip())
+                        if frame.get("error"):
+                            raise RuntimeError(f"{self.display_name} 流式返回错误：{str(frame['error'])[:300]}")
+                        candidate = frame.get("candidates", [{}])[0]
+                        parts = (candidate.get("content") or {}).get("parts", [])
                     except (ValueError, TypeError, IndexError):
                         continue
+                    finish_reason = candidate.get("finishReason")
+                    if finish_reason and finish_reason != "STOP":
+                        reason = "length" if finish_reason == "MAX_TOKENS" else str(finish_reason).lower()
+                        raise LLMOutputIncomplete(reason, f"{self.display_name} 未正常完成回答：{finish_reason}")
+                    if finish_reason == "STOP":
+                        completed = True
                     for part in parts:
-                        if part.get("text"):
-                            yield part["text"]
+                        text = part.get("text") or ""
+                        if part.get("thought"):
+                            if budget is not None and text:
+                                budget.output(len(text))
+                            self.reasoning_chars = getattr(self, "reasoning_chars", 0) + len(text)
+                        elif text:
+                            has_content = True
+                            yield text
+                if not completed:
+                    raise LLMOutputIncomplete("interrupted", f"{self.display_name} 的流式响应中断：未收到结束原因")
+                if not has_content:
+                    raise LLMOutputIncomplete("empty", f"{self.display_name} 未返回回答正文")
 
     async def check_available(self) -> tuple[bool, str]:
         if not self.api_key:
@@ -474,15 +603,23 @@ class RoutedProvider(LLMProvider):
             audit_chars = 0
             started = time.perf_counter()
             try:
-                async with _provider_slot(provider.name):
-                    async for delta in provider.stream_chat(messages):
-                        emitted = True; output_chars += len(delta)
-                        if audit_chars < 100000:
-                            audit_parts.append(delta[:100000 - audit_chars])
-                            audit_chars += min(len(delta), 100000 - audit_chars)
-                        if budget is not None:
-                            budget.output(len(delta))
-                        yield delta
+                budget_token = current_budget.set(budget)
+                try:
+                    async with _provider_slot(provider.name):
+                        async for delta in provider.stream_chat(messages):
+                            if not delta:
+                                continue
+                            emitted = True; output_chars += len(delta)
+                            if audit_chars < 100000:
+                                audit_parts.append(delta[:100000 - audit_chars])
+                                audit_chars += min(len(delta), 100000 - audit_chars)
+                            if budget is not None:
+                                budget.output(len(delta))
+                            yield delta
+                finally:
+                    current_budget.reset(budget_token)
+                if not emitted:
+                    raise RuntimeError("模型没有返回回答正文")
                 try:
                     self.last_style_audit = audit_chinese_style("".join(audit_parts))
                     if output_chars > audit_chars:
@@ -504,8 +641,19 @@ class RoutedProvider(LLMProvider):
                 _record_usage(provider.name, self.task, ok=False, fallback=index > 0,
                               input_chars=input_chars, output_chars=output_chars,
                               elapsed_ms=round((time.perf_counter() - started) * 1000))
+                # A provider's refusal or safety stop is a final decision for
+                # this request, even when it produced no visible text. Trying
+                # another model would silently bypass that decision.
+                if isinstance(exc, LLMOutputIncomplete) and exc.reason in {
+                    "content_filter", "safety", "refusal", "blocklist",
+                    "prohibited_content", "spii", "image_safety",
+                    "recitation", "language",
+                }:
+                    raise
                 errors.append(f"{getattr(provider, 'display_name', provider.name)}: {type(exc).__name__}: {exc}")
                 if emitted:
+                    if isinstance(exc, LLMOutputIncomplete):
+                        raise
                     raise RuntimeError("模型在输出中途断开，为避免拼接不同模型内容，未执行降级：" + errors[-1]) from exc
         raise RuntimeError("所有已配置模型均不可用：" + "；".join(errors))
 

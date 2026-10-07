@@ -189,7 +189,7 @@ def test_http_scope_and_memory_contract(db):
     db.commit()
     app.dependency_overrides[get_db] = lambda: db
     try:
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://127.0.0.1:8000") as client:
             status = client.get("/api/assistant/status", params={"scope_type": "shelf", "scope_id": shelf.id})
             assert status.status_code == 200
             assert status.json()["books"][0]["book_id"] == book.id

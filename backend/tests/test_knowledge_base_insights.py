@@ -47,7 +47,7 @@ def test_knowledge_base_insights_follow_the_research_lifecycle():
         db.commit()
         report_id, output_id, deck_id = report.id, output.id, deck.id
 
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://127.0.0.1:8000")
         response = client.get("/api/stats/knowledge-base?days=30")
         assert response.status_code == 200
         payload = response.json()

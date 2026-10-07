@@ -974,11 +974,11 @@ def reparse_book(book_id: int, db: Session = Depends(get_db)):
 @router.get("/search", response_model=SearchResp)
 def search(
     q: str = Query(min_length=1),
-    book_id: int | None = Query(default=None),
+    book_id: int | None = Query(default=None, ge=1),
     book_ids: str | None = Query(default=None),  # 逗号分隔的 book_id 列表
     category: str | None = Query(default=None),
-    tag_id: int | None = Query(default=None),
-    chapter_id: int | None = Query(default=None),
+    tag_id: int | None = Query(default=None, ge=1),
+    chapter_id: int | None = Query(default=None, ge=1),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -989,11 +989,18 @@ def search(
     """
     # 解析 book_ids 参数
     ids_list: list[int] | None = None
-    if book_ids:
+    if book_id is not None and book_ids is not None:
+        raise HTTPException(422, "book_id 与 book_ids 不能同时指定")
+    if book_ids is not None:
         try:
-            ids_list = [int(x.strip()) for x in book_ids.split(",") if x.strip()]
+            parts = [part.strip() for part in book_ids.split(",")]
+            if not parts or any(not part.isdecimal() or int(part) <= 0 for part in parts):
+                raise ValueError("invalid book IDs")
+            ids_list = list(dict.fromkeys(int(part) for part in parts))
+            if len(ids_list) > 100:
+                raise ValueError("too many book IDs")
         except ValueError:
-            ids_list = None
+            raise HTTPException(422, "book_ids 必须是最多 100 个正整数编号，以逗号分隔")
 
     # 按 category / tag 过滤出 book_ids
     filter_ids: set[int] | None = None
@@ -1008,31 +1015,46 @@ def search(
 
     # 合并 book_id / book_ids / filter_ids
     final_ids: list[int] | None = None
-    if ids_list:
+    if ids_list is not None:
         final_ids = ids_list
     elif book_id is not None:
         final_ids = [book_id]
     if filter_ids is not None:
-        if final_ids:
+        if final_ids is not None:
             final_ids = [bid for bid in final_ids if bid in filter_ids]
         else:
             final_ids = list(filter_ids)
+    if chapter_id is not None:
+        chapter = db.get(Chapter, chapter_id)
+        if chapter is None:
+            raise HTTPException(404, "章节不存在")
+        if final_ids is not None and chapter.book_id not in final_ids:
+            return SearchResp(total=0, items=[])
+        final_ids = [chapter.book_id]
 
     # 走混合检索（RRF 融合：向量 + FTS + LIKE）
     from backend.app.services.rag import retriever
-    # 注意：top_k 必须覆盖到第 page 页末尾，否则第 2 页起切片永远为空。
-    # 上限用于防止深翻页时一次性检索过多结果拖垮响应。
-    want = min(page * page_size, 200)
-    items = retriever.retrieve(q, book_ids=final_ids, top_k=want)
+    # Hybrid ranking requires the candidates preceding this page. Keep an
+    # explicit bounded window and retrieve one extra item to detect more pages.
+    window_end = page * page_size
+    if window_end > 1000:
+        raise HTTPException(422, "检索窗口最多 1000 条，请缩小范围或关键词")
+    want = window_end + 1
+    items = retriever.retrieve(q, book_ids=final_ids, chapter_id=chapter_id,
+                               top_k=want, include_context=False)
 
     # 分页（混合检索结果已在内存中，手动切片）
-    total = len(items)
+    truncated = len(items) > window_end and window_end >= 1000
+    has_more = len(items) > window_end and not truncated
+    total = len(items)  # lower bound when has_more is true
     start = (page - 1) * page_size
     end = start + page_size
     paged = items[start:end]
 
     return SearchResp(
         total=total,
+        has_more=has_more,
+        truncated=truncated,
         items=[
             SearchResultItem(
                 chunk_id=it.get("chunk_id", 0),

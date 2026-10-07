@@ -40,6 +40,7 @@ function Test-StudyAssistant([int]$candidatePort) {
             $response.capabilities.shelves_write -eq $true -and
             $response.capabilities.knowledge_insights -eq $true -and
             $response.capabilities.assistant_scopes -eq $true -and
+            $response.capabilities.research_source_audit -eq $true -and
             $response.capabilities.chinese_writing_style -eq "2026-09-26.2"
     } catch { return $false }
 }

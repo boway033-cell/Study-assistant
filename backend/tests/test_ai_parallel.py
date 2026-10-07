@@ -19,7 +19,7 @@ def test_deepseek_v41_flash_uses_configurable_model_and_endpoint(monkeypatch):
 
     def handler(request):
         requests.append(request)
-        return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"正常"}}]}\n\n')
+        return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"正常"}}]}\n\ndata: [DONE]\n\n')
 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(transport=httpx.MockTransport(handler)))

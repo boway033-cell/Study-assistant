@@ -144,6 +144,9 @@ class SearchResultItem(BaseModel):
 
 class SearchResp(BaseModel):
     total: int
+    has_more: bool = False
+    truncated: bool = False
+    window_limit: int = 1000
     items: list[SearchResultItem]
 
 
@@ -186,7 +189,8 @@ class ChatReq(BaseModel):
     conversation_id: str | None = Field(default=None, min_length=8, max_length=64,
                                         pattern=r"^[A-Za-z0-9_-]+$")
     question: str = Field(min_length=1)
-    model: str | None = None  # flash / pro；None = 用设置页默认
+    model: str | None = Field(default=None, min_length=1, max_length=120,
+                              pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/+-]*$")
 
 
 class ChatSource(BaseModel):

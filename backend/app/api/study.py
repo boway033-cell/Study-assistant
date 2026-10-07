@@ -1,9 +1,12 @@
 """AI 研读：综合阅读报告 + 思维训练（出题批改追问 / 自由陪练）"""
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -50,9 +53,10 @@ class StudyOverviewReq(BaseModel):
     profile_id: int | None = None
     budget_max_tokens: int = Field(default=0, ge=0, le=2_000_000)
     budget_max_calls: int = Field(default=0, ge=0, le=200)
+    route_signature: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
-def _overview_budget(req: StudyOverviewReq, db: Session) -> dict:
+def _overview_budget(req: StudyOverviewReq, db: Session, *, cfg: dict | None = None) -> dict:
     """提交前用数据库里的实际材料范围估算；不把估算冒充账单。"""
     from math import ceil
     from backend.app.services.long_research import scope_size
@@ -85,7 +89,7 @@ def _overview_budget(req: StudyOverviewReq, db: Session) -> dict:
     long_reading = full_scope and corpus_chars > 24000
     batches = ceil(corpus_chars / 11000) if long_reading else 0
     sections = max(2, min(6, ceil(req.target_length / 2000))) if long_reading or req.target_length > 4500 else 1
-    calls = batches + (1 if req.reasoning_depth == "deep" else 0) + sections + (1 if sections > 1 else 0)
+    calls = batches + (1 if req.reasoning_depth == "deep" else 0) + sections + 1
     if long_reading:
         calls += ceil(batches / 18)  # 中间证据地图压缩；具体次数取决于模型输出
     context_chars = min(corpus_chars, 48000) if full_scope else min(corpus_chars, 42000)
@@ -93,11 +97,17 @@ def _overview_budget(req: StudyOverviewReq, db: Session) -> dict:
         context_chars = note_chars
     if long_reading:
         context_chars = min(24000, batches * 1200)
-    input_chars = batches * 12500 + context_chars * sections + min(context_chars, 18000) * int(req.reasoning_depth == "deep")
+    # Long reads can restore up to 12,000 original characters for planned
+    # evidence needs. Include that material in every section and final audit.
+    candidate_chars = 12000 if long_reading else 0
+    input_chars = (batches * 12500 + (context_chars + candidate_chars) * sections
+                   + min(context_chars, 18000) * int(req.reasoning_depth == "deep")
+                   + candidate_chars * int(sections > 1))
     input_chars += note_chars * max(1, sections) + len(req.focus + req.framework) * max(1, calls) + calls * 2400
+    input_chars += min(corpus_chars + note_chars, 26000) + req.target_length
     output_chars = batches * 1200 + req.target_length * (1.5 if sections > 1 else 1.8) + calls * 350
     input_tokens, output_tokens = estimate_tokens(input_chars), estimate_tokens(int(output_chars))
-    cfg = load_llm_config(db, "research")
+    cfg = cfg if cfg is not None else load_llm_config(db, "research")
     try:
         rates = json.loads((db.get(Setting, "ai_price_rates") or Setting(value="{}")).value)
     except (ValueError, TypeError):
@@ -117,11 +127,28 @@ def _overview_budget(req: StudyOverviewReq, db: Session) -> dict:
             "boundary": "Token 按约 2 字/Token 偏保守估算；重试、回退、模型内部推理与供应商实际分词可能增加用量。费用仅使用你填写的费率。"}
 
 
+def _route_signature(cfg: dict) -> str:
+    """Fingerprint the effective route without storing a decrypted API key."""
+    route = [cfg, *(cfg.get("fallbacks") or [])]
+    identity = [{key: item.get(key) for key in (
+        "provider_id", "protocol", "base_url", "model", "deepseek_model", "api_key")}
+        for item in route]
+    return hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def _checked_research_config(db: Session, expected_signature: str | None) -> dict:
+    cfg = load_llm_config(db, "research")
+    if expected_signature is not None and _route_signature(cfg) != expected_signature:
+        raise ValueError("研读模型连接在任务排队期间发生变化；资料尚未发送，请重新预估并提交")
+    return cfg
+
+
 @router.post("/overview/estimate")
 def estimate_overview(req: StudyOverviewReq, db: Session = Depends(get_db)):
     if not req.book_ids:
         raise HTTPException(422, "请至少选择一本研读文献")
-    return _overview_budget(req, db)
+    cfg = load_llm_config(db, "research")
+    return {**_overview_budget(req, db, cfg=cfg), "route_signature": _route_signature(cfg)}
 
 
 _MODE_GUIDANCE = {
@@ -259,7 +286,36 @@ def _normalize_plan(value, mode: str) -> dict:
     }
 
 
+def _writing_section_plan(outlines: list[str], count: int) -> list[dict]:
+    """Assign distinct argument topics to bounded prose calls."""
+    topics = [str(item).strip() for item in outlines if str(item).strip()] or [
+        "提出中心论题", "比较证据与解释", "综合判断与结论",
+    ]
+    count = max(1, count)
+    sections = []
+    if len(topics) >= count:
+        for index in range(count):
+            start = index * len(topics) // count
+            end = (index + 1) * len(topics) // count
+            sections.append({"focus": topics[start:end], "part": 1, "parts": 1,
+                             "covered": topics[:start], "upcoming": topics[end:]})
+    else:
+        assignments = [min(len(topics) - 1, index * len(topics) // count)
+                       for index in range(count)]
+        for index, topic_index in enumerate(assignments):
+            sections.append({
+                "focus": [topics[topic_index]],
+                "part": assignments[:index].count(topic_index) + 1,
+                "parts": assignments.count(topic_index),
+                "covered": topics[:topic_index],
+                "upcoming": topics[topic_index + 1:],
+            })
+    return sections
+
+
 def _source_anchor(item: dict) -> str:
+    if item.get("canonical_ref"):
+        return str(item["canonical_ref"])
     book_id = item.get("book_id")
     chapter_id = item.get("chapter_id")
     page_start = item.get("page_start") or item.get("page")
@@ -275,7 +331,8 @@ def _source_anchor(item: dict) -> str:
     return ":".join(parts)
 
 
-def _format_retrieved_context(items: list[dict], max_chars: int = 22000) -> tuple[str, set[str]]:
+def _format_retrieved_context(items: list[dict], max_chars: int = 22000,
+                              per_item_chars: int = 3200) -> tuple[str, set[str]]:
     """将检索结果变成唯一来源锚点；按字符预算截断以控制任务内存。"""
     parts: list[str] = []
     anchors: set[str] = set()
@@ -287,7 +344,7 @@ def _format_retrieved_context(items: list[dict], max_chars: int = 22000) -> tupl
             continue
         used_chunks.add(chunk_id)
         anchor = _source_anchor(item)
-        body = str(item.get("context") or item.get("snippet") or "").strip()[:3200]
+        body = str(item.get("context") or item.get("snippet") or "").strip()[:per_item_chars]
         if not body:
             continue
         title = str(item.get("book_title") or "未命名资料")
@@ -302,16 +359,32 @@ def _format_retrieved_context(items: list[dict], max_chars: int = 22000) -> tupl
 
 
 def _retrieve_research_candidates(retrieve, focus: str, plan: dict,
-                                  book_ids: list[int]) -> tuple[list[dict], list[dict]]:
+                                  book_ids: list[int], *, allowed_refs: set[str] | None = None,
+                                  needs_only: bool = False, max_needs: int = 3,
+                                  max_sources_per_need: int | None = None,
+                                  top_k: int = 6) -> tuple[list[dict], list[dict]]:
     """Reserve a bounded search pass for planned evidence needs.
 
     A hit is a candidate passage, not proof that the need was met. Every
     retrieval is scoped to a book explicitly selected by the user.
     """
     needs = list(dict.fromkeys(str(value).strip() for value in plan.get("evidence_needs", [])
-                               if str(value).strip()))[:3]
-    per_book_cap = 6 if needs else 5
-    base_queries = list(dict.fromkeys([focus.strip(), *plan.get("subquestions", [])[:2]]))
+                               if str(value).strip()))[:max_needs]
+    # Reserve room for every planned need. A fixed six-hit cap lets early
+    # needs consume all candidates before later needs are checked.
+    per_book_cap = max(6, len(needs) * (max_sources_per_need or 2)) if needs else 5
+    base_queries = ([] if needs_only else
+                    list(dict.fromkeys([focus.strip(), *plan.get("subquestions", [])[:2]])))
+    # A vector hit may omit chapter/page metadata. Chunk IDs identify the exact
+    # passages already read, so reuse their canonical anchors to keep selection
+    # boundaries and citations intact.
+    allowed_by_chunk: dict[int, str] | None = None
+    if allowed_refs is not None:
+        allowed_by_chunk = {}
+        for ref in allowed_refs:
+            chunk_id = ref.rpartition(":C")[2]
+            if chunk_id.isdigit():
+                allowed_by_chunk[int(chunk_id)] = ref
     accepted = {book_id: 0 for book_id in book_ids}
     seen: set[int] = set()
     items: list[dict] = []
@@ -319,13 +392,20 @@ def _retrieve_research_candidates(retrieve, focus: str, plan: dict,
 
     def add_candidates(query: str, book_id: int, *, check: dict | None = None,
                        per_query: int = 2) -> None:
-        if not query or accepted[book_id] >= per_book_cap:
+        if (not query or accepted[book_id] >= per_book_cap or
+                (check is not None and max_sources_per_need is not None and
+                 len(check["source_refs"]) >= max_sources_per_need)):
             return
         added = 0
-        for item in retrieve(query, book_ids=[book_id], top_k=6):
+        for item in retrieve(query, book_ids=[book_id], top_k=top_k):
             chunk_id = int(item.get("chunk_id") or 0)
             if not chunk_id:
                 continue  # A directory outline is not passage evidence.
+            if allowed_by_chunk is not None:
+                canonical_ref = allowed_by_chunk.get(chunk_id)
+                if not canonical_ref or not canonical_ref.startswith(f"B{book_id}:"):
+                    continue
+                item = {**item, "canonical_ref": canonical_ref}
             if check is not None:
                 ref = _source_anchor(item)
                 if ref not in check["source_refs"]:
@@ -337,7 +417,9 @@ def _retrieve_research_candidates(retrieve, focus: str, plan: dict,
             items.append(item)
             accepted[book_id] += 1
             added += 1
-            if added >= per_query or accepted[book_id] >= per_book_cap:
+            if (added >= per_query or accepted[book_id] >= per_book_cap or
+                    (check is not None and max_sources_per_need is not None and
+                     len(check["source_refs"]) >= max_sources_per_need)):
                 break
 
     for check in checks:
@@ -347,6 +429,48 @@ def _retrieve_research_candidates(retrieve, focus: str, plan: dict,
         for query in base_queries:
             add_candidates(query, book_id, per_query=2 if needs else 5)
     return items, checks
+
+
+def _prepare_research_evidence(retrieve, selected_context: str, overview_context: str,
+                               allowed_refs: set[str], focus: str, plan: dict,
+                               book_ids: list[int], *, full_scope: bool,
+                               long_reading: bool, chapter_ids: list[int] | None = None
+                               ) -> tuple[str, set[str], list[dict]]:
+    """Check planned needs even after a full read, without widening its scope."""
+    if not selected_context:
+        retrieved, checks = _retrieve_research_candidates(retrieve, focus, plan, book_ids)
+        evidence_context, refs = _format_retrieved_context(retrieved, max_chars=42000)
+        for check in checks:
+            check["source_refs"] = [ref for ref in check["source_refs"] if ref in refs]
+            if not check["source_refs"]:
+                check["status"] = "no_candidate"
+        return evidence_context or overview_context[:22000], refs, checks
+
+    evidence_context = selected_context
+    if not full_scope or not plan.get("evidence_needs"):
+        return evidence_context, allowed_refs, []
+
+    retrieved, checks = _retrieve_research_candidates(
+        retrieve, focus, plan, book_ids, allowed_refs=allowed_refs,
+        needs_only=True, max_needs=6, max_sources_per_need=2,
+        top_k=24 if chapter_ids else 6,
+    )
+    if long_reading:
+        # The full source passed through map/reduce; restore bounded original
+        # passages for evidence needs that compression may have omitted.
+        raw_context, packed_refs = _format_retrieved_context(
+            retrieved, max_chars=12000, per_item_chars=1400)
+        if raw_context:
+            evidence_context += "\n\n【证据需求的原文候选（仅来自已读范围）】\n" + raw_context
+        usable_refs = packed_refs
+    else:
+        # Short full reads already contain the original passages.
+        usable_refs = allowed_refs
+    for check in checks:
+        check["source_refs"] = [ref for ref in check["source_refs"] if ref in usable_refs]
+        if not check["source_refs"]:
+            check["status"] = "no_candidate"
+    return evidence_context, allowed_refs, checks
 
 
 def _normalize_claims(raw_claims, allowed_refs: set[str]) -> list[dict]:
@@ -427,12 +551,31 @@ def _evidence_summary(claims: list[dict]) -> dict:
             "human_review_required": sum(bool(item.get("human_review_required")) for item in claims)}
 
 
+async def _perform_source_audit(provider, draft: str, packet: dict, mode: str,
+                                citation_notes: list[dict] | None = None, on_progress=None):
+    from backend.app.services import research_audit
+    if not packet.get("entries"):
+        raise ValueError("没有可定位的原文片段；正文已保留，请补充来源后核查")
+    answer = await _stream_answer(
+        provider, research_audit.audit_messages(draft, packet, mode, citation_notes),
+        "主张核查失败", on_progress=on_progress,
+    )
+    parsed = research_audit.parse_audit(answer)
+    refs = {item["source_ref"] for item in packet["entries"]}
+    claims = research_audit.verify_quotes(
+        _normalize_claims(parsed["claims"], refs), parsed["claims"], packet,
+    )
+    return parsed, claims
+
+
 async def run_overview(record, book_ids: list[int], focus: str = "", framework: str = "",
                        chapter_ids: list[int] | None = None, note_ids: list[int] | None = None,
                        research_mode: str = "adaptive", reasoning_depth: str = "deep",
                        writing_style: str = "analytical_essay", extension_level: str = "exploratory",
-                       target_length: int = 3000, profile_id: int | None = None) -> dict:
+                       target_length: int = 3000, profile_id: int | None = None,
+                       expected_route_signature: str | None = None) -> dict:
     from backend.app.core.database import SessionLocal
+    from backend.app.services import research_audit
     from backend.app.worker.tasks import update_progress
 
     db = SessionLocal()
@@ -502,7 +645,7 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
         overview_context = selected_context or _book_context(db, book_ids)
         if not overview_context:
             raise ValueError("没有可用的文献")
-        cfg = load_llm_config(db, "research")
+        cfg = _checked_research_config(db, expected_route_signature)
         if not cfg.get("configured"):
             raise ValueError("研究模型尚未配置或不可用，请在设置中选择并检测一个模型")
         provider = LLMRouter.get("auto", cfg)
@@ -580,23 +723,16 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
         }
         update_progress(record, 0.46, "research-plan", "研究路径已形成，准备检索证据", force=True)
 
-        # 用户没有点选具体材料时，按研究问题和 AI 子问题在所选书目内迭代检索。
-        # 已点选章节/笔记时严格遵守选择边界，不从其他章节补料。
-        evidence_need_checks: list[dict] = []
-        if selected_context:
-            evidence_context = selected_context
-        else:
-            update_progress(record, 0.52, "evidence", "正在按研究路径检索和整理证据...")
-            from backend.app.services.rag import retriever
-            retrieved, evidence_need_checks = _retrieve_research_candidates(
-                retriever.retrieve, focus, plan, book_ids)
-            evidence_context, allowed_refs = _format_retrieved_context(retrieved, max_chars=42000)
-            for check in evidence_need_checks:
-                check["source_refs"] = [ref for ref in check["source_refs"] if ref in allowed_refs]
-                if not check["source_refs"]:
-                    check["status"] = "no_candidate"
-            if not evidence_context:
-                evidence_context = overview_context[:22000]
+        # 全文研读后仍核对研究计划中的证据需求；已选章节只接受本次读过的文本块。
+        # 仅选笔记时不启动书目检索，避免把未经选择的正文混入材料。
+        if not selected_context or (full_scope and plan.get("evidence_needs")):
+            update_progress(record, 0.52, "evidence", "正在按研究路径核对证据需求...")
+        from backend.app.services.rag import retriever
+        evidence_context, allowed_refs, evidence_need_checks = _prepare_research_evidence(
+            retriever.retrieve, selected_context, overview_context, allowed_refs,
+            focus, plan, book_ids, full_scope=full_scope, long_reading=long_reading,
+            chapter_ids=chapter_ids,
+        )
         plan["evidence_need_checks"] = evidence_need_checks
 
         from backend.app.services.writing_citations import database_source_labels, readable_citations
@@ -661,6 +797,11 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
             # Write bounded sections and retain every completed section on disk.
             count = max(2, min(6, (target_length + 1999) // 2000))
             outlines = plan.get('report_outline') or ['提出中心论题', '展开证据与比较', '综合解释与结论']
+            sections = _writing_section_plan(outlines, count)
+            plan['writing_sections'] = [
+                {'focus': item['focus'], 'part': item['part'], 'parts': item['parts']}
+                for item in sections
+            ]
             prose_prompt = [dict(item) for item in prompt]
             prose_prompt[0]['content'] = prose_prompt[0]['content'].split('只输出 JSON 对象：')[0] + (
                 '只输出 Markdown 正文，不输出 JSON、主张清单或写作说明。证据来自分批阅读的笔记，'
@@ -668,10 +809,14 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
             pieces = []
             for index in range(count):
                 preceding = '\n\n'.join(pieces)
+                section = sections[index]
                 section_prompt = [*prose_prompt, {'role': 'user', 'content': (
                     f'全文共{count}段写作任务，现在写第{index + 1}段，约{target_length // count}字。'
-                    f'拟议论证路径：{json.dumps(outlines, ensure_ascii=False)}。'
-                    '按顺序推进整篇论证，不重复已写内容；只在最后一段收束全文。'
+                    f'本段只承担这些论证主题：{json.dumps(section["focus"], ensure_ascii=False)}。'
+                    f'当前主题内第{section["part"]}/{section["parts"]}段；'
+                    f'已覆盖主题：{json.dumps(section["covered"], ensure_ascii=False)}；'
+                    f'后续主题：{json.dumps(section["upcoming"], ensure_ascii=False)}。'
+                    '按顺序推进整篇论证，不复述已写内容，不提前代写后续主题；只在最后一段收束全文。'
                     f'已完成正文末尾：\n{preceding[-3500:]}'
                 )}]
                 piece = await _stream_answer(provider, section_prompt, '分段成文失败',
@@ -681,34 +826,7 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                     on_text=lambda text: save_draft(preceding + '\n\n' + text))
                 pieces.append(piece)
             report_text = '\n\n'.join(pieces)
-            audit = {}
-            try:
-                audit_text = await _stream_answer(provider, [
-                    {'role': 'system', 'content': '核对文章中的关键主张与材料，输出JSON：'
-                     '{"claims":[{"claim":"主张","source_refs":["材料中的原始锚点"],'
-                     '"status":"supported|partial|needs_review|unsupported",'
-                     '"synthesis_relation":"consensus|complementary|conflict|single_source|unresolved",'
-                     '"reason":"判断理由","counterpoint":"反例或限制"}],"open_questions":[],'
-                     '"hypotheses":[{"statement":"候选假设",'
-                     '"claim_type":"descriptive|associational|predictive|causal|mechanistic",'
-                     '"source_refs":["材料中的原始锚点"],"rival_explanations":["竞争性解释"],'
-                     '"falsifier":"什么结果会挑战它","boundary_conditions":"适用边界"}]}。'
-                     'claims 最多12项，不补造来源，不把模型的分批笔记当直接引语。'
-                     'hypotheses 始终只是 candidate；仅在 gap 模式或材料确有冲突/空白时给出，最多6项，'
-                     '每项必须带竞争性解释与可证伪条件，否则返回空数组。'},
-                    {'role': 'user', 'content': f'研读方式：{research_mode}\n'
-                     f'文章：\n{report_text}\n证据笔记：\n{evidence_context}'},
-                ], '主张审计失败', on_progress=lambda _: update_progress(
-                    record, .95, 'synthesis', '正文已保存，正在核对来源与主张'))
-                from backend.app.services.llm import parse_json_response
-                audit = parse_json_response(audit_text) or {}
-            except Exception as exc:
-                if exc.__class__.__name__ == 'TaskCancelled':
-                    raise
-                # A finished article must not disappear because auxiliary auditing failed.
-                audit = {'open_questions': ['自动主张审计未完成，请人工复核来源。']}
-            answer = json.dumps({**(audit if isinstance(audit, dict) else {}),
-                                 'report_markdown': report_text}, ensure_ascii=False)
+            answer = json.dumps({'report_markdown': report_text, 'claims': []}, ensure_ascii=False)
         else:
             answer = await _stream_answer(
                 provider,
@@ -729,18 +847,27 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
             parsed = None
         if isinstance(parsed, dict):
             report_content = str(parsed.get("report_markdown") or "").strip()
+            if not report_content:
+                raise RuntimeError("模型未返回报告正文；未保存格式损坏的结果")
             raw_claims = parsed.get("claims") if isinstance(parsed.get("claims"), list) else []
-            open_questions = [str(item).strip()[:300] for item in (parsed.get("open_questions") or []) if str(item).strip()][:10]
+            open_questions = research_audit.open_questions(parsed.get('open_questions'))
             raw_hypotheses = parsed.get("hypotheses") if isinstance(parsed.get("hypotheses"), list) else []
         else:
+            if answer.lstrip().startswith(("{", "```json", "```JSON")):
+                raise RuntimeError("模型返回的报告 JSON 无法解析；未保存格式损坏的结果")
             report_content, raw_claims = answer, []
             open_questions = []
             raw_hypotheses = []
-        if not report_content:
-            report_content = answer
+        raw_report_content = report_content
+        packet = research_audit.source_packet(db, report_content, allowed_refs, book_ids)
+        db.rollback()
+        source_audit = {"version": research_audit.AUDIT_VERSION, "packet": packet,
+                        "report_hash": research_audit.text_hash(report_content),
+                        "status": "running", "task_id": getattr(record, 'id', None),
+                        "human_review_required": True}
         claims = _normalize_claims(raw_claims, allowed_refs)
         for claim in claims:
-            claim["human_review_required"] = True  # A model cannot mark its own output as human-reviewed.
+            claim.update(status='needs_review', confidence='low', human_review_required=True)
         hypotheses = _normalize_hypotheses(raw_hypotheses, allowed_refs)
         report_content, citation_notes = readable_citations(
             report_content, valid_anchors=allowed_refs, labels=citation_labels,
@@ -759,6 +886,7 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
                 "ai_tone_violations": tone_violations,
                 "reading_coverage": coverage,
                 "citation_notes": citation_notes,
+                "audit_source_text": raw_report_content, "source_audit": source_audit,
                 "research_plan": plan, "open_questions": open_questions,
                 "hypotheses": hypotheses, "evidence_summary": _evidence_summary(claims),
                 "method_profile": {
@@ -770,9 +898,58 @@ async def run_overview(record, book_ids: list[int], focus: str = "", framework: 
             content=report_content,
         )
         db.add(report)
+        db.flush()
+        report_id = report.id
+        baseline = (report.content, report.claims_json)
+        # Commit the completed prose before the final model call so cancellation,
+        # process interruption and an invalid audit response cannot lose it.
         db.commit()
+        record.result['report_id'] = report_id
+        update_progress(record, .95, 'source-audit', '正文已保存，正在核对原文与论证', force=True)
+        try:
+            checked, checked_claims = await _perform_source_audit(
+                provider, raw_report_content, packet, research_mode,
+                on_progress=lambda _: update_progress(
+                    record, .95, 'source-audit', '正文已保存，正在核对原文与论证'),
+            )
+            db.expire_all()
+            report = db.get(StudyReport, report_id)
+            if not report:
+                raise ValueError('报告已删除，核查结果未写入')
+            current = json.loads(report.selection_json or '{}')
+            if baseline != (report.content, report.claims_json) or current.get('claims_reviewed_at'):
+                raise ValueError('核查期间人工复核发生变化，已保留你的修改；请重新核查')
+            research_audit.validate_packet(db, packet, book_ids)
+            source_audit.update(status='complete', checked_at=datetime.now(timezone.utc).isoformat(),
+                                logic_review=research_audit.logic_review(checked.get('logic_review')))
+            current.update(source_audit=source_audit,
+                           open_questions=research_audit.open_questions(checked.get('open_questions')),
+                           evidence_summary=_evidence_summary(checked_claims),
+                           hypotheses=_normalize_hypotheses(checked.get('hypotheses'), allowed_refs))
+            claims = checked_claims
+            hypotheses = current['hypotheses']
+            report.claims_json = json.dumps(claims, ensure_ascii=False)
+            report.selection_json = json.dumps(current, ensure_ascii=False)
+            db.commit()
+        except (Exception, asyncio.CancelledError) as exc:
+            db.rollback()
+            db.expire_all()
+            report = db.get(StudyReport, report_id)
+            if report:
+                current = json.loads(report.selection_json or '{}')
+                state = current.get('source_audit') or {}
+                if state.get('task_id') == getattr(record, 'id', None):
+                    state.update(status='failed', error=str(exc)[:500] or '核查任务已中断')
+                    current['source_audit'] = state
+                    current['open_questions'] = research_audit.open_questions(
+                        [*research_audit.open_questions(current.get('open_questions')),
+                         '原文与主张核查未完成；可单独重跑核查。'])
+                    report.selection_json = json.dumps(current, ensure_ascii=False)
+                    db.commit()
+            if not report or isinstance(exc, asyncio.CancelledError) or exc.__class__.__name__ == 'TaskCancelled':
+                raise
         update_progress(record, 1.0, "overview", "完成", force=True)
-        return {"report_id": report.id, "chars": len(report_content), "claims": len(claims),
+        return {"report_id": report_id, "chars": len(report_content), "claims": len(claims),
                 "hypotheses": len(hypotheses), "plan_steps": len(plan.get("subquestions", []))}
     finally:
         db.close()
@@ -785,7 +962,10 @@ def study_overview(req: StudyOverviewReq, db: Session = Depends(get_db)):
         raise HTTPException(422, "请至少选择一本研读文献")
     if not req.focus.strip():
         raise HTTPException(422, "请先写明研究问题")
-    estimate = _overview_budget(req, db)
+    cfg = load_llm_config(db, "research")
+    if req.route_signature is not None and req.route_signature != _route_signature(cfg):
+        raise HTTPException(409, "研究模型连接在预估后发生变化；请重新预估并确认用量")
+    estimate = _overview_budget(req, db, cfg=cfg)
     if not estimate["configured"]:
         raise HTTPException(400, "研究模型尚未配置，请先在设置中添加并检测模型")
     if not req.budget_max_tokens or not req.budget_max_calls:
@@ -797,10 +977,11 @@ def study_overview(req: StudyOverviewReq, db: Session = Depends(get_db)):
         dna_profile = db.get(WritingDnaProfile, req.profile_id)
         if not dna_profile or dna_profile.status != "ready":
             raise HTTPException(400, "所选 Writing DNA 尚未就绪")
+    expected_route_signature = _route_signature(cfg)
     record = submit("study-overview", lambda rec: run_overview(
         rec, req.book_ids, req.focus, req.framework, req.chapter_ids, req.note_ids,
         req.research_mode, req.reasoning_depth, req.writing_style, req.extension_level,
-        req.target_length, req.profile_id,
+        req.target_length, req.profile_id, expected_route_signature,
     ), book_id=req.book_ids[0], budget_max_tokens=req.budget_max_tokens,
        budget_max_calls=req.budget_max_calls)
     return {"task_id": record.id}
@@ -808,9 +989,27 @@ def study_overview(req: StudyOverviewReq, db: Session = Depends(get_db)):
 
 def _report_payload(r, include_content: bool = True) -> dict:
     selection = json.loads(r.selection_json or "{}")
+    source_audit = {key: value for key, value in (selection.get("source_audit") or {}).items()
+                    if key != "packet"}
+    packet = (selection.get("source_audit") or {}).get("packet") or {}
+    source_audit['included_refs'] = packet.get('included_refs', 0)
+    source_audit['requested_refs'] = packet.get('requested_refs', 0)
+    source_audit['cited_refs'] = packet.get('cited_refs', 0)
+    source_audit['included_cited_refs'] = packet.get('included_cited_refs', 0)
+    if not source_audit.get('status'):
+        source_audit['status'] = 'not_checked'
+    if source_audit.get('status') in {'queued', 'running'}:
+        from backend.app.worker.tasks import get_task
+        task = get_task(source_audit.get('task_id') or '')
+        if not task or task.status in {'failed', 'cancelled'}:
+            source_audit.update(status='failed', error='核查任务已中断，可单独重跑核查')
+    public_selection = {key: value for key, value in selection.items()
+                        if key not in {'audit_source_text', 'source_audit'}}
+    public_selection['source_audit'] = source_audit
     payload = {
         "id": r.id, "book_ids": json.loads(r.book_ids_json or "[]"),
-        "focus": r.focus or "", "framework": r.framework or "", "selection": selection,
+        "focus": r.focus or "", "framework": r.framework or "", "selection": public_selection,
+        "source_audit": source_audit,
         "research_plan": selection.get("research_plan", {}),
         "reading_coverage": selection.get("reading_coverage"),
         "open_questions": selection.get("open_questions", []),
@@ -849,6 +1048,153 @@ def get_report(report_id: int, db: Session = Depends(get_db)):
     return _report_payload(report, True)
 
 
+def _saved_audit_input(db, report):
+    from backend.app.services import research_audit
+    selection = json.loads(report.selection_json or '{}')
+    books = json.loads(report.book_ids_json or '[]')
+    draft = selection.get('audit_source_text') or report.content
+    state = selection.get('source_audit') or {}
+    packet = state.get('packet')
+    needs_packet = not packet or not packet.get('entries')
+    legacy = bool(state.get('legacy_source_version')) or needs_packet
+    if needs_packet:
+        refs = {str(item.get('anchor') or '') for item in selection.get('citation_notes', [])}
+        for claim in json.loads(report.claims_json or '[]'):
+            refs.update(claim.get('source_refs') or [])
+        packet = research_audit.source_packet(db, draft, refs, books)
+    research_audit.validate_packet(db, packet, books)
+    return selection, books, draft, packet, legacy
+
+
+def _audit_estimate(db, report):
+    from backend.app.services.research_audit import audit_messages
+    from backend.app.services.llm.budget import estimate_tokens
+    from backend.app.worker.tasks import get_task
+    selection, _, draft, packet, legacy = _saved_audit_input(db, report)
+    state = selection.get('source_audit') or {}
+    if state.get('status') in {'queued', 'running'}:
+        task = get_task(state.get('task_id') or '')
+        if task and task.status in {'pending', 'running', 'cancelling'}:
+            raise ValueError('这份报告正在核查，请等待当前任务结束')
+    messages = audit_messages(draft, packet, selection.get('research_mode', 'adaptive'),
+                              selection.get('citation_notes'))
+    tokens = estimate_tokens(sum(len(item['content']) for item in messages) + 4000)
+    cfg = load_llm_config(db, 'research')
+    return {"estimated_tokens": tokens + 3000, "estimated_calls": 1,
+            "material_chars": sum(len(item['text']) for item in packet['entries']),
+            "provider_name": cfg.get('provider_name'), "model": cfg.get('model'),
+            "configured": bool(cfg.get('configured')), "route_signature": _route_signature(cfg),
+            "boundary": ('旧报告首次核查使用当前原文，无法确认生成时的来源版本。' if legacy else
+                         '核查使用生成时保留的原文片段；仅重跑核查，保留正文和人工复核结果。')}
+
+
+@router.post('/reports/{report_id}/audit/estimate')
+def estimate_report_audit(report_id: int, db: Session = Depends(get_db)):
+    report = db.get(StudyReport, report_id)
+    if not report:
+        raise HTTPException(404, '报告不存在')
+    try:
+        return _audit_estimate(db, report)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+class StudyAuditReq(BaseModel):
+    budget_max_tokens: int = Field(ge=1, le=2_000_000)
+    budget_max_calls: int = Field(ge=1, le=10)
+    route_signature: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+async def run_report_audit(record, report_id: int, expected_route_signature: str):
+    from backend.app.core.database import SessionLocal
+    from backend.app.services import research_audit
+    from backend.app.worker.tasks import update_progress
+    with SessionLocal() as db:
+        report = db.get(StudyReport, report_id)
+        if not report:
+            raise ValueError('报告已删除')
+        selection, books, draft, packet, legacy = _saved_audit_input(db, report)
+        cfg = _checked_research_config(db, expected_route_signature)
+        baseline = (report.content, report.claims_json, selection.get('claims_reviewed_at'))
+        state = {**(selection.get('source_audit') or {}), 'packet': packet,
+                 'status': 'running', 'task_id': record.id, 'version': research_audit.AUDIT_VERSION}
+        state.pop('error', None)
+        selection['source_audit'] = state
+        report.selection_json = json.dumps(selection, ensure_ascii=False)
+        db.commit()
+        mode = selection.get('research_mode', 'adaptive')
+        citation_notes = selection.get('citation_notes')
+        update_progress(record, .1, 'source-audit', '正在核对已保留正文与原文')
+        try:
+            checked, claims = await _perform_source_audit(
+                LLMRouter.get('auto', cfg), draft, packet, mode, citation_notes,
+                lambda chars: update_progress(record, min(.9, .1 + chars / 8000),
+                                               'source-audit', '正在核对来源、推断与论证'),
+            )
+            db.expire_all()
+            report = db.get(StudyReport, report_id)
+            if not report:
+                raise ValueError('报告已删除，核查结果未写入')
+            current = json.loads(report.selection_json or '{}')
+            if baseline != (report.content, report.claims_json, current.get('claims_reviewed_at')):
+                raise ValueError('核查期间报告或人工复核发生变化，已保留你的修改；请重新核查')
+            research_audit.validate_packet(db, packet, books)
+            state.update(status='complete', checked_at=datetime.now(timezone.utc).isoformat(),
+                         report_hash=research_audit.text_hash(draft), legacy_source_version=legacy,
+                         human_review_required=True,
+                         logic_review=research_audit.logic_review(checked.get('logic_review')))
+            if current.get('claims_reviewed_at'):
+                state['suggested_claims'] = claims
+            else:
+                report.claims_json = json.dumps(claims, ensure_ascii=False)
+                current['evidence_summary'] = _evidence_summary(claims)
+            current['source_audit'] = state
+            current['open_questions'] = research_audit.open_questions(checked.get('open_questions'))
+            report.selection_json = json.dumps(current, ensure_ascii=False)
+            db.commit()
+            return {'kind': 'study-report-audit', 'report_id': report_id, 'claims': len(claims)}
+        except (Exception, asyncio.CancelledError) as exc:
+            db.rollback()
+            db.expire_all()
+            report = db.get(StudyReport, report_id)
+            if report:
+                current = json.loads(report.selection_json or '{}')
+                current_state = current.get('source_audit') or {}
+                if current_state.get('task_id') == record.id:
+                    current_state.update(status='failed', error=str(exc)[:500])
+                    report.selection_json = json.dumps(current, ensure_ascii=False)
+                    db.commit()
+            raise
+
+
+@router.post('/reports/{report_id}/audit', status_code=202)
+def submit_report_audit(report_id: int, req: StudyAuditReq, db: Session = Depends(get_db)):
+    from backend.app.worker.tasks import submit_unique, DuplicateTaskError
+    report = db.get(StudyReport, report_id)
+    if not report:
+        raise HTTPException(404, '报告不存在')
+    try:
+        estimate = _audit_estimate(db, report)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if not estimate['configured']:
+        raise HTTPException(400, '研究模型尚未配置，请在设置中添加并检测模型')
+    if req.route_signature != estimate['route_signature']:
+        raise HTTPException(409, '核查模型在预估后发生变化，请重新预估')
+    if req.budget_max_tokens < estimate['estimated_tokens']:
+        raise HTTPException(409, '核查上限低于估算需求，请提高上限')
+    books = json.loads(report.book_ids_json or '[]')
+    db.rollback()  # Release SQLite before task registration writes to it.
+    try:
+        task = submit_unique('study-audit', lambda rec: run_report_audit(rec, report_id, req.route_signature),
+                             book_id=books[0], budget_max_tokens=req.budget_max_tokens,
+                             budget_max_calls=req.budget_max_calls,
+                             initial_result={'kind': 'study-report-audit', 'report_id': report_id})
+    except DuplicateTaskError as exc:
+        raise HTTPException(409, '这本资料已有来源核查任务在运行') from exc
+    return {'task_id': task.id}
+
+
 class StudyClaimsUpdateReq(BaseModel):
     claims: list[dict] = Field(max_length=30)
 
@@ -862,11 +1208,23 @@ def update_report_claims(report_id: int, req: StudyClaimsUpdateReq, db: Session 
     if not report:
         raise HTTPException(404, "报告不存在")
     previous = json.loads(report.claims_json or "[]")
+    selection = json.loads(report.selection_json or "{}")
     allowed_refs = {str(ref) for claim in previous for ref in (claim.get("source_refs") or [])}
+    # An audit can replace the automated claim list while a human editor still
+    # holds an older draft. Keep that report's original cited passages available.
+    allowed_refs.update(str(item.get('anchor') or '') for item in selection.get('citation_notes', []))
+    packet = (selection.get('source_audit') or {}).get('packet') or {}
+    allowed_refs.update(str(item.get('source_ref') or '') for item in packet.get('entries', []))
     claims = _normalize_claims(req.claims, allowed_refs)
     if len(claims) != len(req.claims):
         raise HTTPException(422, "主张存在空文本、无效结构或超过 30 条")
-    selection = json.loads(report.selection_json or "{}")
+    prior = {claim['claim']: claim for claim in previous}
+    for claim in claims:
+        old = prior.get(claim['claim'], {})
+        if claim['source_refs'] == old.get('source_refs'):
+            for key in ('evidence_quotes', 'verification'):
+                if key in old:
+                    claim[key] = old[key]
     selection["evidence_summary"] = _evidence_summary(claims)
     selection["claims_reviewed_at"] = datetime.now(timezone.utc).isoformat()
     selection["claims_reviewed_by"] = "user"

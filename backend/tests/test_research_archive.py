@@ -90,7 +90,7 @@ def test_http_revision_and_scope_binding(db):
     db.commit()
     app.dependency_overrides[get_db] = lambda: db
     try:
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://127.0.0.1:8000") as client:
             frozen = client.post("/api/assistant/research/snapshots", json={"scope_type": "shelf", "scope_id": shelf.id})
             assert frozen.status_code == 201
             snapshot_id = frozen.json()["id"]

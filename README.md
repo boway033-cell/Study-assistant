@@ -87,9 +87,13 @@ git checkout v2.5
 
 长书目录的可复验样本目前覆盖 4 本大卫·哈维著作和 4 本其他书籍；结果及尚未覆盖的扫描书场景见[目录样本库报告](docs/reports/TOC_CORPUS_REVALIDATION_2026-09-27.md)。
 
+研究报告会先保存正文，再独立核查原文与论证。核查失败时可单独重试；界面显示引文匹配、推理跳步及覆盖范围，保留人工复核结果。具体设计、公开方案对比和验证边界见[AI 通路改进报告](docs/reports/AI_PATH_RESEARCH_AND_IMPLEMENTATION_2026-10-07.md)。
+
 ## 开发与文档
 
 后端使用 FastAPI、SQLite 与本地任务队列；前端使用 Vue。模型连接按任务路由，支持多供应商和自定义接口。代码仓库不包含用户的数据库、原始文献或 API Key。
+
+如通过反向代理部署在自有域名，须在 `CORS_ALLOWED_ORIGINS` 中填写完整站点源（例如 `https://study.example`），并让代理保留原始 `Host`。本机默认地址已内置，无须设置此项。
 
 ~~~powershell
 .\.venv\Scripts\python.exe -m pytest backend\tests -q

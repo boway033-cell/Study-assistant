@@ -85,6 +85,10 @@
             <div v-if="activePlan.analysis_axes?.length"><h3>分析维度</h3><ul><li v-for="item in activePlan.analysis_axes" :key="item">{{ item }}</li></ul></div>
             <div v-if="activePlan.evidence_needs?.length"><h3>证据需求</h3><ul><li v-for="item in activePlan.evidence_needs" :key="item">{{ item }}</li></ul><p v-for="item in activePlan.evidence_need_checks || []" :key="item.need" class="need-check">{{ item.status === 'candidate_found' ? '已找到候选片段' : '未检出候选片段' }}：{{ item.need }}。这不是主张支持性核验。</p></div>
           </div>
+          <div v-if="activePlan.writing_sections?.length" class="writing-section-plan">
+            <h3>成文分工</h3>
+            <ol><li v-for="(section, index) in activePlan.writing_sections" :key="index">第 {{ index + 1 }} 段：{{ section.focus.join('、') }}<span v-if="section.parts > 1">（主题内 {{ section.part }}/{{ section.parts }}）</span></li></ol>
+          </div>
         </section>
 
         <section v-if="liveDraft && !activeReport" class="research-plan">
@@ -103,6 +107,16 @@
 
       <aside class="audit-pane panel">
         <header><div><b>来源与主张审计</b><small>{{ activeReport?.claims?.length || 0 }} 条主张 · AI 初判需核对原文</small></div><div class="claim-review-actions"><el-button v-if="activeReport?.claims?.length&&!editingClaims" size="small" text @click="beginClaimReview">人工复核</el-button><template v-if="editingClaims"><el-button size="small" text @click="cancelClaimReview">取消</el-button><el-button size="small" type="primary" :loading="savingClaims" @click="saveClaimReview">保存</el-button></template></div></header>
+        <section v-if="activeReport" class="audit-status">
+          <el-button size="small" :loading="auditing" :disabled="loading || editingClaims" @click="rerunAudit">{{ auditing ? '正在核查原文' : '重新核查原文与论证' }}</el-button>
+          <el-alert :type="auditState.status === 'complete' ? 'success' : 'warning'" :closable="false" :title="auditStatusTitle" :description="auditState.error || '引文匹配针对本次核查的材料快照；主张的支持程度仍需人工复核。'" />
+          <small v-if="auditState.included_refs">本轮核查 {{ auditState.included_refs }} 段材料，覆盖正文 {{ auditState.included_cited_refs }} / {{ auditState.cited_refs }} 个来源锚点；最多检查 12 条关键主张。未覆盖部分仍需核查。</small>
+        </section>
+        <section v-if="auditState.logic_review" class="logic-review">
+          <h3>论证检查</h3><p v-if="auditState.logic_review.central_claim">{{ auditState.logic_review.central_claim }}</p>
+          <div v-for="item in logicReviewGroups" :key="item.key"><b>{{ item.label }}</b><ul><li v-for="text in item.items" :key="text">{{ text }}</li></ul></div>
+          <details v-if="auditState.suggested_claims?.length"><summary>AI 核查建议（已保留人工复核结果）</summary><p v-for="item in auditState.suggested_claims" :key="item.claim">{{ statusLabel(item.status) }}：{{ item.claim }}<small>{{ item.reason }}</small></p></details>
+        </section>
         <section class="source-summary"><h3>本次来源</h3><button v-for="book in scopedBooks" :key="book.id" @click="router.push(`/reader/${book.id}`)">《{{ book.title }}》 ↗</button></section>
         <section v-if="activeReport?.evidence_summary" class="evidence-summary"><h3>跨文献关系（台账标签计数）</h3><div><span>共识 <b>{{ relationCount('consensus') }}</b></span><span>互补 <b>{{ relationCount('complementary') }}</b></span><span>冲突 <b>{{ relationCount('conflict') }}</b></span><span>待定 <b>{{ relationCount('unresolved') }}</b></span></div></section>
         <section>
@@ -112,6 +126,7 @@
             <template v-if="editingClaims"><el-input v-model="claim.claim" type="textarea" :rows="2" maxlength="1000" /><div class="claim-edit-grid"><el-select v-model="claim.status"><el-option label="支持" value="supported"/><el-option label="部分支持" value="partial"/><el-option label="待核验" value="needs_review"/><el-option label="不支持" value="unsupported"/></el-select><el-select v-model="claim.synthesis_relation"><el-option label="共识" value="consensus"/><el-option label="互补" value="complementary"/><el-option label="冲突" value="conflict"/><el-option label="单一来源" value="single_source"/><el-option label="待定" value="unresolved"/></el-select><el-select v-model="claim.evidence_quality"><el-option label="高质量" value="high"/><el-option label="中等质量" value="moderate"/><el-option label="低质量" value="low"/><el-option label="极低质量" value="very_low"/><el-option label="未评估" value="not_assessed"/></el-select></div><el-input v-model="claim.reason" type="textarea" :rows="2" placeholder="判断理由"/><el-input v-model="claim.counterpoint" type="textarea" :rows="2" placeholder="反例、限制或适用边界"/><el-checkbox v-model="claim.human_review_required">仍需进一步人工核验</el-checkbox></template><p v-else>{{ claim.claim }}</p>
             <div class="source-links"><button v-for="ref in claim.source_refs || []" :key="ref" @click="openSourceRef(ref)">{{ ref }} ↗</button><small v-if="!(claim.source_refs || []).length">无有效来源锚点</small></div>
             <em>{{ claim.reason }}</em><em v-if="claim.counterpoint" class="counterpoint">限制：{{ claim.counterpoint }}</em>
+            <blockquote v-for="(quote, quoteIndex) in claim.evidence_quotes || []" :key="quoteIndex" class="evidence-quote"><small>{{ quote.matched ? quote.source_kind === 'note' ? '已匹配用户笔记（非书籍原文）' : '已匹配原文' : '未匹配所给材料，待核对' }}</small>{{ quote.quote }}</blockquote>
             <em v-if="claim.bias_flags?.length" class="counterpoint">偏倚风险：{{ claim.bias_flags.join('；') }}</em>
             <em v-if="claim.alternative_explanations?.length" class="counterpoint">竞争解释：{{ claim.alternative_explanations.join('；') }}</em>
           </article>
@@ -138,7 +153,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import KnowledgeScopeSelector from '../components/KnowledgeScopeSelector.vue'
 import { knowledgeBooks, knowledgeBookIds, loadKnowledgeBooks } from '../stores/knowledgeScope'
-import { cancelTask, getBook, subscribeTask, studyOverview, estimateStudyOverview, studyReports, getStudyReport, listKnowledgeRecords, listWritingProfiles, depositStudyReport, updateStudyReportClaims, promoteStudyReport } from '../api'
+import { cancelTask, getBook, subscribeTask, studyOverview, estimateStudyOverview, studyReports, getStudyReport, estimateStudyReportAudit, auditStudyReport, listKnowledgeRecords, listWritingProfiles, depositStudyReport, updateStudyReportClaims, promoteStudyReport } from '../api'
 import { renderMarkdown } from '../utils/markdown'
 import { notifyTaskSubmitted } from '../stores/taskCenter'
 
@@ -175,6 +190,14 @@ const reportViolations = computed(() => {
   return { total: hits.reduce((sum, [, list]) => sum + list.length, 0), detail: hits.map(([label, list]) => `${label} ${list.length} 处`).join('、'), samples: hits.flatMap(([, list]) => list).slice(0, 4).join('；') }
 })
 const loading = ref(false), progress = ref(0), stage = ref(''), reports = ref([]), activeReport = ref(null)
+const auditing = ref(false)
+let auditAbortController = null
+const AUDIT_TASK_KEY = 'sa-study-audit-task'
+const auditState = computed(() => activeReport.value?.source_audit || {})
+const auditStatusTitle = computed(() => ({ complete: '原文与论证自动核查已完成', running: '正在核查原文与论证', queued: '来源核查正在排队', failed: '正文已保留，来源核查未完成', not_checked: '该报告尚未进行原文核查' }[auditState.value.status] || '该报告尚未进行原文核查'))
+const logicReviewGroups = computed(() => [
+  { key: 'gaps', label: '推理跳步' }, { key: 'repetition', label: '重复论证' }, { key: 'unsupported_conclusions', label: '超出证据的结论' },
+].map(item => ({ ...item, items: auditState.value.logic_review?.[item.key] || [] })).filter(item => item.items.length))
 const activeTaskId = ref('')
 const livePlan = ref({})
 const liveDraft = ref('')
@@ -182,7 +205,7 @@ const copyDraft = async () => { await navigator.clipboard.writeText(liveDraft.va
 const taskStages = [
   { key: 'overview', label: '汇总材料' }, { key: 'evidence-reading', label: '分批研读' }, { key: 'research-plan', label: '规划问题' },
   { key: 'evidence', label: '检索证据' }, { key: 'synthesis', label: '综合写作' },
-  { key: 'done', label: '保存报告' },
+  { key: 'source-audit', label: '原文核查' }, { key: 'done', label: '保存报告' },
 ]
 let taskAbortController = null
 const ACTIVE_TASK_KEY = 'sa-study-active-task'
@@ -197,7 +220,7 @@ const currentStageIndex = computed(() => {
   return index < 0 ? 0 : index
 })
 const stageKey = ref('overview')
-const hasPlan = computed(() => ['subquestions', 'analysis_axes', 'evidence_needs'].some(key => activePlan.value[key]?.length))
+const hasPlan = computed(() => ['subquestions', 'analysis_axes', 'evidence_needs', 'writing_sections'].some(key => activePlan.value[key]?.length))
 const scopedBooks = computed(() => knowledgeBooks.value.filter(book => knowledgeBookIds.value.includes(book.id)))
 const sameScope = (ids = []) => { const a = [...ids].sort((x,y) => x-y), b = [...knowledgeBookIds.value].sort((x,y) => x-y); return a.length === b.length && a.every((id,i) => id === b[i]) }
 const scopedReports = computed(() => reports.value.filter(report => sameScope(report.book_ids)))
@@ -223,18 +246,23 @@ const followStudyTask = async taskId => {
       if (next.result?.research_plan) livePlan.value = next.result.research_plan
       if (next.result?.draft_markdown) liveDraft.value = next.result.draft_markdown
     }, { signal: controller.signal })
+    if (task.result?.report_id && ['failed', 'cancelled'].includes(task.status) && !editingClaims.value) {
+      await loadReports()
+      await openReport({ id: task.result.report_id })
+    }
     if (task.status === 'failed') throw new Error(task.error || task.message || '任务未完成')
     // 用户主动停止不是失败：草稿已由后端逐段写入任务结果，这里不做红色错误提示。
     if (task.status === 'cancelled') {
-      ElMessage.info(liveDraft.value ? '已停止任务，已完成的草稿已保留' : '已停止任务')
+      ElMessage.info(task.result?.report_id ? '已停止任务，已保存正文可单独重跑核查' : liveDraft.value ? '已停止任务，已完成的草稿已保留' : '已停止任务')
       return
     }
     progress.value = 100
     stageKey.value = 'done'
     await loadReports()
     const latest = reports.value.find(report => report.id === task.result?.report_id) || scopedReports.value[0]
-    if (latest) await openReport(latest)
-    ElMessage.success('研究报告、研究路径与主张审计已完成')
+    if (latest && !editingClaims.value) await openReport(latest)
+    if (activeReport.value?.source_audit?.status === 'complete') ElMessage.success('研究报告与原文核查已完成，主张仍需人工复核')
+    else ElMessage.warning('报告正文已保留，原文核查未完成，可单独重跑核查')
   } catch (error) {
     if (error?.name === 'AbortError') return
     ElMessage.error(`生成失败：${error.message}`)
@@ -263,7 +291,8 @@ const generate = async () => {
         inputPlaceholder: '输入本任务最大估算 Token',
         inputValidator: text => Number.isInteger(Number(text)) && Number(text) >= estimate.estimated_tokens && Number(text) <= 2_000_000 ? true : `请输入 ${estimate.estimated_tokens}–2,000,000 之间的整数` }
     )
-    cap = { budget_max_tokens: Number(value), budget_max_calls: callCap }
+    cap = { budget_max_tokens: Number(value), budget_max_calls: callCap,
+      route_signature: estimate.route_signature }
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
     return ElMessage.error(`无法预估任务用量：${error.message || error}`)
@@ -291,6 +320,50 @@ const cancelActiveTask = async () => {
     await cancelTask(activeTaskId.value)
     stage.value = '正在安全停止任务…'
   } catch (error) { ElMessage.error(`无法停止任务：${error.message}`) }
+}
+const followAuditTask = async taskId => {
+  auditAbortController?.abort()
+  const controller = new AbortController()
+  auditAbortController = controller
+  auditing.value = true
+  localStorage.setItem(AUDIT_TASK_KEY, taskId)
+  try {
+    const task = await subscribeTask(taskId, () => {}, { signal: controller.signal })
+    if (task.status === 'failed') throw new Error(task.error || '原文核查未完成')
+    await loadReports()
+    if (activeReport.value?.id === task.result?.report_id && !editingClaims.value) await openReport({ id: task.result.report_id })
+    if (task.status === 'cancelled') return ElMessage.info('已停止原文核查，正文和人工复核结果已保留')
+    ElMessage.success('原文与论证核查已完成，正文和人工复核结果已保留')
+  } catch (error) {
+    if (error?.name !== 'AbortError') {
+      if (activeReport.value?.id && !editingClaims.value) await openReport({ id: activeReport.value.id })
+      ElMessage.error(error.message || '核查失败，可稍后重试')
+    }
+  } finally {
+    if (auditAbortController === controller && !controller.signal.aborted) {
+      localStorage.removeItem(AUDIT_TASK_KEY)
+      auditing.value = false
+    }
+  }
+}
+const rerunAudit = async () => {
+  const reportId = activeReport.value?.id
+  if (!reportId) return
+  try {
+    const estimate = await estimateStudyReportAudit(reportId)
+    if (!estimate.configured) return ElMessage.warning('请先在设置中配置研究模型')
+    const suggested = Math.min(2_000_000, Math.ceil(estimate.estimated_tokens * 1.5))
+    const { value } = await ElMessageBox.prompt(
+      `核查约 ${estimate.material_chars.toLocaleString()} 字原文；${estimate.provider_name} / ${estimate.model}；预计 1 次调用、${estimate.estimated_tokens.toLocaleString()} 估算 Token，最多允许 3 次调用。${estimate.boundary}`,
+      '确认原文核查用量', { inputValue: String(suggested), confirmButtonText: '开始核查', cancelButtonText: '取消',
+        inputValidator: text => Number.isInteger(Number(text)) && Number(text) >= estimate.estimated_tokens && Number(text) <= 2_000_000 ? true : `请输入 ${estimate.estimated_tokens}–2,000,000 之间的整数` },
+    )
+    const response = await auditStudyReport(reportId, { budget_max_tokens: Number(value), budget_max_calls: 3, route_signature: estimate.route_signature })
+    notifyTaskSubmitted()
+    followAuditTask(response.task_id)
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.message || '无法提交原文核查')
+  }
 }
 const copyReport = async () => { try { await navigator.clipboard.writeText(content.value); ElMessage.success('Markdown 已复制') } catch { ElMessage.warning('请手动复制') } }
 const depositReview = async () => { if(!activeReport.value?.id)return ElMessage.warning('请先生成或打开报告');depositing.value=true;try{const result=await depositStudyReport(activeReport.value.id,{include_report_note:true,include_claim_cards:true});await loadMaterials();ElMessage.success(`已沉淀审查笔记和 ${result.claim_count} 张证据卡；重复保存不会产生副本`)}catch(error){ElMessage.error(error.message)}finally{depositing.value=false} }
@@ -324,14 +397,19 @@ onMounted(async () => {
   }
   const taskId = String(route.query.taskId || localStorage.getItem(ACTIVE_TASK_KEY) || '')
   if (taskId) followStudyTask(taskId)
+  const auditTaskId = String(route.query.auditTaskId || localStorage.getItem(AUDIT_TASK_KEY) || '')
+  if (auditTaskId) followAuditTask(auditTaskId)
   initialised = true
 })
-onBeforeUnmount(() => taskAbortController?.abort())
+onBeforeUnmount(() => { taskAbortController?.abort(); auditAbortController?.abort() })
 </script>
 
 <style scoped>
 .report-workspace{max-width:1560px}.scope-required{display:flex;flex-direction:column;gap:6px;padding:40px;border:1px dashed #d8c7b0;border-radius:12px;background:#f7f2e9;text-align:center}.workspace-grid{display:grid;grid-template-columns:280px minmax(520px,1fr) 320px;gap:10px;align-items:start}.panel{overflow:hidden;border:1px solid #e5e7eb;border-radius:11px;background:#fffdf9;box-shadow:0 1px 2px rgba(15,23,42,.06)}.panel>header{display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid #ece4d8}.panel>header>div,.source-pane header,.audit-pane header{display:flex;flex-direction:column}.panel header small{color:var(--el-text-color-secondary);font-size:11px}.source-pane>.el-input{margin:10px;width:calc(100% - 20px)}.source-pane section,.audit-pane>section{padding:0 12px 12px;border-top:1px solid #eee7dc}.panel h3{margin:12px 0 8px;color:#786b5b;font-size:12px}.source-book>b{display:block;margin:9px 0 4px;font-size:13px}.source-pane :deep(.el-checkbox-group){display:grid;gap:2px}.source-pane :deep(.el-checkbox){height:auto;margin:0;padding:4px 0;white-space:normal}.source-pane :deep(.el-checkbox__label){display:flex;min-width:0;flex-direction:column;font-size:12px}.source-pane :deep(.el-checkbox__label small){color:#988b7b}.report-pane{min-height:700px}.research-brief{display:grid;gap:10px;padding:14px;background:#f8f3ea}.method-row{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px}.research-brief label{display:grid;gap:5px;color:#675d50;font-size:12px;font-weight:700}.method-hint{margin:0;padding:8px 10px;border-left:2px solid var(--study-ink-soft);background:rgba(255,255,255,.55);color:#75695c;font-size:11px;line-height:1.6}.progress span{font-size:11px;color:#7b7165}.research-plan{margin:14px;border:1px solid #e7ddcf;border-radius:9px;background:#fffcf7}.research-plan>header{display:flex;align-items:center;justify-content:space-between;padding:11px 12px;border-bottom:1px solid #eee5d9}.research-plan>header div{display:flex;flex-direction:column}.research-plan>header small{color:#8b7f71;font-size:10px}.plan-columns{display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:10px;padding:0 12px 10px}.plan-columns ol,.plan-columns ul,.open-questions ul{margin:0;padding-left:18px;color:#5e554b;font-size:11px;line-height:1.65}.report-content{max-height:calc(100vh - 430px);min-height:300px;overflow-y:auto;padding:18px 24px;line-height:1.9}.report-violations{margin:14px 14px 0}.output-actions{display:flex;justify-content:flex-end;gap:7px;padding:12px;border-top:1px solid #ece4d8}.source-summary{display:grid;gap:5px}.source-summary button,.history button{padding:7px;border:0;border-radius:7px;background:#f7f1e7;color:#82582e;cursor:pointer;text-align:left;transition:transform .15s ease,background-color .15s ease}.source-summary button:hover,.history button:hover,.source-links button:hover{transform:translateY(-1px);background:#f0e5d5}.claim-card{margin-bottom:8px;padding:9px;border:1px solid #ece3d7;border-radius:8px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.claim-meta{display:flex;align-items:center;gap:7px}.claim-meta span,.claim-meta small{font-size:10px}.claim-meta span:first-child{font-weight:700}.claim-meta span.supported{color:#327052}.claim-meta span.partial{color:#8b6a20}.claim-meta span.needs_review{color:#b5661f}.claim-meta span.unsupported{color:#ad4242}.claim-meta small{margin-left:auto;color:#948779}.claim-card p{margin:7px 0;font-size:12px;line-height:1.55}.claim-card em{display:block;color:#817569;font-size:11px;font-style:normal;line-height:1.5}.claim-card .counterpoint{margin-top:4px;color:#8b5f46}.source-links{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}.source-links button{padding:2px 5px;border:0;border-radius:4px;background:#f5eee3;color:#8a5d31;cursor:pointer;font-size:9px;transition:transform .15s ease,background-color .15s ease}.source-links small{color:#a39688;font-size:10px}.history{display:grid;gap:5px}.history button{display:flex;flex-direction:column}.history button.active{outline:1px solid var(--study-ink-soft)}.history small{overflow:hidden;color:#82776a;text-overflow:ellipsis;white-space:nowrap}.open-questions li+li{margin-top:4px}@media(max-width:1240px){.workspace-grid{grid-template-columns:250px minmax(480px,1fr)}.audit-pane{grid-column:1/-1}}@media(max-width:780px){.workspace-grid{grid-template-columns:1fr}.audit-pane{grid-column:auto}.method-row,.plan-columns{grid-template-columns:1fr}.output-actions{flex-wrap:wrap;justify-content:flex-start}}
 .evidence-summary>div{display:grid;grid-template-columns:1fr 1fr;gap:5px}.evidence-summary span{display:flex;justify-content:space-between;padding:6px 7px;border-radius:6px;background:#f7f1e7;color:#786b5b;font-size:11px}.claim-review-actions{display:flex!important;align-items:center;flex-direction:row!important}.claim-card.editing{display:grid;gap:7px}.claim-edit-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}.open-questions li{display:flex;flex-direction:column}.open-questions li small{margin-top:3px;color:#8b7460}
 .report-head-actions{display:flex;gap:7px}.immersive-report{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:48px;width:min(100%,1280px);margin:0 auto;padding:10px 8px 72px}.immersive-report>main{min-width:0}.immersive-kicker{margin-bottom:20px;color:var(--study-ink-soft);font-size:10px;letter-spacing:1.5px}.immersive-report>main>.markdown-body{width:min(100%,76ch);font-family:var(--study-font-reading);font-size:17px;line-height:1.95}.immersive-report>aside{position:sticky;top:0;align-self:start;padding-left:22px;border-left:1px solid var(--study-card-border)}.immersive-report>aside h2{margin-bottom:12px;font-size:16px}.immersive-counts{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:14px}.immersive-counts span{display:flex;justify-content:space-between;padding:7px;background:var(--study-surface-muted);font-size:11px}.immersive-report>aside article{display:flex;flex-direction:column;padding:10px 0;border-top:1px solid var(--study-card-border)}.immersive-report>aside article b{font-family:var(--study-font-reading);font-size:12px;line-height:1.55}.immersive-report>aside article small{margin-top:5px;color:var(--study-text-secondary)}.note-reader-actions{display:flex;justify-content:flex-end;gap:8px}@media(max-width:840px){.immersive-report{grid-template-columns:1fr}.immersive-report>aside{position:static;padding-left:0;border-top:1px solid var(--study-card-border);border-left:0}.immersive-report>main>.markdown-body{font-size:16px}}
-.task-monitor{display:grid;gap:9px;padding:12px;border:1px solid #dfcfb9;border-radius:9px;background:#fffaf1}.task-monitor header{display:flex;align-items:center;justify-content:space-between}.task-monitor header div{display:flex;min-width:0;flex-direction:column}.task-monitor header small{overflow:hidden;max-width:240px;color:#8c7e6d;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.task-monitor p,.task-monitor>small{margin:0;color:#75695c;font-size:11px}.task-stages{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px}.task-stages span{padding:5px 3px;border-radius:5px;background:#eee7dc;color:#9a8f81;font-size:9px;text-align:center}.task-stages span.active{background:#ead8bd;color:#815627;font-weight:700}.task-stages span.done{background:#e5efe7;color:#39704e}@media(max-width:680px){.task-stages{grid-template-columns:1fr 1fr}.task-stages span:last-child{grid-column:1/-1}}\n.report-content{max-width:min(100%,76ch);margin:0 auto}.report-content :deep(table){display:block;overflow-x:auto}
+.task-monitor{display:grid;gap:9px;padding:12px;border:1px solid #dfcfb9;border-radius:9px;background:#fffaf1}.task-monitor header{display:flex;align-items:center;justify-content:space-between}.task-monitor header div{display:flex;min-width:0;flex-direction:column}.task-monitor header small{overflow:hidden;max-width:240px;color:#8c7e6d;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.task-monitor p,.task-monitor>small{margin:0;color:#75695c;font-size:11px}.task-stages{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px}.task-stages span{padding:5px 3px;border-radius:5px;background:#eee7dc;color:#9a8f81;font-size:9px;text-align:center}.task-stages span.active{background:#ead8bd;color:#815627;font-weight:700}.task-stages span.done{background:#e5efe7;color:#39704e}@media(max-width:680px){.task-stages{grid-template-columns:1fr 1fr}.task-stages span:last-child{grid-column:1/-1}}
+.report-content{max-width:min(100%,76ch);margin:0 auto}.report-content :deep(table){display:block;overflow-x:auto}
+.writing-section-plan{padding:0 12px 12px;border-top:1px solid #eee5d9}.writing-section-plan h3{margin:12px 0 6px;font-size:12px;color:#786b5b}.writing-section-plan ol{margin:0;padding-left:20px;color:#5e554b;font-size:11px;line-height:1.65}
+.audit-status{display:grid;gap:10px;padding-top:12px!important}.audit-status>.el-button{justify-self:start}.logic-review p,.logic-review li{font-size:12px;line-height:1.65;color:var(--study-text-secondary)}.logic-review ul{padding-left:18px}.logic-review details{font-size:12px;line-height:1.65}.logic-review details small{display:block;color:var(--study-text-muted)}.evidence-quote{margin:8px 0;padding:8px 10px;border-left:2px solid var(--study-ink-soft);background:var(--study-surface-muted);font-size:12px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}.evidence-quote small{display:block;margin-bottom:4px;color:var(--study-text-secondary)}.task-stages{grid-template-columns:repeat(7,minmax(0,1fr))}@media(max-width:680px){.task-stages{grid-template-columns:1fr 1fr}}
 </style>

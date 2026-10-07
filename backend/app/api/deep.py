@@ -1,15 +1,16 @@
 """深度分析 API：三级标题目录提取/核对/AI补全/逐章总结/Markdown + 文献分类"""
 from __future__ import annotations
 
+import hashlib
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
-from backend.app.models import Book, BookDeep, Chapter, Chunk
+from backend.app.models import Book, BookDeep, Chapter, Chunk, TocRevision
 from backend.app.services.deep_analysis import (
     audit_paper_card,
     build_paper_card,
@@ -25,6 +26,32 @@ router = APIRouter(prefix="/api", tags=["deep"])
 CATEGORIES = ["数学", "管理学", "经济学", "计算机", "英语", "政治", "物理", "化学", "生物", "法学", "文学", "历史", "哲学", "其他"]
 
 
+def _chapter_cache_hashes(book_title: str, toc: list[dict], chapter_texts: dict[int, str]) -> dict[int, str]:
+    """Bind each cached summary to the source and directory used by its prompt."""
+    outlines: dict[int, list[dict]] = {}
+    root_number = 0
+    for entry in toc:
+        if entry["level"] == 1:
+            root_number += 1
+            outlines[root_number] = []
+        if root_number:
+            outlines[root_number].append({
+                "chapter_id": entry.get("chapter_id"),
+                "title": entry["title"],
+                "level": entry["level"],
+                "page": entry.get("page"),
+            })
+    return {
+        index: hashlib.sha256(json.dumps({
+            "version": "full-chapter-v3",
+            "book_title": book_title,
+            "outline": outline,
+            "source_text": chapter_texts.get(index, ""),
+        }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        for index, outline in outlines.items()
+    }
+
+
 async def run_deep_analysis(record, book_id: int) -> dict:
     """执行深度分析：标题提取→核对→AI补全→逐章总结→Markdown。"""
     from backend.app.core.database import SessionLocal
@@ -36,6 +63,8 @@ async def run_deep_analysis(record, book_id: int) -> dict:
         book = db.get(Book, book_id)
         if not book or book.status != "ready":
             raise ValueError("书籍不可用")
+        initial_toc_revision = db.scalar(select(func.max(TocRevision.id)).where(
+            TocRevision.book_id == book_id)) or 0
 
         deep = db.scalar(select(BookDeep).where(BookDeep.book_id == book_id))
         if not deep:
@@ -69,12 +98,11 @@ async def run_deep_analysis(record, book_id: int) -> dict:
 
         # 逐章 AI 总结（增量缓存：跳过内容未变化的章节）
         summaries: list[dict] = []
-        import hashlib as _hashlib
         if use_ai:
             update_progress(record, 0.6, "deep", "AI 按目录逐章精读总结...")
-            # Version the cache to invalidate old truncated/misaligned summaries.
-            ch_hashes = {i: _hashlib.sha256(("full-chapter-v2:" + text).encode()).hexdigest()
-                         for i, text in ch_texts.items()}
+            # Earlier hashes only covered body text, so renamed headings could
+            # incorrectly reuse a summary written for the old directory.
+            ch_hashes = _chapter_cache_hashes(book.title, toc, ch_texts)
 
             # 加载旧缓存：已总结且内容哈希未变的章节跳过
             old_summaries: dict[str, str] = {}  # title -> summary
@@ -190,7 +218,13 @@ async def run_deep_analysis(record, book_id: int) -> dict:
         deep.toc_json = json.dumps(clean_toc, ensure_ascii=False)
         deep.summaries_json = json.dumps(summaries, ensure_ascii=False)
         deep.markdown = md
-        deep.status = "done"
+        latest_toc_revision = db.scalar(select(func.max(TocRevision.id)).where(
+            TocRevision.book_id == book_id)) or 0
+        if latest_toc_revision != initial_toc_revision:
+            deep.status = "stale"
+            deep.error_msg = "研读期间目录发生变化；结果已保留，请重新研读以核对章节与来源。"
+        else:
+            deep.status = "done"
         db.commit()
         update_progress(record, 1.0, "deep", deep.error_msg or "完成")
         return {"toc": len(toc), "chapters": verify["chapters"], "sections": verify["sections"],
@@ -216,7 +250,7 @@ async def run_deep_analysis(record, book_id: int) -> dict:
 @router.post("/books/{book_id}/deep-analyze", status_code=202)
 def deep_analyze(book_id: int, db: Session = Depends(get_db)):
     """手动触发深度分析（后台任务）。"""
-    from backend.app.worker.tasks import has_active_task, submit
+    from backend.app.worker.tasks import DuplicateTaskError, has_active_task, submit_unique
 
     book = db.get(Book, book_id)
     if not book:
@@ -227,7 +261,10 @@ def deep_analyze(book_id: int, db: Session = Depends(get_db)):
     # 留两条同名进度；提交前先告知用户。
     if has_active_task("deep", book_id):
         raise HTTPException(409, "该书已有研读任务在排队或运行中；请在任务中心等待完成或停止后再提交")
-    record = submit("deep", lambda rec: run_deep_analysis(rec, book_id), book_id=book_id)
+    try:
+        record = submit_unique("deep", lambda rec: run_deep_analysis(rec, book_id), book_id)
+    except DuplicateTaskError as exc:
+        raise HTTPException(409, str(exc)) from exc
     return {"task_id": record.id, "status": "running"}
 
 

@@ -87,7 +87,9 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
     # 从数据库读取 LLM 配置（设置页改模型/填 Key 即时生效）
     cfg = load_llm_config(db, "chat")
     if req.model is not None:
-        cfg = {**cfg, "deepseek_model": req.model}
+        # An explicit per-request model must not silently fall back to another
+        # model if the selected one rejects the call.
+        cfg = {**cfg, "model": req.model, "deepseek_model": req.model, "fallbacks": []}
     provider = LLMRouter.get("auto", cfg)
     sources_payload = [
         {"chunk_id": s["chunk_id"], "book_id": s.get("book_id"), "page": s.get("page"),
@@ -119,6 +121,8 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
         # whether a sentence is actually supported by the cited passage.
         verification = verify_citations(answer, sources_payload)
         record_citation_eval(verification)
+        actual_provider = getattr(provider, "selected_provider_id", provider.name)
+        actual_model = getattr(provider, "selected_model", getattr(provider, "model", ""))
 
         # 存历史
         log = ChatLog(
@@ -127,12 +131,13 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
             shelf_id=req.scope_id if req.scope_type == "shelf" else None,
             project_id=req.scope_id if req.scope_type == "project" else None,
             sources_json=json.dumps(sources_payload, ensure_ascii=False),
-            mode=provider.name, model_name=getattr(provider, "model", None),
+            mode=actual_provider, model_name=actual_model,
         )
         db.add(log)
         db.commit()
         db.refresh(log)
         yield _sse("done", {"chat_id": log.id, "conversation_id": conversation_id,
+                            "provider": actual_provider, "model": actual_model,
                             "sources": sources_payload,
                             "citation_reference_valid": verification["verified"],
                             "citation_audit": {**verification, "semantic_status": "not_checked"},
