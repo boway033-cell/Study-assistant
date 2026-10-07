@@ -6,11 +6,11 @@
 
 本地优先的个人知识库：管理书籍与论文，沿原文研读，在书架或项目范围内提问，再把判断写成可回溯的研究成果。
 
-[![Version](https://img.shields.io/badge/version-v2.5-8B5A2B)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v2.6.0-8B5A2B)](CHANGELOG.md)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml)
 [![Platform](https://img.shields.io/badge/platform-Windows-304747)](docs/DOWNLOAD_AND_INSTALL.md)
 
-[下载 v2.5](https://github.com/boway033-cell/Study-assistant/releases/tag/v2.5) · [开始使用](#开始使用) · [资料与隐私](#资料与隐私) · [开发与文档](#开发与文档)
+[下载 v2.6.0](https://github.com/boway033-cell/Study-assistant/releases/tag/v2.6.0) · [开始使用](#开始使用) · [资料与隐私](#资料与隐私) · [开发与文档](#开发与文档)
 
 </div>
 
@@ -54,7 +54,7 @@ flowchart LR
 
 ## 开始使用
 
-1. 从 [v2.5 Release](https://github.com/boway033-cell/Study-assistant/releases/tag/v2.5) 下载 <code>study-assistant-v2.5.zip</code>，完整解压到固定目录。需要 Windows 10/11 和 64 位 Python 3.12+。
+1. 从 [v2.6.0 Release](https://github.com/boway033-cell/Study-assistant/releases/tag/v2.6.0) 下载 <code>study-assistant-v2.6.0.zip</code>，完整解压到固定目录。需要 Windows 10/11 和 64 位 Python 3.12+。
 2. 双击 <code>install.bat</code>。安装向导会建立虚拟环境、安装依赖并启动应用；中断后可以继续。需要排查环境时运行 <code>diagnose.bat</code>。
 3. 在“资料库”导入自己的文件。没有模型密钥也能使用阅读、标注和本地搜索，并可加载虚构演示资料。
 4. 使用 AI 功能前，到“设置 → 模型连接”配置自己的供应商连接，检查任务路由、发送范围和预算。
@@ -64,7 +64,7 @@ flowchart LR
 ~~~powershell
 git clone https://github.com/boway033-cell/Study-assistant.git
 cd Study-assistant
-git checkout v2.5
+git checkout v2.6.0
 .\install.bat
 ~~~
 
