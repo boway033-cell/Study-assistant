@@ -11,6 +11,7 @@
 - `benchmark_large_library.py`：在临时 SQLite 中运行合成容量基准，不接触用户数据库。
 - `evaluate_retrieval.py`：运行版本化固定检索集并输出 Recall、MRR、引用与拒答指标。
 - `ui_route_smoke.py`：对独立测试实例执行桌面与移动端关键路由只读巡检。
+- `capture_product_screenshots.py`：在临时虚构资料库中重拍 README 的 11 张产品截图，包含助手问答和模型设置；演示回答为预置样例，不调用云端模型。全部截图与 26 项桌面 / 移动端路由检查通过后才替换仓库素材。
 - `library_ui_smoke.cjs`：拦截 API 并使用虚构数据，检查 24 组资料库布局、菜单、机械按键及界面配置，不访问用户知识库。需要 Node.js、Playwright 和浏览器；Windows 使用 Microsoft Edge，其他平台使用 Playwright Chromium。
 
 常用命令：
@@ -23,5 +24,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\protocol\install.ps1
 ```
 
 资料库 UI 回归：先启动 `frontend` 开发服务，再从项目根目录运行 `node scripts/library_ui_smoke.cjs http://127.0.0.1:5173`。若 Playwright 安装在独立工具目录，将 `NODE_PATH` 指向其 `node_modules`；可传入第二个参数，将截图保存到仓库以外的目录。
+
+重拍 README 展示图：先安装完整运行依赖和测试依赖，并准备 Playwright Chromium；从项目根目录执行以下命令。截图脚本启动独立的 `127.0.0.1:8011` 服务，数据写入临时目录，结束后停止该服务，不打开日常使用的 `backend/data/`。
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements/dev.txt
+.\.venv\Scripts\python.exe -m playwright install chromium
+cd frontend
+npm ci
+npm run build
+cd ..
+.\.venv\Scripts\python.exe scripts\capture_product_screenshots.py
+```
 
 日常推荐直接双击桌面的“打开学习助手”，或在 Windows 运行框、网页链接中使用 `study-assistant://open`。启动器会串行完成“检查已有实例 → 选择 8000–8010 空闲端口 → 启动本地服务 → 健康检查 → 打开实际页面”，所以不要把固定的 `http://127.0.0.1:8000` 当作冷启动入口。整个唤醒过程只访问本机回环地址，不需要 VPN；服务未运行时不占用应用内存。

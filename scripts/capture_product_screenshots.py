@@ -101,7 +101,7 @@ def create_demo_pdf(path: Path) -> None:
         )
         page.insert_textbox(
             fitz.Rect(64, 280, 530, 610),
-            body + "\n\n本文件仅用于 Study Assistant v2.3.0 界面演示，不对应真实论文、作者或研究项目。",
+            body + "\n\n本文件仅用于 Study Assistant 界面演示，不对应真实论文、作者或研究项目。",
             fontname=font_name,
             fontsize=12,
             lineheight=1.7,
@@ -118,6 +118,8 @@ def seed_demo(data_dir: Path) -> list[int]:
     from backend.app.core.database import Base, SessionLocal, engine
     from backend.app.models import (
         Book,
+        ChatLog,
+        AssistantMemory,
         Chapter,
         Chunk,
         EvidenceCard,
@@ -175,8 +177,15 @@ def seed_demo(data_dir: Path) -> list[int]:
                 chapter_id=chapter.id,
                 content=(
                     f"《{title}》的虚构演示文本用于验证个人知识库的解析、检索与来源回链。"
-                    "材料分别说明研究设计、观察证据、可能机制与适用边界，不对应任何真实作者或项目。"
-                ) * 8,
+                    "不对应任何真实作者或项目。\n\n"
+                    "研究问题：比较不同城市、尺度与时间窗口下的缓解效果。"
+                    "比较之前，需要明确研究对象、研究设计与观察窗口。\n\n"
+                    "材料与方法：演示材料结合温度观测、空间形态与政策文本。"
+                    "这些材料分别说明研究设计、观察证据、可能机制与适用边界；"
+                    "三类证据回答不同问题，不能直接相互替代。\n\n"
+                    "待核查问题：现有设计是否足以排除其他机制解释？"
+                    "解释差异时，应回到原文核对测量口径，并明确哪些判断仍需要补充证据。"
+                ),
                 page_start=1,
                 page_end=2,
                 chunk_index=0,
@@ -208,6 +217,27 @@ def seed_demo(data_dir: Path) -> list[int]:
             ))
 
         selected = book_ids[:3]
+        db.flush()
+        source_chunk = db.query(Chunk).filter(Chunk.book_id == selected[0]).first()
+        db.add(AssistantMemory(
+            shelf_id=methods.id, kind="goal",
+            content="比较不同研究的证据与适用条件，保留尚未排除的竞争解释。（虚构演示）",
+        ))
+        db.add(ChatLog(
+            shelf_id=methods.id, conversation_id="readme-demo-conversation",
+            question="这些材料有哪些共识？哪些结论还需要回到原文核对？",
+            answer=("先明确比较范围\n\n"
+                    "以下是虚构演示回答，用来展示问答、引用和原页核对的交互。\n\n"
+                    "材料共同关注研究设计、观察证据和适用边界。当前材料提示，比较结论前应先对齐研究尺度与观察窗口。[资料1]\n\n"
+                    "仍需核对的部分：不同方法是否回答同一个问题，以及现有证据能否排除其他机制解释。\n\n"
+                    "点击下方引用，在右侧查看原文；确认后的判断可以保存到项目档案。"),
+            sources_json=json.dumps([{
+                "chunk_id": source_chunk.id, "book_id": selected[0],
+                "book_title": DEMO_TITLES[0], "chapter_title": chapters[0].title,
+                "page_start": 1, "page_end": 2, "snippet": source_chunk.content,
+            }], ensure_ascii=False),
+            mode="demo", model_name="虚构演示 · 未调用模型",
+        ))
         for index, (book_id, chapter) in enumerate(zip(selected, chapters[:3], strict=True)):
             db.add(KnowledgeNote(
                 book_id=book_id,
@@ -351,7 +381,7 @@ def seed_demo(data_dir: Path) -> list[int]:
         ))
         db.add(WritingOutput(
             profile_id=profile.id,
-            kind="literature_review",
+            kind="study_report",
             title="跨学科证据如何形成对话",
             input_type="text",
             output_text=("# 跨学科证据如何形成对话\n\n> 以下为虚构演示稿，仅展示阅读与编辑界面。\n\n"
@@ -404,6 +434,7 @@ def capture(base_url: str, book_ids: list[int], destination: Path) -> None:
     captures: list[tuple[str, str]] = [
         ("library.jpg", "/library"),
         ("reader.jpg", f"/reader/{book_ids[0]}"),
+        ("assistant-chat.jpg", "/knowledge-hub?view=chat&shelfId=1"),
         ("knowledge-notes.jpg", "/knowledge-hub?view=notes"),
         ("research-workspace.jpg", "/knowledge-hub?view=study"),
         ("workbench.jpg", f"/literature-workbench?bookId={book_ids[0]}"),
@@ -411,6 +442,7 @@ def capture(base_url: str, book_ids: list[int], destination: Path) -> None:
         ("writing-review.jpg", "/writing"),
         ("writing-clean.jpg", "/writing"),
         ("writing-output.jpg", "/writing"),
+        ("model-settings.jpg", "/settings"),
     ]
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -439,22 +471,23 @@ def capture(base_url: str, book_ids: list[int], destination: Path) -> None:
                 page.locator(".paper-row").first.wait_for(timeout=10_000)
             elif filename == "reader.jpg":
                 page.wait_for_timeout(2_500)
+            elif filename == "assistant-chat.jpg":
+                page.locator(".history-item").first.click()
+                page.locator(".source-tag").first.wait_for(timeout=10_000)
+                page.wait_for_timeout(1_000)
             elif filename == "research-workspace.jpg":
                 history = page.locator(".history button")
                 if history.count():
                     history.first.click()
                     page.wait_for_timeout(700)
             elif filename == "workbench.jpg":
-                knowledge_select = page.locator("input[placeholder*='选择笔记']")
-                if knowledge_select.count():
-                    knowledge_select.click()
-                    page.wait_for_timeout(250)
-                    option = page.locator(".el-select-dropdown:visible .el-select-dropdown__item")
-                    if option.count():
-                        option.first.click()
-                        page.keyboard.press("Escape")
-                        page.wait_for_timeout(350)
+                page.locator(".scope-panel .el-select").nth(1).click()
+                page.locator(".el-select-dropdown:visible .el-select-dropdown__item").first.click()
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(350)
             elif filename == "writing-lab.jpg":
+                page.get_by_role("button", name="写作工具").click()
+                page.get_by_role("menuitem", name="写作风格", exact=True).click()
                 profile = page.locator(".profile-row")
                 if profile.count():
                     profile.first.click()
@@ -462,28 +495,26 @@ def capture(base_url: str, book_ids: list[int], destination: Path) -> None:
                     page.get_by_text("逻辑结构 DNA", exact=True).click()
                     page.wait_for_timeout(250)
             elif filename == "writing-review.jpg":
-                page.get_by_role("tab", name="写作生成", exact=True).click()
-                page.get_by_text("多文献综述", exact=True).first.click()
-                review_select = page.locator(".generate-config .review-field .el-select").first
-                review_select.click()
-                page.wait_for_timeout(250)
-                for index in range(3):
-                    options = page.locator(".el-select-dropdown:visible .el-select-dropdown__item")
-                    if options.count() > index:
-                        options.nth(index).click()
-                        page.wait_for_timeout(120)
-                page.keyboard.press("Escape")
-                page.locator(".review-fields.two input").nth(0).fill("跨学科证据如何形成对话")
-                page.locator(".review-fields.two input").nth(1).fill("共识、冲突与互补证据分别成立于哪些条件？")
+                page.get_by_role("tab", name="新建作品", exact=True).click()
+                page.get_by_placeholder("新文章题目或议题").fill("跨学科证据如何形成对话")
+                page.get_by_placeholder("例如：站在政策执行者视角，只使用已选证据卡。").fill("比较证据与适用边界；未被材料支持的判断明确标为待核查。")
                 page.wait_for_timeout(350)
             elif filename == "writing-clean.jpg":
-                page.get_by_role("tab", name="写作输出", exact=True).click()
+                page.get_by_role("tab", name="作品库", exact=True).click()
                 page.locator('.output-history > button').filter(has_text='表达审阅示例').click()
+                page.get_by_role("button", name="写作工具").click()
+                page.get_by_role("menuitem", name="去 AI 味", exact=True).click()
                 page.get_by_role("tab", name="去 AI 味", exact=True).click()
+                page.get_by_placeholder("粘贴需要处理的文本").fill("首先，我们必须深入探讨这一重要问题。")
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(400)
             elif filename == "writing-output.jpg":
-                page.get_by_role("tab", name="写作输出", exact=True).click()
-                page.locator('.output-history > button').first.click()
+                page.get_by_role("tab", name="作品库", exact=True).click()
+                page.locator('.output-history > button').filter(has_text='跨学科证据如何形成对话').click()
                 page.wait_for_timeout(350)
+            elif filename == "model-settings.jpg":
+                page.get_by_text("按功能选择模型", exact=True).click()
+                page.wait_for_timeout(400)
 
             body = page.locator("body").inner_text()
             for forbidden in FORBIDDEN_TERMS:
@@ -546,6 +577,12 @@ def main() -> int:
     args = parser.parse_args()
     if not (ROOT / "frontend" / "dist" / "index.html").exists():
         raise RuntimeError("请先在 frontend 目录运行 npm run build")
+
+    # Explicit empty values prevent dotenv from importing the user's model keys.
+    # All screenshots use the temporary database and never call a cloud model.
+    for key in ("DEEPSEEK_API_KEY", "VISION_API_KEY"):
+        os.environ[key] = ""
+    os.environ["VECTOR_SEARCH"] = "false"
 
     with tempfile.TemporaryDirectory(prefix="study_release_demo_") as raw_temp:
         temp = Path(raw_temp)
