@@ -1,7 +1,14 @@
 # 项目交接文档 · Study assistant（学习助手）
 
 > **用途**：供新对话/新协作者快速接管项目。阅读本文件 + 启动项目即可继续开发。
-> **最后更新**：2026 年 10 月 7 日，AI 原文核查、报告恢复及 WorkBuddy 多轮问答集成验收；当前发布版本 **v2.6.0**，包含下述 AI 通路和多轮问答改进。
+> **最后更新**：2026 年 10 月 17 日，真实书目端到端回归与真实 provider 最小预算冒烟；当前发布版本 **v2.6.1**，包含下述报告任务与真实 PDF 引文核查修复。
+
+## v2.6.1 发布快照（2026-10-17）
+
+- 修复研究报告任务在任务队列中因预算 ContextVar 跨 Task 而无法启动的问题；正文先保存、审计可单独重跑的路径保留。
+- 修复真实 PDF/OCR 文本中的 C0 控制字符导致精确引文被误判为不匹配的问题。
+- 真实书目回归：4 本抽样书 + “论文”书架；API 75/75、浏览器 16/16、全路由 26/26、后端 537 passed、前端 95 passed；真实数据库未写入。
+- 真实 provider 冒烟：通义千问 / `deepseek-v4.1-flash`；1 次问答 + 1 次 1,200 字目标报告；首次审计在 40,000 Token 上限处截断，正文保留并重跑审计成功。边界与用量见 [CHANGELOG](../CHANGELOG.md)。
 
 ## v2.6.0 发布快照（2026-10-07）
 
@@ -555,7 +562,7 @@ GitHub 首页更新为当前四个核心工作区，特别说明研究报告的�
 
 ## 12. 开源发布状态
 
-- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布版本 v2.6.0）
+- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布版本 v2.6.1）
 - 许可证 MIT、PRIVACY.md、SECURITY.md、CHANGELOG.md、CONTRIBUTING.md、.gitattributes
 - CI（ci.yml）+ Release 自动打包（release.yml）
 - 分享给朋友：下载 Release 的 zip（含前端产物，不装 Node 也能用），或 git clone 后 `cd frontend && npm i && npm run build`
@@ -572,7 +579,7 @@ cd frontend && npm run build               # 改完前端构建（需 npm.cmd）
 
 # git 推送
 git push origin main
-git tag v2.6.0 && git push origin v2.6.0  # 触发 Release 自动打包
+git tag v2.6.1 && git push origin v2.6.1  # 触发 Release 自动打包
 
 # 关键文档
 docs/README.md  docs/产品文档.md  docs/PROJECT_HANDOVER.md
