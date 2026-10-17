@@ -142,3 +142,35 @@ def test_safety_stop_does_not_fall_back_to_another_model(monkeypatch, reason):
         assert backup_calls == []
     finally:
         current_budget.reset(token)
+
+
+def test_stream_handles_consumer_advancing_in_separate_tasks(monkeypatch):
+    """A task worker consumes anext() through create_task; ContextVar reset must not escape."""
+    from backend.app.services.llm.budget import TaskBudget, current_budget
+
+    class Provider:
+        name = "stream"
+        model = "stream-model"
+
+        async def stream_chat(self, messages):
+            yield "第一段"
+            yield "第二段"
+
+    monkeypatch.setattr("backend.app.services.llm._record_usage", lambda *args, **kwargs: None)
+
+    async def run():
+        token = current_budget.set(TaskBudget(max_calls=2, max_tokens=1000))
+        try:
+            routed = RoutedProvider([Provider()], "research")
+            iterator = routed.stream_chat([{"role": "user", "content": "测试"}]).__aiter__()
+            parts = []
+            while True:
+                try:
+                    parts.append(await asyncio.create_task(anext(iterator)))
+                except StopAsyncIteration:
+                    break
+            return parts
+        finally:
+            current_budget.reset(token)
+
+    assert asyncio.run(run()) == ["第一段", "第二段"]

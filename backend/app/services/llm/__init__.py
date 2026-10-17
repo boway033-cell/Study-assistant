@@ -603,21 +603,21 @@ class RoutedProvider(LLMProvider):
             audit_chars = 0
             started = time.perf_counter()
             try:
-                budget_token = current_budget.set(budget)
-                try:
-                    async with _provider_slot(provider.name):
-                        async for delta in provider.stream_chat(messages):
-                            if not delta:
-                                continue
-                            emitted = True; output_chars += len(delta)
-                            if audit_chars < 100000:
-                                audit_parts.append(delta[:100000 - audit_chars])
-                                audit_chars += min(len(delta), 100000 - audit_chars)
-                            if budget is not None:
-                                budget.output(len(delta))
-                            yield delta
-                finally:
-                    current_budget.reset(budget_token)
+                # The caller owns the ContextVar lifetime (task worker / API request).
+                # Setting it inside this async generator breaks when the consumer
+                # advances the iterator from a different task: reset() then raises
+                # "Token was created in a different Context".
+                async with _provider_slot(provider.name):
+                    async for delta in provider.stream_chat(messages):
+                        if not delta:
+                            continue
+                        emitted = True; output_chars += len(delta)
+                        if audit_chars < 100000:
+                            audit_parts.append(delta[:100000 - audit_chars])
+                            audit_chars += min(len(delta), 100000 - audit_chars)
+                        if budget is not None:
+                            budget.output(len(delta))
+                        yield delta
                 if not emitted:
                     raise RuntimeError("模型没有返回回答正文")
                 try:

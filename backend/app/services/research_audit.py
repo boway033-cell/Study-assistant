@@ -134,7 +134,10 @@ def _quote_key(text: str) -> str:
     value = unicodedata.normalize("NFKC", text).casefold()
     # Tolerate OCR line breaks and typographic punctuation; preserve numbers,
     # decimal points, signs and negation so a changed fact cannot match.
-    return re.sub(r"[\s\u200b\ufeff‘’“”\"'，,。；;：:！？!?]", "", value)
+    # PDF text extraction often leaves C0 controls (notably \x03) between CJK
+    # fragments. They are layout noise, not content, and must not break an
+    # otherwise exact quote match.
+    return re.sub(r"[\x00-\x1f\x7f\s\u200b\ufeff‘’“”\"'，,。；;：:！？!?]", "", value)
 
 
 def verify_quotes(claims: list[dict], raw_claims: list[dict], packet: dict) -> list[dict]:

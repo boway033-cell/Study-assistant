@@ -352,3 +352,17 @@ def test_human_draft_keeps_original_sources_after_audit_replaces_claims(corpus):
         assert result['claims'][0]['source_refs'] == [ids.ref]
         assert result['claims'][0]['status'] == 'partial'
         assert 'verification' not in result['claims'][0]
+
+
+def test_pdf_control_characters_do_not_break_quote_matching(corpus):
+    """Real PDF chunks contain C0 layout markers such as \x03 between CJK fragments."""
+    factory, _, ids = corpus
+    with factory() as db:
+        chunk = db.get(Chunk, ids.chunk)
+        chunk.content = '政策效果只在\x03试点地区得到支持。改善比例为10%，不能外推至全国。'
+        db.commit()
+        packet = research_audit.source_packet(db, f'[{ids.ref}]', {ids.ref}, [ids.book])
+    raw = _answer(ids.ref)['claims']
+    claims = research_audit.verify_quotes(study._normalize_claims(raw, {ids.ref}), raw, packet)
+    assert claims[0]['status'] == 'supported'
+    assert claims[0]['evidence_quotes'][0]['matched'] is True

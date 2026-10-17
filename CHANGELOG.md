@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+### 修复（2026-10-17，真实书目回归）
+
+- 修复研究报告任务在异步生成器被 `asyncio.create_task(anext(...))` 跨 Task 消费时触发 `ContextVar ... was created in a different Context` 的问题：由任务 worker 持有预算 ContextVar 生命周期，不再在 `RoutedProvider.stream_chat` 内部 set/reset。
+- 修复真实 PDF/OCR 文本中的 C0 控制字符（如 `\x03`）导致精确引文被 `research_audit._quote_key` 判为不匹配的问题；引文归一化现在忽略 C0/DEL 版面噪声。
+- 新增两条回归测试，分别覆盖跨 Task 流式消费与含控制字符的引文匹配。
+
+### 验证（2026-10-17）
+
+- 真实书目端到端：4 本抽样书 + “论文”书架；API 75/75、浏览器 16/16、全路由 26/26、后端 537 passed、前端 95 passed。真实 `backend/data/study.db` 前后 SHA-256 一致，未写入用户库。
+- 真实 provider 最小预算冒烟：通义千问（DashScope 兼容模式）/ `deepseek-v4.1-flash`；1 次问答 1,254 字、5 条来源、22.0 秒；1 次 1,200 字目标报告实际 1,984 字。
+- 报告首次审计在 40,000 估算 Token 上限处未完成，正文已保存；单独重跑审计成功。审计后 12 条主张：7 supported、3 partial、2 needs_review；26 条引文 18 条 matched；7 条推理跳步、8 个待核查问题、2 个候选假设。
+- 真实 provider 总计 4 次调用、36,452 估算 token、474.2 秒；未配置单价且未返回供应商 usage，无法计算费用。问答引用编号有效，但词面筛查仅 5.88%，不能替代语义核验。
+
+### 已知边界
+
+- 报告“生成 + 首次审计”的估算偏紧：本书 1,200 字目标在 40,000 上限下审计被截断，建议至少预留 60,000 估算 Token，或在界面单独列示审计额度。
+- 真实 provider 结果记录了应用按字符折算的估算 token，不是供应商账单；真实语义质量、TTFT 与费用仍需持续评测。
+
+### 文档
+
+- 新增 `docs/reports/V260_REAL_BOOK_E2E_2026-10-17.md` 与 `docs/reports/V260_REAL_PROVIDER_SMOKE_2026-10-17.md`。
+
 ## [2.6.0] - 2026-10-07（Git 标签 `v2.6.0`）
 
 ### 新增
