@@ -31,9 +31,17 @@ from backend.app.schemas import (
     SearchResp,
     TaskResp,
 )
+from backend.app.services import source_identity
 from backend.app.services.rag import fts
 from backend.app.worker.import_task import run_import
-from backend.app.worker.tasks import cancel_task, get_task, has_active_task, retry_task, submit
+from backend.app.worker.tasks import (
+    DuplicateTaskError,
+    cancel_task,
+    get_task,
+    retry_task,
+    submit,
+    submit_unique,
+)
 
 router = APIRouter(prefix="/api", tags=["books"])
 
@@ -104,6 +112,21 @@ def invalidate_page_text_cache(file_path: str | Path | None = None) -> None:
             _PAGE_TEXT_CACHE.clear()
             return
         _PAGE_TEXT_CACHE.pop(str(file_path), None)
+
+
+def _safe_upload_path(file_path: str) -> Path:
+    """把数据库中记录的 file_path 限制在 uploads 目录内；越界一律按不存在处理。
+
+    旧库可能残留绝对路径或 ../ 路径（历史导入或手工改库）。直接拼接会让读文件、
+    删文件接口变成任意文件读取/删除，因此所有按 book.file_path 访问磁盘的入口都必须
+    经过这里，而不是只信任数据库内容。
+    """
+    from backend.app.core.config import resolve_under, settings as _settings
+
+    path = resolve_under(_settings.uploads_dir, file_path)
+    if path is None:
+        raise HTTPException(404, "文件不存在")
+    return path
 
 
 class TocEditItem(BaseModel):
@@ -376,14 +399,33 @@ def knowledge_base_health(db: Session = Depends(get_db)):
             broken_objects.setdefault(fallback_book_id, []).append({**source, "ref": value, "reason": "来源锚点格式无效"})
             return
         ref_book, chapter_id, page_start, page_end, chunk_id = (int(item) if item else None for item in match.groups())
-        invalid = (ref_book not in valid_books
-                   or (chapter_id is not None and chapter_books.get(chapter_id) != ref_book)
-                   or (chunk_id is not None and chunk_books.get(chunk_id) != ref_book)
-                   or (page_start is not None and (page_start < 1 or (totals.get(ref_book, 0) and page_start > totals[ref_book])))
-                   or (page_end is not None and totals.get(ref_book, 0) and page_end > totals[ref_book]))
-        if invalid:
+        reason = None
+        if ref_book not in valid_books:
+            reason = "来源书籍不存在"
+        elif chunk_id is not None:
+            # 分块编号会被 SQLite 复用：必须用内容指纹/版本校验，不能只看 id 是否存在。
+            verdict = source_identity.verify_chunk_ref(db, ref_book, chunk_id)
+            status = verdict["status"]
+            if status in (source_identity.STATUS_MISSING, source_identity.STATUS_INVALID):
+                reason = "来源分块已不存在，或编号已被新解析复用"
+            elif status == source_identity.STATUS_NEEDS_REVIEW:
+                reason = "旧引用没有内容指纹且该书已重新解析，需复核引用原文"
+            # stale 表示归档能找回引用时原文，不算失效。
+        elif chapter_id is not None and chapter_books.get(chapter_id) != ref_book:
+            reason = "来源章节已不存在或编号已属于其他内容"
+        elif chapter_id is not None and source_identity.book_has_reparsed(db, ref_book):
+            reason = "旧引用未保存章节身份且该书已重新解析，需复核引用位置"
+        if reason is None and (
+            (page_start is not None and (page_start < 1 or (totals.get(ref_book, 0) and page_start > totals[ref_book])))
+            or (page_end is not None and totals.get(ref_book, 0) and page_end > totals[ref_book])
+        ):
+            reason = "来源页码越界"
+        if reason is not None:
             broken_anchors[fallback_book_id] = broken_anchors.get(fallback_book_id, 0) + 1
-            broken_objects.setdefault(fallback_book_id, []).append({**source, "ref": value, "reason": "来源对象已不存在或页码越界"})
+            broken_objects.setdefault(fallback_book_id, []).append({
+                **source, "ref": value, "reason": reason,
+                "identity_status": local_status if (local_status := locals().get("status")) else None,
+            })
 
     for note in db.scalars(select(KnowledgeNote)).all():
         try: refs = json.loads(note.source_refs_json or "[]")
@@ -826,13 +868,12 @@ def rename_book(book_id: int, req: BookRenameReq, db: Session = Depends(get_db))
 def get_book_file(book_id: int, db: Session = Depends(get_db)):
     """返回原始文件（浏览器可直接打开/渲染，支持 #page=N 定位）。"""
     from fastapi.responses import FileResponse
-    from backend.app.core.config import settings as _settings
 
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
-    path = _settings.uploads_dir / book.file_path
-    if not path.exists():
+    path = _safe_upload_path(book.file_path)
+    if not path.is_file():
         raise HTTPException(404, "文件不存在")
     media = {
         "pdf": "application/pdf",
@@ -840,7 +881,7 @@ def get_book_file(book_id: int, db: Session = Depends(get_db)):
         "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }.get(book.file_type, "application/octet-stream")
     # content_disposition_type=inline：浏览器内嵌展示（pdf.js / iframe 均可用），不触发下载
-    return FileResponse(path, media_type=media, filename=book.file_path,
+    return FileResponse(path, media_type=media, filename=Path(book.file_path).name,
                         content_disposition_type="inline")
 
 
@@ -848,54 +889,60 @@ def get_book_file(book_id: int, db: Session = Depends(get_db)):
 async def get_rendered_book_file(book_id: int, db: Session = Depends(get_db)):
     """DOCX/PPTX 的高保真原版 PDF；首次访问按需渲染，之后按哈希缓存。"""
     from fastapi.responses import FileResponse
-    from backend.app.core.config import settings as _settings
     from backend.app.services.office_render import render_office_pdf_async
 
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
+    source = _safe_upload_path(book.file_path)
+    if not source.is_file():
+        raise HTTPException(404, "文件不存在")
     if book.file_type == "pdf":
-        path = _settings.uploads_dir / book.file_path
+        path = source
     elif book.file_type in {"docx", "pptx"}:
         try:
-            path = await render_office_pdf_async(_settings.uploads_dir / book.file_path, book.file_type, book.file_hash)
+            path = await render_office_pdf_async(source, book.file_type, book.file_hash)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             raise HTTPException(503, f"原版渲染暂不可用：{exc}") from exc
     else:
         raise HTTPException(400, "该格式不支持原版渲染")
-    return FileResponse(path, media_type="application/pdf", filename=f"{Path(book.file_path).stem}.pdf",
+    return FileResponse(path, media_type="application/pdf", filename=f"{source.stem}.pdf",
                         content_disposition_type="inline")
 
 
 @router.get("/books/{book_id}/chunk/{chunk_id}")
-def get_chunk_original(chunk_id: int, book_id: int, db: Session = Depends(get_db)):
-    """返回 chunk 全文 + 页码区间（供右侧原文定位面板）。"""
-    from backend.app.models import Chunk as ChunkModel
+def get_chunk_original(
+    chunk_id: int,
+    book_id: int,
+    content_hash: str | None = Query(default=None, max_length=128),
+    version_uid: str | None = Query(default=None, max_length=64),
+    db: Session = Depends(get_db),
+):
+    """返回引用时的 chunk 原文与身份校验结果（供右侧原文定位面板）。
 
-    ch = db.get(ChunkModel, chunk_id)
-    if not ch or ch.book_id != book_id:
-        raise HTTPException(404, "内容不存在")
-    return {
-        "chunk_id": ch.id,
-        "book_id": ch.book_id,
-        "chapter_id": ch.chapter_id,
-        "content": ch.content,
-        "page_start": ch.page_start,
-        "page_end": ch.page_end,
-    }
+    新引用会带上引用时保存的 content_hash / source_version_uid。重解析后若编号
+    已被复用，能通过归档找回引用时原文并返回 identity_status="stale"；旧引用没有
+    指纹时返回 legacy_unverified/needs_review，绝不静默打开另一段正文。
+    """
+    result = source_identity.verify_chunk_ref(
+        db, book_id, chunk_id,
+        expected_hash=content_hash,
+        expected_version_uid=version_uid,
+    )
+    if result["status"] == source_identity.STATUS_MISSING:
+        raise HTTPException(404, result.get("message") or "内容不存在")
+    return result
 
 
 @router.get("/books/{book_id}/page/{page_no}")
 def get_page_original(book_id: int, page_no: int, db: Session = Depends(get_db)):
     """返回指定页原文文本（PDF 页文本；docx/pptx 无页码概念则返回空）。"""
-    from backend.app.core.config import settings as _settings
-
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
     if book.file_type != "pdf":
         return {"page": page_no, "text": "", "note": "该格式不支持按页查看"}
-    pages = _book_page_texts(book, _settings.uploads_dir / book.file_path)
+    pages = _book_page_texts(book, _safe_upload_path(book.file_path))
     if 1 <= page_no <= len(pages):
         return {"page": page_no, "text": pages[page_no - 1]}
     raise HTTPException(404, "页码超出范围")
@@ -922,14 +969,19 @@ def delete_book(book_id: int, db: Session = Depends(get_db)):
             (_settings.presentations_dir / Path(deck_file).name).unlink(missing_ok=True)
         except OSError:
             pass
-    # 删除上传文件与 FTS 索引（仅项目 data 目录内）
-    f = _settings.uploads_dir / file_path
+    # 删除上传文件与 FTS 索引（仅项目 data 目录内）。脏路径（历史绝对路径/../）
+    # 不能阻止数据库记录删除，但也绝不能据此删除数据目录外的文件。
     try:
-        if f.exists():
-            f.unlink()
-    except OSError:
-        pass
-    invalidate_page_text_cache(f)
+        f = _safe_upload_path(file_path)
+    except HTTPException:
+        f = None
+    if f is not None:
+        try:
+            if f.is_file():
+                f.unlink()
+        except OSError:
+            pass
+        invalidate_page_text_cache(f)
     try:
         fts.delete_book_index(book_id)
     except Exception:  # noqa: BLE001
@@ -947,27 +999,25 @@ def reparse_book(book_id: int, db: Session = Depends(get_db)):
     book = db.get(Book, book_id)
     if not book:
         raise HTTPException(404, "书籍不存在")
-    # 重解析要清掉 chunks 并重跑可能长达数小时的 OCR，重复提交会浪费大量计算。
-    if has_active_task("reimport", book_id):
-        raise HTTPException(409, "该书已有重解析任务在排队或运行中；请在任务中心等待完成或停止后再提交")
-    # 清空可再生解析产物；笔记/题目/知识节点保留，仅解除旧章节关联。
-    from backend.app.services.book_lifecycle import prepare_book_for_reparse
-    prepare_book_for_reparse(db, book_id)
+    # 重解析要重跑可能长达数小时的 OCR，重复提交会浪费大量计算。
+    # 冲突检查与任务预留必须在同一个注册表锁内完成（submit_unique），否则两个
+    # 并发请求可能都通过 has_active_task 预检后各自提交一次。
+    # 同时拦截正在排队/运行的首次导入：它们也会写同一本书。
     try:
-        from backend.app.services.rag import vector
-        vector.delete_book_vectors(book_id)
-    except Exception:  # noqa: BLE001
-        pass
-    book.status = "pending"
-    book.error_msg = None
-    db.commit()
-    # 旧 chunks 已删除，若不同步清掉 FTS 行，重解析期间（扫描件可能数小时）
-    # 检索会持续返回指向已删 chunk 的幽灵结果。放在提交之后，保证两者一致。
-    try:
-        fts.delete_book_index(book_id)
-    except Exception:  # noqa: BLE001 — 索引清理失败不影响重解析本身
-        pass
-    record = submit("reimport", lambda rec: run_import(rec, book.id), book_id=book.id)
+        record = submit_unique(
+            "reimport",
+            lambda rec: run_import(rec, book_id),
+            book_id,
+            conflicting_names=("import",),
+        )
+    except DuplicateTaskError as exc:
+        raise HTTPException(
+            409,
+            "该书已有导入或重解析任务在排队或运行中；请在任务中心等待完成或停止后再提交",
+        ) from exc
+    # 不再预先删除章节/分块/索引：导入任务会把新解析产物写入暂存版本，
+    # 全部成功后才在一个事务里切换。排队/运行中取消、失败、进程中断都不会
+    # 破坏当前可用的正文、FTS 索引与历史引用。
     return {"task_id": record.id}
 
 
@@ -1051,23 +1101,29 @@ def search(
     end = start + page_size
     paged = items[start:end]
 
+    from backend.app.services import source_identity
+
+    result_items = []
+    for it in paged:
+        decorated = source_identity.decorate_source(db, dict(it))
+        result_items.append(SearchResultItem(
+            chunk_id=decorated.get("chunk_id", 0),
+            book_id=decorated.get("book_id", 0),
+            book_title=decorated.get("book_title", ""),
+            chapter_id=decorated.get("chapter_id"),
+            chapter_title=decorated.get("chapter_title"),
+            page=decorated.get("page"),
+            page_start=decorated.get("page_start") or decorated.get("page"),
+            page_end=decorated.get("page_end") or decorated.get("page"),
+            snippet=decorated.get("snippet", ""),
+            content_hash=decorated.get("content_hash"),
+            source_version_uid=decorated.get("source_version_uid"),
+        ))
     return SearchResp(
         total=total,
         has_more=has_more,
         truncated=truncated,
-        items=[
-            SearchResultItem(
-                chunk_id=it.get("chunk_id", 0),
-                book_id=it.get("book_id", 0),
-                book_title=it.get("book_title", ""),
-                chapter_id=it.get("chapter_id"),
-                chapter_title=it.get("chapter_title"),
-                page=it.get("page"),
-                page_start=it.get("page_start") or it.get("page"),
-                page_end=it.get("page_end") or it.get("page"),
-                snippet=it.get("snippet", ""),
-            ) for it in paged
-        ],
+        items=result_items,
     )
 
 
@@ -1202,9 +1258,8 @@ def get_document(book_id: int, db: Session = Depends(get_db)):
     fresh_pages: list[str] = []
     if book.file_type in {"docx", "pptx"}:
         try:
-            from backend.app.core.config import settings as _settings
             from backend.app.services.parser import ParseError, parse_document
-            fresh = parse_document(_settings.uploads_dir / book.file_path)
+            fresh = parse_document(_safe_upload_path(book.file_path))
             if len(fresh.pages) == len(chapters):
                 fresh_pages = fresh.pages
         except (OSError, RuntimeError, ValueError, ParseError):

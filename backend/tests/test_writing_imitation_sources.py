@@ -417,7 +417,9 @@ def test_sources_endpoint_partitions_counts_and_reports_missing_ids():
         reports = list_writing_sources(category="report", q=None, page=1, page_size=5, ids=None, db=db)
         assert any(item["id"] == report.id and item["book_ids"] == [book.id] for item in reports["items"])
 
-        books = list_writing_sources(category="local_literature", q=None, page=1, page_size=5, ids=None, db=db)
+        # 共享测试库会累积其他用例的书籍，按 ids 精确定位本用例的书，避免分页排序干扰。
+        books = list_writing_sources(category="local_literature", q=None, page=1, page_size=5,
+                                     ids=[book.id], db=db)
         assert any(item["id"] == book.id and item["chunk_count"] == 2 for item in books["items"])
 
         stale = list_writing_sources(category="note", q=None, page=1, page_size=5,

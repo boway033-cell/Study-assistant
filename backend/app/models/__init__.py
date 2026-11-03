@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Table,
@@ -63,6 +64,10 @@ class Book(Base):
     category: Mapped[str | None] = mapped_column(String(50))  # AI 自动分类（数学/管理学/…）
     duplicate_of: Mapped[int | None] = mapped_column(Integer)  # 疑似重复的 book_id（0=无）
     library_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 全库自定义顺序
+    # 当前对外可见的解析来源版本；旧库迁移后指向 legacy 版本。
+    active_source_version_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    # 正在解析/待激活的来源版本；重解析期间旧版本仍对外可见。
+    staging_source_version_id: Mapped[int | None] = mapped_column(Integer, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     chapters: Mapped[list["Chapter"]] = relationship(back_populates="book", cascade="all, delete-orphan")
@@ -112,6 +117,9 @@ class Chapter(Base):
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     start_page: Mapped[int | None] = mapped_column(Integer)
     end_page: Mapped[int | None] = mapped_column(Integer)
+    # 稳定章节身份：由标题/层级/顺序等归一化后哈希得到，重解析后用于重映射用户批注。
+    chapter_key: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_version_id: Mapped[int | None] = mapped_column(Integer, index=True)
 
     book: Mapped["Book"] = relationship(back_populates="chapters")
     children: Mapped[list["Chapter"]] = relationship()
@@ -144,6 +152,9 @@ class Chunk(Base):
     page_end: Mapped[int | None] = mapped_column(Integer)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     word_count: Mapped[int | None] = mapped_column(Integer)
+    # 内容指纹（sha256 utf-8 hex）与所属来源版本，用于引用身份校验。
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_version_id: Mapped[int | None] = mapped_column(Integer, index=True)
 
     book: Mapped["Book"] = relationship(back_populates="chunks")
     chapter: Mapped["Chapter | None"] = relationship(back_populates="chunks")
@@ -639,6 +650,105 @@ class ChatSession(Base):
     state_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class SourceVersion(Base):
+    """一次文档解析产生的来源版本。
+
+    重解析不再删除当前的 chapters/chunks：新解析先写入 staged_* 暂存表，
+    成功后在一个事务里切换。旧版本保留在 source_versions/retired_chunks 中，
+    用于校验历史引用到底指向哪一段原文，避免整数主键复用后静默错指。
+    """
+
+    __tablename__ = "source_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    version_uid: Mapped[str] = mapped_column(String(32), nullable=False, unique=True, index=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # staging / active / retired / failed / abandoned / legacy
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="staging", index=True)
+    file_hash: Mapped[str | None] = mapped_column(String(64))
+    parser_version: Mapped[str] = mapped_column(String(32), nullable=False, default="v1")
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    chapter_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by_task: Mapped[str | None] = mapped_column(String(60))
+    # 解析期间暂存的元数据/分析结果 JSON，激活时才写入主表。
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (
+        Index("ix_source_versions_book_seq", "book_id", "seq", unique=True),
+    )
+
+
+class StagedChapter(Base):
+    """待激活版本的章节暂存行（不进入 chapters，检索/阅读不可见）。"""
+
+    __tablename__ = "staged_chapters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    version_id: Mapped[int] = mapped_column(
+        ForeignKey("source_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    book_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    parent_id: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    level: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    start_page: Mapped[int | None] = mapped_column(Integer)
+    end_page: Mapped[int | None] = mapped_column(Integer)
+    chapter_key: Mapped[str | None] = mapped_column(String(64), index=True)
+
+
+class StagedChunk(Base):
+    """待激活版本的分块暂存行（不进入 chunks/FTS，旧内容继续可读可搜）。"""
+
+    __tablename__ = "staged_chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    version_id: Mapped[int] = mapped_column(
+        ForeignKey("source_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    book_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    chapter_id: Mapped[int | None] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    page_start: Mapped[int | None] = mapped_column(Integer)
+    page_end: Mapped[int | None] = mapped_column(Integer)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    word_count: Mapped[int | None] = mapped_column(Integer)
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+
+
+class RetiredChunk(Base):
+    """被新版本替换掉的旧分块原文归档。
+
+    历史引用可以凭 (book_id, chunk_id, content_hash) 在这里找回引用时的原文，
+    即使主键被新版本复用也不会错指；无指纹的旧数据不会被伪造。
+    """
+
+    __tablename__ = "retired_chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    book_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    chunk_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    source_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("source_versions.id", ondelete="SET NULL"), index=True
+    )
+    chapter_id: Mapped[int | None] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    page_start: Mapped[int | None] = mapped_column(Integer)
+    page_end: Mapped[int | None] = mapped_column(Integer)
+    chunk_index: Mapped[int | None] = mapped_column(Integer)
+    word_count: Mapped[int | None] = mapped_column(Integer)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    retired_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_retired_chunks_book_chunk", "book_id", "chunk_id"),
+    )
 
 
 # Register the research archive tables with Base.metadata at startup and in tests.

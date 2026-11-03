@@ -18,11 +18,18 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from backend.app.core.config import settings
+from backend.app.core.config import resolve_under, settings
 from backend.app.core.database import SessionLocal
-from backend.app.models import Book, BookAnalysis, Chapter, Chunk, PaperProfile
+from backend.app.models import Book, Chunk, SourceVersion
+from backend.app.services.book_lifecycle import (
+    abandon_staged_version,
+    activate_staged_version,
+    stage_chapters,
+    stage_chunks,
+    start_staging_version,
+    update_staged_payload,
+)
 from backend.app.services.rag.chunker import build_chapter_pages, build_chapters, split_pages_into_chunks
-from backend.app.services.rag.fts import delete_book_index, index_chunk
 from backend.app.services.parser import ParseError, parse_document
 from backend.app.services.parser.ocr import (
     detect_scanned,
@@ -110,16 +117,37 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
     """执行完整导入流水线。book 需已创建且 status=pending。"""
     db = SessionLocal()
     ocr_used = False
+    version: SourceVersion | None = None
+    activated = False
+    is_reparse = False
+    original_status: str | None = None
+    original_error: str | None = None
     try:
         book = db.get(Book, book_id)
         if book is None:
             raise ValueError(f"书籍不存在: {book_id}")
-        book.status = "parsing"
-        db.commit()
+        # 有 active 来源版本说明是重解析：解析期间保持旧版本继续可用，
+        # 不把书籍状态改成 pending/parsing，失败或取消也不会影响阅读与问答。
+        # 老库或迁移未覆盖到的情况下可能没有 active 版本指针，但只要已有分块，
+        # 就按"重解析"处理：解析期间旧正文必须继续可用。
+        existing_chunk = db.scalar(
+            select(Chunk.id).where(Chunk.book_id == book_id).limit(1)
+        )
+        is_reparse = bool(book.active_source_version_id) or existing_chunk is not None
+        original_status = book.status
+        original_error = book.error_msg
+        if not is_reparse:
+            book.status = "parsing"
+            book.error_msg = None
+        version = start_staging_version(
+            db, book_id, file_hash=book.file_hash, task_id=record.id
+        )
 
         # 1. 解析
         update_progress(record, 0.08, "parsing", "正在解析文档...")
-        file_path = settings.uploads_dir / book.file_path
+        file_path = resolve_under(settings.uploads_dir, book.file_path)
+        if file_path is None:
+            raise ParseError("原文件路径越界，已拒绝解析；请在资料库重新上传该文件。")
         result = parse_document(file_path)
 
         # 1b. OCR：扫描版检测（仅 PDF；docx/pptx 必有文本层，跳过避免误判）
@@ -130,13 +158,20 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
             whole_document_scanned = detect_scanned(result.pages)
             # 混合 PDF 只补识别弱文本页；纯扫描件没有 OCR 时才阻断导入。
             if whole_document_scanned and not has_ocr_engine():
-                # 无 OCR 引擎：标记 needs_ocr（非 failed），保留原文件供阅读器直接查看
-                book.status = "needs_ocr"
-                book.error_msg = (
+                # 无 OCR 引擎：首次导入标记 needs_ocr（非 failed），保留原文件供阅读器查看。
+                # 重解析则必须以失败结束，不能让旧版本被 needs_ocr 状态掩盖。
+                message = (
                     "该 PDF 为扫描版（无文本层），当前未安装 OCR 引擎。"
                     "原文件已保留，可用内置阅读器直接查看；"
                     "如需检索/问答，请安装 OCR 引擎后重新解析。"
                 )
+                if is_reparse:
+                    raise ParseError(f"重新解析失败：{message}")
+                book.status = "needs_ocr"
+                book.error_msg = message
+                if version is not None:
+                    abandon_staged_version(db, book.id, version.id)
+                    version = None
                 db.commit()
                 return {"book_id": book.id, "status": "needs_ocr",
                         "message": "扫描版 PDF，需安装 OCR 引擎"}
@@ -197,7 +232,7 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         if not result.pages or all(not p.strip() for p in result.pages):
             raise ParseError("未能从文档中提取到文本（可能是扫描版 PDF）")
 
-        book.total_pages = result.total_pages
+        update_staged_payload(db, version, total_pages=result.total_pages)
         db.commit()
 
         # 2. 版面分析（仅 PDF）
@@ -255,16 +290,12 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         result.pages = []  # 清洗完成后释放重复的原始页文本副本。
 
         # 3b. 文献归档元数据（仅本地文件/前几页，不联网）
+        # 先写入暂存版本的 payload，激活事务里才落到 paper_profiles，
+        # 避免解析失败时污染当前可用版本的元数据。
         try:
             from backend.app.services.archive import extract_metadata
             meta = extract_metadata(file_path, cleaned_pages)
-            profile = db.get(PaperProfile, book.id) or PaperProfile(book_id=book.id)
-            for key in ("authors", "journal", "published_year", "doi", "arxiv_id",
-                        "language", "access_route", "provenance_json"):
-                value = meta.get(key)
-                if value is not None and not getattr(profile, key, None):
-                    setattr(profile, key, value)
-            db.add(profile)
+            update_staged_payload(db, version, metadata=meta)
             db.commit()
         except Exception:  # noqa: BLE001
             db.rollback()
@@ -292,27 +323,10 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         # 启发式+版面未识别出目录时，用户可在「深度分析」中手动触发 LLM 补全。
 
         chapter_defs = build_chapters(result.toc, result.total_pages)
-        id_map: dict[int, int] = {}
-        for ch_def in chapter_defs:
-            parent_id = id_map.get(ch_def["parent_id"]) if ch_def["parent_id"] is not None else None
-            ch = Chapter(
-                book_id=book.id,
-                parent_id=parent_id,
-                title=ch_def["title"],
-                level=ch_def["level"],
-                order_index=ch_def["order_index"],
-                start_page=ch_def["start_page"],
-                end_page=ch_def["end_page"],
-            )
-            db.add(ch)
-            db.flush()
-            id_map[ch_def["order_index"]] = ch.id
+        staged_by_order = stage_chapters(db, version, chapter_defs)
         db.commit()
 
-        chapters = db.scalars(
-            select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.order_index)
-        ).all()
-        chapter_id_by_order = {c.order_index: c.id for c in chapters}
+        chapter_id_by_order = {order: row.id for order, row in staged_by_order.items()}
         chapter_pages = build_chapter_pages(chapter_defs, result.total_pages)
         chapter_pages_db = [
             (chapter_id_by_order.get(i), s, e) if i is not None else (None, s, e)
@@ -328,135 +342,142 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
             from backend.app.services.rag.chunker import split_pages_into_chunks
             chunks = split_pages_into_chunks(cleaned_pages, chapter_pages_db)
 
-        # 7. 写 chunks + FTS 索引
-        delete_book_index(book.id)
+        # 7. 分块与章节先写入暂存表；旧版本的主表、FTS 与引用完全不受影响。
         update_progress(record, 0.75, "indexing", "正在建立全文索引...")
-        total = len(chunks)
-        for ch_def in chunks:
-            db.add(Chunk(
-                book_id=book.id,
-                chapter_id=ch_def["chapter_id"],
-                content=ch_def["content"],
-                page_start=ch_def["page_start"],
-                page_end=ch_def["page_end"],
-                chunk_index=ch_def["chunk_index"],
-                word_count=ch_def["word_count"],
-            ))
+        total = stage_chunks(db, version, chunks)
         db.commit()
-        chunk_rows = db.scalars(
-            select(Chunk).where(Chunk.book_id == book.id).order_by(Chunk.chunk_index)
-        ).all()
-        for i, ch in enumerate(chunk_rows):
-            index_chunk(book.id, ch.chapter_id, ch.page_start, ch.id, ch.content, ch.page_end)
-            if i % 20 == 0:
-                update_progress(record, 0.75 + 0.15 * (i + 1) / total, "indexing",
-                                f"索引中 {i + 1}/{total}")
 
-        # 每个文本块的稳定来源映射，供精读、引用核验和阅读卡复用。
+        # 7b. 把可在激活事务内一次写入的派生结果暂存起来：
+        # 分析结果、分类、总页数。失败/取消时它们随暂存版本一起丢弃。
+        analysis_payload = {
+            "definitions": keyinfo["definitions"],
+            "theorems": keyinfo["theorems"],
+            "keywords": keyinfo["keywords"],
+            "body_size": layout.body_size if layout else None,
+            "header_count": len(layout.header_lines) if layout else 0,
+            "footer_count": len(layout.footer_lines) if layout else 0,
+            "table_pages": sorted(layout.table_pages) if layout else [],
+        }
+        staged_titles = [
+            row.title for _, row in sorted(staged_by_order.items())[:40]
+        ]
         try:
-            from backend.app.services.archive import build_source_map
-            profile = db.get(PaperProfile, book.id) or PaperProfile(book_id=book.id)
-            profile.source_map_json = build_source_map(
-                book.id, chunk_rows, {c.id: c.title for c in chapters}
-            )
-            db.add(profile)
+            from backend.app.services.analyzer.classify import classify_local
+            # 导入时只用本地分类（隐私：不静默上传书名/关键词到云端）
+            category = classify_local(book.title, keyinfo["keywords"], staged_titles)
+        except Exception:  # noqa: BLE001
+            category = None
+        update_staged_payload(
+            db, version, analysis=analysis_payload,
+            category=category or None,
+        )
+        db.commit()
+
+        # 8. 受控切换：归档旧分块、替换 chapters/chunks、重建 FTS、
+        # 重映射用户章节引用，全部在同一事务内完成。任一步失败都回滚到旧版本。
+        update_progress(record, 0.9, "activating", "正在切换来源版本...")
+        summary = activate_staged_version(db, book_id)
+        db.commit()
+        version = None  # 已转为 active，后续失败不再清理暂存数据
+        # 激活已提交：之后的取消/异常不得再把书籍状态回写为 pending/failed，
+        # 否则会出现「正文/FTS 已就绪但书不可用」的假失败。
+        activated = True
+
+        book = db.get(Book, book_id)
+        chunk_rows = db.scalars(
+            select(Chunk).where(Chunk.book_id == book_id).order_by(Chunk.chunk_index)
+        ).all()
+
+        # 9. 激活后的可再生派生产物（向量、标签、去重）。失败只记录，
+        # 不回滚已经原子切换完成的正文/索引版本。
+        from backend.app.services.rag import vector
+        if vector.is_enabled():
+            update_progress(record, 0.94, "vectorizing", "正在向量化（首次需下载嵌入模型）...")
+            try:
+                vector.delete_book_vectors(book_id)
+                vector.upsert_chunks(book_id, [
+                    {"id": ch.id, "content": ch.content, "chapter_id": ch.chapter_id,
+                     "page_start": ch.page_start, "page_end": ch.page_end}
+                    for ch in chunk_rows
+                ])
+            except Exception:  # noqa: BLE001
+                db.rollback()
+                logger.warning("向量重建失败，已保留全文索引版本，可稍后重新向量化", exc_info=True)
+
+        try:
+            from backend.app.api.tags import auto_generate_tags
+            auto_generate_tags(db, book_id)
             db.commit()
         except Exception:  # noqa: BLE001
             db.rollback()
 
-        # 7b. 向量化（可选，settings.vector_search 开启时）
-        from backend.app.services.rag import vector
-        if vector.is_enabled():
-            update_progress(record, 0.9, "vectorizing", "正在向量化（首次需下载嵌入模型）...")
-            vector.delete_book_vectors(book.id)
-            vector.upsert_chunks(book.id, [
-                {"id": ch.id, "content": ch.content, "chapter_id": ch.chapter_id,
-                 "page_start": ch.page_start, "page_end": ch.page_end}
-                for ch in chunk_rows
-            ])
-
-        # 8. 写分析结果
-        update_progress(record, 0.95, "analysis", "正在保存分析结果...")
-        _save_analysis(db, book.id, keyinfo, layout)
-
-        # 8b. 自动分类（始终用本地分类，不静默调用云端 AI）
         try:
-            from backend.app.services.analyzer.classify import classify_local
-            chapters_for_class = [c.title for c in db.scalars(
-                select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.order_index).limit(40)
-            ).all()]
-            # 导入时只用本地分类（隐私：不静默上传书名/关键词到云端）
-            # 用户可在资料库手动点「自动分类」按钮触发 AI 分类
-            book.category = classify_local(book.title, keyinfo["keywords"], chapters_for_class)
+            _detect_duplicates(db, book_id, cleaned_pages)
+            db.commit()
         except Exception:  # noqa: BLE001
-            pass  # 分类失败不阻塞导入
+            db.rollback()
 
-        # 8c. 自动标签（关键词 + 文件类型 + 分类）
-        try:
-            from backend.app.api.tags import auto_generate_tags
-            auto_generate_tags(db, book.id)
-        except Exception:  # noqa: BLE001
-            pass
-
-        # 8d. 相似去重检测（基于正文前 2000 字的 SimHash）
-        try:
-            _detect_duplicates(db, book.id, cleaned_pages)
-        except Exception:  # noqa: BLE001
-            pass
-
-        book.status = "ready"
-        db.commit()
         # 深度分析会向云端发送章节正文，故不自动触发——由用户在前端明确点击「深度分析」授权
         return {
-            "book_id": book.id,
-            "chapters": len(chapters),
+            "book_id": book_id,
+            "chapters": summary["chapters"],
             "chunks": total,
             "definitions": len(keyinfo["definitions"]),
             "theorems": len(keyinfo["theorems"]),
             "keywords": len(keyinfo["keywords"]),
             "ocr": ocr_used,
+            "source_version_uid": summary["version_uid"],
         }
     except TaskCancelled:
-        # 用户主动取消 ≠ 解析失败。此前会被下面的通用分支捕获成 failed，
-        # 导致资料库显示"解析失败"而任务中心显示"已取消"，两者自相矛盾。
+        # 用户主动取消 ≠ 解析失败。重解析取消时旧版本必须原样可用：
+        # 只丢弃暂存产物并恢复原状态，不把书籍改成 failed/pending。
         db.rollback()
-        book = db.get(Book, book_id)
-        if book is not None:
-            book.status = "pending"
-            book.error_msg = None
-            db.commit()
+        try:
+            _cleanup_staging_after_failure(db, book_id, version)
+            book = db.get(Book, book_id)
+            if book is not None and not activated:
+                if is_reparse:
+                    book.status = original_status
+                    book.error_msg = original_error
+                else:
+                    book.status = "pending"
+                    book.error_msg = None
+                db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            logger.warning("取消后清理暂存版本失败（启动时会再次清理）", exc_info=True)
         raise
     except Exception as e:  # noqa: BLE001
         db.rollback()
-        book = db.get(Book, book_id)
-        if book is not None:
-            book.status = "failed"
-            book.error_msg = str(e)
-            db.commit()
+        try:
+            _cleanup_staging_after_failure(db, book_id, version)
+            book = db.get(Book, book_id)
+            if book is not None and not activated:
+                if is_reparse:
+                    # 旧版本仍然可用：保留原 status/error，不让重解析失败破坏阅读与问答。
+                    book.status = original_status
+                    book.error_msg = original_error
+                else:
+                    book.status = "failed"
+                    book.error_msg = str(e)
+                db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            logger.warning("失败后清理暂存版本失败（启动时会再次清理）", exc_info=True)
         raise
     finally:
         db.close()
 
 
-def _save_analysis(db, book_id: int, keyinfo: dict, layout) -> None:
-    """保存智能分析结果到 book_analysis 表（幂等：先删后插）。"""
-    old = db.scalar(select(BookAnalysis).where(BookAnalysis.book_id == book_id))
-    if old:
-        db.delete(old)
-        db.flush()
-
-    analysis = BookAnalysis(
-        book_id=book_id,
-        definitions_json=json.dumps(keyinfo["definitions"], ensure_ascii=False),
-        theorems_json=json.dumps(keyinfo["theorems"], ensure_ascii=False),
-        keywords_json=json.dumps(keyinfo["keywords"], ensure_ascii=False),
-        body_size=layout.body_size if layout else None,
-        header_count=len(layout.header_lines) if layout else 0,
-        footer_count=len(layout.footer_lines) if layout else 0,
-        table_pages=json.dumps(sorted(layout.table_pages)) if layout else None,
-    )
-    db.add(analysis)
-    db.flush()
+def _cleanup_staging_after_failure(db, book_id: int, version: SourceVersion | None) -> None:
+    """丢弃失败的暂存版本；version=None 表示尚未创建或已激活成功。"""
+    if version is not None:
+        abandon_staged_version(db, book_id, version.id)
+    else:
+        # 极端情况下（版本已创建但局部变量丢失）兜底清掉书上的暂存指针。
+        book = db.get(Book, book_id)
+        if book is not None and book.staging_source_version_id is not None:
+            abandon_staged_version(db, book_id, book.staging_source_version_id)
 
 
 def _simhash(text: str, hash_bits: int = 64) -> int:

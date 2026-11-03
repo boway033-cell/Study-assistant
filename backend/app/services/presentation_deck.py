@@ -490,7 +490,10 @@ def render_pptx(path: Path, book: Book, profile: PaperProfile | None, outline: l
     prs = Presentation(); prs.slide_width = Inches(13.333); prs.slide_height = Inches(7.5)
     blank = prs.slide_layouts[6]
     source_map = {s["source_id"]: s for s in sources}
-    pdf_path = settings.uploads_dir / book.file_path
+    from backend.app.core.config import resolve_under
+    pdf_path = resolve_under(settings.uploads_dir, book.file_path)
+    if pdf_path is None:
+        raise ValueError("原文件路径越界，已拒绝生成演示文稿")
     visual_assets = []
     with tempfile.TemporaryDirectory(prefix="deck_fig_") as tmp:
       tmp_dir = Path(tmp)

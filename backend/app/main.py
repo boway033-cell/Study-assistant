@@ -154,6 +154,37 @@ def _migrate():
                     conn.execute(text("ALTER TABLE import_tasks ADD COLUMN retry_count INTEGER DEFAULT 0"))
             except Exception:  # noqa: BLE001
                 pass
+            # P1-1 来源版本：create_all 只建新表，不会给已有表补列，这里显式迁移。
+            try:
+                for table, definitions in {
+                    "books": (
+                        ("active_source_version_id", "INTEGER"),
+                        ("staging_source_version_id", "INTEGER"),
+                    ),
+                    "chapters": (
+                        ("chapter_key", "VARCHAR(64)"),
+                        ("source_version_id", "INTEGER"),
+                    ),
+                    "chunks": (
+                        ("content_hash", "VARCHAR(64)"),
+                        ("source_version_id", "INTEGER"),
+                    ),
+                }.items():
+                    existing = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()}
+                    for col, ddl in definitions:
+                        if col not in existing:
+                            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}"))
+                for index_name, ddl in {
+                    "ix_books_active_source_version_id": "CREATE INDEX IF NOT EXISTS ix_books_active_source_version_id ON books(active_source_version_id)",
+                    "ix_books_staging_source_version_id": "CREATE INDEX IF NOT EXISTS ix_books_staging_source_version_id ON books(staging_source_version_id)",
+                    "ix_chapters_chapter_key": "CREATE INDEX IF NOT EXISTS ix_chapters_chapter_key ON chapters(chapter_key)",
+                    "ix_chapters_source_version_id": "CREATE INDEX IF NOT EXISTS ix_chapters_source_version_id ON chapters(source_version_id)",
+                    "ix_chunks_content_hash": "CREATE INDEX IF NOT EXISTS ix_chunks_content_hash ON chunks(content_hash)",
+                    "ix_chunks_source_version_id": "CREATE INDEX IF NOT EXISTS ix_chunks_source_version_id ON chunks(source_version_id)",
+                }.items():
+                    conn.execute(text(ddl))
+            except Exception:  # noqa: BLE001
+                pass
             # Writing DNA v2：逻辑结构考察层（旧版本行为 NULL）
             try:
                 wr_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(writing_dna_revisions)")).fetchall()]
@@ -209,6 +240,24 @@ async def lifespan(_app: FastAPI):
     # 建表（幂等）
     Base.metadata.create_all(bind=engine)
     _migrate()
+
+    # 来源版本迁移/恢复：给旧库补 legacy 版本与内容指纹，清掉中断的暂存解析。
+    try:
+        from backend.app.core.database import SessionLocal
+        from backend.app.services.book_lifecycle import (
+            backfill_legacy_source_versions,
+            cleanup_stale_staging_versions,
+        )
+        db = SessionLocal()
+        try:
+            backfilled = backfill_legacy_source_versions(db)
+            if backfilled:
+                print(f"[startup] 已为 {backfilled} 本书补建 legacy 来源版本")
+            cleanup_stale_staging_versions(db)
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001
+        pass
 
     # FTS5 虚拟表（带索引版本检查）
     try:
@@ -319,6 +368,20 @@ async def _guard_local_api(request: Request, call_next):
         if origin and origin not in _ALLOWED_ORIGINS:
             return JSONResponse(status_code=403, content={"detail": "跨源请求被拒绝"})
     return await call_next(request)
+
+
+@app.middleware("http")
+async def _add_security_headers(request: Request, call_next):
+    """基础安全响应头：禁止 MIME 嗅探、限制同源内嵌、收紧 Referer。
+
+    不使用严格 CSP：前端依赖 Element Plus 的内联样式，阅读器还用同源 iframe 预览
+    目录原页；X-Frame-Options 用 SAMEORIGIN 而不是 DENY 正是为了保留该同源 iframe。
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
 
 app.include_router(books.router)
 app.include_router(chat.router)

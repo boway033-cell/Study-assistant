@@ -23,8 +23,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
-from backend.app.models import Book, ChatLog, Chunk, Chapter
+from backend.app.models import Book, ChatLog, Chapter
 from backend.app.schemas import ChatHistoryDetail, ChatHistoryItem, ChatHistoryResp, ChatReq, ChatSource
+from backend.app.services import source_identity
 from backend.app.services.llm import LLMRouter, load_llm_config
 from backend.app.services.rag import retriever
 from backend.app.services.rag.reranker import record_citation_eval, verify_citations
@@ -55,16 +56,142 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _source_payload(sources: list[dict]) -> list[dict]:
-    return [
-        {"chunk_id": s["chunk_id"], "book_id": s.get("book_id"), "page": s.get("page"),
-         "page_start": s.get("page_start") or s.get("page"),
-         "page_end": s.get("page_end") or s.get("page"),
-         "book_title": s.get("book_title", ""),
-         "chapter_title": s.get("chapter_title"),
-         "snippet": s.get("snippet", "")}
-        for s in sources
-    ]
+# 读取历史引用时允许展示正文的状态：ok/stale 能证明是引用时原文，
+# legacy_unverified 是旧引用无指纹且书未重解析（verify 返回当前正文并明确标注未验证）。
+_HISTORICAL_USABLE = {
+    source_identity.STATUS_OK,
+    source_identity.STATUS_STALE,
+    source_identity.STATUS_LEGACY_UNVERIFIED,
+}
+
+
+def _source_payload(db: Session, sources: list[dict]) -> list[dict]:
+    """生成写入 sources_json 的引用载荷，并附带可复核的引用身份。
+
+    - 检索结果可能已由 books.py 的 search 通过 decorate_source 补过身份，直接沿用；
+    - summarize 复用的历史引用由 _historical_summary_sources 写入 verify 返回的指纹；
+    - 其余来源按当前主表现查 reference_identity 补齐。
+    身份补写失败不影响回答：宁可少一次校验，也不能阻断问答。
+    """
+    payload: list[dict] = []
+    for s in sources:
+        item = {"chunk_id": s["chunk_id"], "book_id": s.get("book_id"), "page": s.get("page"),
+                "page_start": s.get("page_start") or s.get("page"),
+                "page_end": s.get("page_end") or s.get("page"),
+                "book_title": s.get("book_title", ""),
+                "chapter_title": s.get("chapter_title"),
+                "snippet": s.get("snippet", "")}
+        content_hash = s.get("content_hash")
+        version_uid = s.get("source_version_uid")
+        if not content_hash or not version_uid:
+            try:
+                identity = source_identity.reference_identity(db, s.get("book_id"), s.get("chunk_id"))
+            except Exception:  # noqa: BLE001 - 身份补写失败不阻塞回答
+                identity = {}
+            content_hash = content_hash or identity.get("content_hash")
+            version_uid = version_uid or identity.get("source_version_uid")
+        if content_hash:
+            item["content_hash"] = content_hash
+        if version_uid:
+            item["source_version_uid"] = version_uid
+        payload.append(item)
+    return payload
+
+
+def _historical_summary_sources(db: Session, turns: list[qa_context.Turn],
+                                allowed: list[int] | None) -> tuple[list[dict], int]:
+    """复用历史引用时先校验引用身份，返回（可用历史来源, 跳过条数）。
+
+    绝不按整数 id 回退读当前正文：needs_review/invalid/missing 一律跳过并计数，
+    只有能证明是引用时原文（ok/stale，stale 用归档原文）或旧书未重解析的
+    legacy_unverified 才允许进入总结上下文。
+    """
+    historical: list[dict] = []
+    seen: set[int] = set()
+    skipped = 0
+    for prior in reversed(turns):
+        for ref in prior.sources:
+            if not isinstance(ref, dict):
+                skipped += 1
+                continue
+            try:
+                ref_book_id = int(ref.get("book_id"))
+                chunk_id = int(ref.get("chunk_id"))
+            except (TypeError, ValueError):
+                skipped += 1
+                continue
+            if chunk_id in seen or (allowed is not None and ref_book_id not in allowed):
+                continue
+            book = db.get(Book, ref_book_id)
+            if not book or book.status != "ready":
+                skipped += 1
+                continue
+            try:
+                verdict = source_identity.verify_chunk_ref(
+                    db, ref_book_id, chunk_id,
+                    expected_hash=ref.get("content_hash"),
+                    expected_version_uid=ref.get("source_version_uid"),
+                )
+            except Exception:  # noqa: BLE001 - 校验异常视为无法使用，不猜测正文
+                skipped += 1
+                continue
+            content = (verdict.get("content") or "").strip()
+            if verdict.get("status") not in _HISTORICAL_USABLE or not content:
+                skipped += 1
+                continue
+            chapter_id = verdict.get("chapter_id")
+            chapter = db.get(Chapter, chapter_id) if chapter_id else None
+            seen.add(chunk_id)
+            historical.append({
+                "chunk_id": chunk_id, "book_id": book.id, "book_title": book.title,
+                "chapter_title": chapter.title if chapter else ref.get("chapter_title"),
+                "page_start": verdict.get("page_start") or ref.get("page_start"),
+                "page_end": verdict.get("page_end") or ref.get("page_end"),
+                "snippet": content[:400], "context": content[:1400],
+                "content_hash": verdict.get("content_hash"),
+                "source_version_uid": verdict.get("source_version_uid"),
+            })
+            if len(historical) >= 6:
+                break
+        if len(historical) >= 6:
+            break
+    return historical, skipped
+
+
+def _decorate_history_source(db: Session, source: dict) -> dict:
+    """校验历史 sources_json 中的单条引用，返回带身份结论的副本。
+
+    只校验来源自身携带的 book_id/chunk_id；缺 book_id 时不回退到会话所属书，
+    避免把跨书引用误判成本书正文。校验异常时保留原字段，不伪造身份结论。
+    """
+    if not isinstance(source, dict):
+        return source
+    item = dict(source)
+    try:
+        book_id = int(source.get("book_id"))
+        chunk_id = int(source.get("chunk_id"))
+    except (TypeError, ValueError):
+        item["message"] = "引用缺少有效的书籍或分块编号，无法校验"
+        return item
+    try:
+        verdict = source_identity.verify_chunk_ref(
+            db, book_id, chunk_id,
+            expected_hash=source.get("content_hash"),
+            expected_version_uid=source.get("source_version_uid"),
+        )
+    except Exception:  # noqa: BLE001 - 展示历史详情不应因校验失败而中断
+        item["message"] = "来源校验暂时失败，请稍后重试"
+        return item
+    status = verdict.get("status")
+    item["identity_status"] = status
+    item["identity_verified"] = bool(verdict.get("identity_verified"))
+    item["message"] = verdict.get("message")
+    # 身份字段必须来自历史记录，而不是校验过程中观察到的当前分块。
+    # 尤其 needs_review / invalid 的 verdict 可能携带当前哈希：把它回传给
+    # 前端会使下一次查询把不同正文误判为已验证的旧引用。
+    # 只有能证明是引用时原文（或旧书未重解析）才给正文；其余明确留空，禁止用当前正文冒充。
+    item["content"] = verdict.get("content") if status in _HISTORICAL_USABLE else None
+    return item
 
 
 def _gather_sources(db: Session, req: ChatReq, scope_ids: list[int] | None,
@@ -194,31 +321,14 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
     # ---- 检索（用消解后的独立查询，而不是用户原句） ----
     retrieval_started = time.perf_counter()
     sources = _gather_sources(db, req, scope_ids, turn.search_query)
+    historical_used = 0
+    historical_skipped = 0
     if turn.intent == INTENT_SUMMARIZE:
-        # 重新读取历史引用的当前原文，严格服从当前资料范围；历史答案不是证据。
+        # 复用历史引用前先校验引用身份，严格服从当前资料范围；历史答案不是证据。
         allowed = scope_ids if scope_ids is not None else ([req.book_id] if req.book_id else None)
-        historical = []
-        seen = set()
-        for prior in reversed(turns):
-            for ref in prior.sources:
-                if not isinstance(ref, dict) or not isinstance(ref.get("chunk_id"), int):
-                    continue
-                chunk = db.get(Chunk, ref["chunk_id"])
-                if not chunk or chunk.id in seen or (allowed is not None and chunk.book_id not in allowed):
-                    continue
-                book = db.get(Book, chunk.book_id)
-                if not book or book.status != "ready" or not chunk.content.strip():
-                    continue
-                chapter = db.get(Chapter, chunk.chapter_id) if chunk.chapter_id else None
-                seen.add(chunk.id)
-                historical.append({"chunk_id": chunk.id, "book_id": book.id, "book_title": book.title,
-                                   "chapter_title": chapter.title if chapter else None,
-                                   "page_start": chunk.page_start, "page_end": chunk.page_end,
-                                   "snippet": chunk.content[:400], "context": chunk.content[:1400]})
-                if len(historical) >= 6:
-                    break
-            if len(historical) >= 6:
-                break
+        historical, historical_skipped = _historical_summary_sources(db, turns, allowed)
+        historical_used = len(historical)
+        seen = {item["chunk_id"] for item in historical}
         sources = (historical + [source for source in sources
                                  if source.get("chunk_id") not in seen and not source.get("is_outline")])[:8] if historical else sources
     retrieval_ms = (time.perf_counter() - retrieval_started) * 1000
@@ -238,7 +348,7 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
         if own_context:
             messages[-1]["content"] = own_context + "\n\n" + messages[-1]["content"]
     prompt_chars = qa_prompts.prompt_char_count(messages)
-    sources_payload = _source_payload(sources)
+    sources_payload = _source_payload(db, sources)
     # 已将资料复制为字符串，释放读事务后再等待远程模型。
     if isinstance(db, Session):
         db.rollback()
@@ -286,7 +396,10 @@ async def chat(req: ChatReq, db: Session = Depends(get_db)):
             sources=sources_payload, answer=answer,
             extra={**turn.to_payload(), "history_used": history_used,
                    "citation_valid": bool(verification["verified"]) if verification["citations_found"] else None,
-                   "support_details": support_details[:12]})
+                   "support_details": support_details[:12],
+                   **(({"historical_sources_used": historical_used,
+                        "historical_sources_skipped": historical_skipped}
+                       if turn.intent == INTENT_SUMMARIZE else {}))})
 
         log = ChatLog(
             book_id=req.book_id, question=req.question, answer=answer,
@@ -397,7 +510,8 @@ def get_chat(chat_id: int, db: Session = Depends(get_db)):
         id=log.id, question=log.question, answer=log.answer or "",
         conversation_id=log.conversation_id,
         model=log.model_name or log.mode,
-        sources=[ChatSource(**source) for source in sources], citation_audit=citation_audit,
+        sources=[ChatSource(**_decorate_history_source(db, source)) for source in sources],
+        citation_audit=citation_audit,
         qa=({**qa_context.resolve_turn(log.question, qa_context.load_turns(
             db, log.conversation_id, book_id=log.book_id,
             scope_type="shelf" if log.shelf_id else "project" if log.project_id else None,

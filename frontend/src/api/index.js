@@ -136,11 +136,11 @@ export const subscribeTask = (taskId, onUpdate, options = {}) => new Promise((re
 })
 
 // ===== 书籍 =====
-export const listBooks = (params) => http.get('/books', { params, paramsSerializer: repeatedParams })
+export const listBooks = (params, config = {}) => http.get('/books', { ...config, params, paramsSerializer: repeatedParams })
 export const reorderBooks = (bookIds, shelfId = null) => http.put('/books/order', { book_ids: bookIds, shelf_id: shelfId })
 export const getKnowledgeBaseHealth = () => http.get('/books/health')
 export const repairKnowledgeBaseHealth = (issueIds) => http.post('/books/health/repair', { issue_ids: issueIds })
-export const getBook = (id) => http.get(`/books/${id}`)
+export const getBook = (id, config = {}) => http.get(`/books/${id}`, { ...config })
 export const createDemoBook = () => http.post('/books/demo')
 export const uploadBook = (file) => {
   const form = new FormData()
@@ -162,7 +162,7 @@ export const cancelTask = (id) => http.post(`/tasks/${id}/cancel`)
 export const retryTask = (id) => http.post(`/tasks/${id}/retry`)
 
 // ===== 原文定位 =====
-export const getChunkOriginal = (bookId, chunkId) => http.get(`/books/${bookId}/chunk/${chunkId}`)
+export const getChunkOriginal = (bookId, chunkId, config = {}) => http.get(`/books/${bookId}/chunk/${chunkId}`, { ...config })
 export const getPageText = (bookId, pageNo) => http.get(`/books/${bookId}/page/${pageNo}`)
 export const bookFileUrl = (bookId) => `/api/books/${bookId}/file`
 export const renderedBookFileUrl = (bookId) => `/api/books/${bookId}/rendered-file`
@@ -234,8 +234,8 @@ export const chatStream = async (body, onEvent, options = {}) => {
     }
   }
 }
-export const chatHistory = (params) => http.get('/chat/history', { params })
-export const getChat = (id) => http.get(`/chat/${id}`)
+export const chatHistory = (params, config = {}) => http.get('/chat/history', { ...config, params })
+export const getChat = (id, config = {}) => http.get(`/chat/${id}`, { ...config })
 export const deleteChat = (id) => http.delete(`/chat/${id}`)
 export const chatMetrics = (window) => http.get('/chat/metrics', { params: { window } })
 
@@ -273,13 +273,13 @@ export const listAssistantProjects = () => http.get('/assistant/projects')
 export const createAssistantProject = data => http.post('/assistant/projects', data)
 export const updateAssistantProject = (id, data) => http.patch(`/assistant/projects/${id}`, data)
 export const deleteAssistantProject = id => http.delete(`/assistant/projects/${id}`)
-export const getAssistantStatus = (scopeType, scopeId) => http.get('/assistant/status', { params: { scope_type: scopeType, scope_id: scopeId } })
-export const getAssistantConnections = (scopeType, scopeId) => http.get('/assistant/connections', { params: { scope_type: scopeType, scope_id: scopeId } })
+export const getAssistantStatus = (scopeType, scopeId, config = {}) => http.get('/assistant/status', { ...config, params: { scope_type: scopeType, scope_id: scopeId } })
+export const getAssistantConnections = (scopeType, scopeId, config = {}) => http.get('/assistant/connections', { ...config, params: { scope_type: scopeType, scope_id: scopeId } })
 export const estimateAssistantPrepare = (scopeType, scopeId) => http.get('/assistant/prepare/estimate', { params: { scope_type: scopeType, scope_id: scopeId } })
 export const prepareAssistant = (scopeType, scopeId, bookIds) => http.post('/assistant/prepare', {
   scope_type: scopeType, scope_id: scopeId, book_ids: bookIds, acknowledged: true,
 })
-export const listAssistantMemories = (scopeType, scopeId) => http.get('/assistant/memories', { params: { scope_type: scopeType, scope_id: scopeId } })
+export const listAssistantMemories = (scopeType, scopeId, config = {}) => http.get('/assistant/memories', { ...config, params: { scope_type: scopeType, scope_id: scopeId } })
 export const createAssistantMemory = data => http.post('/assistant/memories', data)
 export const updateAssistantMemory = (id, data) => http.patch(`/assistant/memories/${id}`, data)
 export const deleteAssistantMemory = id => http.delete(`/assistant/memories/${id}`)

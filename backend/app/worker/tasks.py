@@ -392,8 +392,11 @@ def retry_task(task_id: str) -> TaskRecord:
         book = db.get(Book, row.book_id)
         if book is None:
             raise ValueError("原资料已不存在，无法重试")
-        book.status = "pending"
-        book.error_msg = None
+        # 重解析重试期间旧版本仍可用：不要把它改回 pending，否则阅读器与问答
+        # 会把一本已就绪的书当成"解析中"。
+        if not book.active_source_version_id:
+            book.status = "pending"
+            book.error_msg = None
         db.commit()
         book_id = book.id
     finally:
@@ -440,11 +443,14 @@ def recover_pending_tasks() -> list[str]:
     需要 book 仍存在且 status != ready 才有意义重新导入。
     """
     from backend.app.models import Book
+    from backend.app.services.book_lifecycle import cleanup_stale_staging_versions
 
     recovered: list[str] = []
     try:
         db = SessionLocal()
         try:
+            # 先丢弃进程中断留下的暂存版本（旧版本仍可用，清理不涉及用户资料）。
+            cleanup_stale_staging_versions(db)
             rows = db.scalars(
                 select(ImportTask).where(ImportTask.status == "pending").order_by(ImportTask.created_at)
             ).all()
@@ -454,12 +460,18 @@ def recover_pending_tasks() -> list[str]:
                     row.error = "服务重启，非导入任务需由用户重新提交"
                     continue
                 book = db.get(Book, row.book_id)
-                if book is None or book.status == "ready":
-                    # 书已删或已完成，标记任务完成
+                if book is None:
                     row.status = "done"
                     row.progress = 1.0
                     row.stage = "done"
-                    row.message = "书籍已就绪或已删除，跳过恢复"
+                    row.message = "书籍已删除，跳过恢复"
+                    continue
+                if row.name == "import" and book.status == "ready":
+                    # 首次导入已完成；只有 reimport 才会在 ready 状态下继续排队。
+                    row.status = "done"
+                    row.progress = 1.0
+                    row.stage = "done"
+                    row.message = "书籍已就绪，跳过恢复"
                     continue
                 # 重新入队
                 from backend.app.worker.import_task import run_import

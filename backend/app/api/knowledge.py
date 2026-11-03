@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
 from backend.app.models import Annotation, Book, Chapter, Chunk, EvidenceCard, KnowledgeNode, KnowledgeNote
+from backend.app.services import source_identity
 from backend.app.schemas import (
     KnowledgeAiGenerateReq,
     KnowledgeBatchDeleteReq,
@@ -30,6 +32,62 @@ from backend.app.schemas import (
 )
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
+
+
+# 与 /api/books/health 一致的来源锚点格式：B{book}:CH{chapter}:P{page}:C{chunk}。
+_ANCHOR_RE = re.compile(r"^B(\d+)(?::CH(\d+))?(?::P(\d+)(?:-(\d+))?)?(?::C(\d+))?$")
+
+
+def _source_ref_checks(db: Session, refs: list) -> list[dict]:
+    """校验笔记/证据卡 source_refs 的引用身份（P1-1 读路径）。
+
+    有分块编号时走 source_identity.verify_chunk_ref；旧引用没有指纹时会明确
+    返回 legacy_unverified/needs_review，绝不静默用当前正文冒充引用时原文。
+    只新增校验结论，不改变既有 source_refs 字段语义，也不删除用户数据。
+    """
+    checks: list[dict] = []
+    for raw in refs or []:
+        value = str(raw.get("ref") if isinstance(raw, dict) else raw or "").strip().strip("[]")
+        match = _ANCHOR_RE.match(value)
+        if not match:
+            continue
+        ref_book, chapter_id, _page_start, _page_end, chunk_id = (
+            int(item) if item else None for item in match.groups()
+        )
+        check: dict = {"ref": value, "book_id": ref_book, "chunk_id": chunk_id,
+                       "identity_status": None, "identity_verified": False,
+                       "content_hash": None, "source_version_uid": None, "message": None}
+        if not db.get(Book, ref_book):
+            check.update(identity_status=source_identity.STATUS_INVALID, message="来源书籍不存在")
+            checks.append(check)
+            continue
+        try:
+            if chunk_id is not None:
+                verdict = source_identity.verify_chunk_ref(db, ref_book, chunk_id)
+                check.update(identity_status=verdict["identity_status"],
+                             identity_verified=bool(verdict["identity_verified"]),
+                             content_hash=verdict.get("content_hash"),
+                             source_version_uid=verdict.get("source_version_uid"),
+                             message=verdict.get("message"))
+            elif chapter_id is not None:
+                chapter = db.get(Chapter, chapter_id)
+                if not chapter or chapter.book_id != ref_book:
+                    check.update(identity_status=source_identity.STATUS_INVALID,
+                                 message="来源章节已不存在或编号已属于其他内容")
+                elif source_identity.book_has_reparsed(db, ref_book):
+                    check.update(identity_status=source_identity.STATUS_NEEDS_REVIEW,
+                                 message="旧引用未保存章节身份且该书已重新解析，需复核引用位置")
+                else:
+                    check.update(identity_status=source_identity.STATUS_LEGACY_UNVERIFIED,
+                                 message="旧引用未保存章节身份；该书尚未重新解析，章节位置大概率仍有效。")
+            else:
+                check.update(identity_status=source_identity.STATUS_LEGACY_UNVERIFIED,
+                             message="引用只保存了书籍锚点，无法进一步校验。")
+        except Exception:  # noqa: BLE001 - 读路径可用性优先，校验失败时明确标注而非猜测
+            check.update(identity_status=source_identity.STATUS_NEEDS_REVIEW,
+                         message="来源校验暂时失败，请稍后重试")
+        checks.append(check)
+    return checks
 
 
 def _to_resp(node: KnowledgeNode, db: Session, _child_map: dict[int, list[KnowledgeNode]] | None = None) -> KnowledgeNodeResp:
@@ -342,6 +400,10 @@ def list_knowledge_records(
         item["quote_length"] = len(item.get("quote") or "")
         item["content"] = (item.get("content") or "")[:600]
         item["quote"] = (item.get("quote") or "")[:1200]
+        # 只在当前分页条目上做来源校验，避免为整库记录重复查询。
+        refs = item.get("source_refs") or []
+        if refs:
+            item["source_ref_checks"] = _source_ref_checks(db, refs)
     return {"total": total, "page": page, "page_size": page_size, "book_ids": scope, "items": selected}
 
 
@@ -365,6 +427,7 @@ def _note_payload(note: KnowledgeNote, db: Session) -> dict:
     book = db.get(Book, note.book_id)
     chapter = db.get(Chapter, note.chapter_id) if note.chapter_id else None
     page = note.page or (chapter.start_page if chapter else None)
+    source_refs = json.loads(note.source_refs_json or "[]")
     return {"id": note.id, "book_id": note.book_id, "book_title": book.title if book else None,
             "chapter_id": note.chapter_id, "chapter_title": chapter.title if chapter else None,
             "page": page, "title": note.title,
@@ -372,7 +435,8 @@ def _note_payload(note: KnowledgeNote, db: Session) -> dict:
             "origin": note.origin, "source_annotation_id": note.source_annotation_id,
             "source_report_id": note.source_report_id,
             "source_scope": json.loads(note.source_scope_json or "{}"),
-            "source_refs": json.loads(note.source_refs_json or "[]"),
+            "source_refs": source_refs,
+            "source_ref_checks": _source_ref_checks(db, source_refs),
             "source_link": f"/reader/{note.book_id}?page={page or 1}" if note.book_id else None,
             "created_at": note.created_at.isoformat()}
 
@@ -443,13 +507,15 @@ def add_note_to_tree(note_id: int, parent_id: int | None = None, db: Session = D
 
 def _card_payload(card: EvidenceCard, db: Session) -> dict:
     book = db.get(Book, card.book_id)
+    source_refs = json.loads(card.source_ref_json or "{}").get("refs", [])
     return {"id": card.id, "book_id": card.book_id, "book_title": book.title if book else None,
             "chapter_id": card.chapter_id, "page": card.page, "title": card.title,
             "evidence_text": card.evidence_text, "claim_text": card.claim_text,
             "tags": json.loads(card.tags_json or "[]"), "origin": card.origin,
             "source_report_id": card.source_report_id,
             "source_scope": json.loads(card.source_scope_json or "{}"),
-            "source_refs": json.loads(card.source_ref_json or "{}").get("refs", []),
+            "source_refs": source_refs,
+            "source_ref_checks": _source_ref_checks(db, source_refs),
             "verification_status": card.verification_status, "created_at": card.created_at.isoformat()}
 
 
@@ -585,7 +651,11 @@ def move_node(node_id: int, req: KnowledgeMoveReq, db: Session = Depends(get_db)
 
 @router.get("/nodes/{node_id}/source", response_model=KnowledgeSourceResp)
 def node_source(node_id: int, db: Session = Depends(get_db)):
-    """关联章节的原文：合并该章全部 chunk 文本，供右侧原文面板展示。"""
+    """关联章节的原文：合并该章全部 chunk 文本，供右侧原文面板展示。
+
+    节点只保存 chapter_id，不保存 chunk 引用；重解析后章节引用已按稳定
+    chapter_key 重映射，因此这里展示的是当前版本该章正文，不做分块身份校验。
+    """
     node = _get_node(db, node_id)
     if not node.chapter_id:
         return KnowledgeSourceResp(node_id=node.id, node_title=node.title, text="")

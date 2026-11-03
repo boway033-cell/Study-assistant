@@ -712,6 +712,10 @@ const viewOriginal = async (item) => {
     pageStart: ps,
     pageEnd: pe,
     bookType: book?.file_type || 'pdf',
+    // 引用身份：把引用记录里的指纹与片段交给原文抽屉统一校验/展示。
+    contentHash: item.content_hash || '',
+    sourceVersionUid: item.source_version_uid || item.version_uid || '',
+    snippet: item.snippet || item.quote || '',
   })
 }
 

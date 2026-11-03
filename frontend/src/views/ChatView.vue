@@ -5,12 +5,13 @@
       <el-col :span="5">
         <el-card shadow="never" class="side-card">
           <template #header>提问范围</template>
-          <el-select v-model="scopeValue" placeholder="选择资料范围" filterable :disabled="sending" style="width: 100%">
+          <el-select v-model="scopeValue" placeholder="选择资料范围" filterable :disabled="sending" style="width: 100%" @change="onScopeChange">
             <el-option label="全部资料" value="all" />
             <el-option-group label="书架"><el-option v-for="s in shelves" :key="`shelf:${s.id}`" :label="s.name" :value="`shelf:${s.id}`" /></el-option-group>
             <el-option-group label="项目"><el-option v-for="p in projects" :key="`project:${p.id}`" :label="p.name" :value="`project:${p.id}`" /></el-option-group>
-            <el-option-group label="单本资料"><el-option v-for="b in books" :key="`book:${b.id}`" :label="b.title" :value="`book:${b.id}`" /></el-option-group>
+            <el-option-group label="单本资料"><el-option v-for="b in bookOptions" :key="`book:${b.id}`" :label="b.title" :value="`book:${b.id}`" /></el-option-group>
           </el-select>
+          <el-alert v-if="sendBlockedReason" :title="sendBlockedReason" type="warning" :closable="false" show-icon class="scope-blocked" />
           <div class="scope-actions"><el-button link type="primary" @click="openProjectDialog()">＋ 项目</el-button><el-button v-if="activeScopeType==='project'" link @click="openProjectDialog(true)">编辑项目</el-button></div>
           <div v-if="activeScopeType" class="assistant-scope-status">
             <template v-if="assistantStatus">
@@ -100,7 +101,7 @@
               @keydown.enter.exact.prevent="send"
             />
             <el-button v-if="sending" @click="stopStream" style="margin-left: 8px">停止生成</el-button>
-            <el-button type="primary" :loading="sending" @click="send" style="margin-left: 8px">
+            <el-button type="primary" :loading="sending" :disabled="sendBlocked" @click="send" style="margin-left: 8px">
               {{ sending ? '生成中' : '发送' }}
             </el-button>
           </div>
@@ -112,21 +113,27 @@
         <el-card shadow="never" class="source-card">
           <template #header>📖 出处原文</template>
           <div v-if="sourceLoading" v-loading="true" style="height: 160px" />
-          <template v-else-if="source.text">
+          <template v-else-if="source.chunk_id">
             <div class="source-meta">
               <el-tag size="small" type="info">《{{ source.book_title || '' }}》</el-tag>
               <el-tag size="small" type="warning" v-if="source.chapter_title">{{ source.chapter_title }}</el-tag>
-              <el-tag size="small" type="success">第 {{ source.page_start }} - {{ source.page_end }} 页</el-tag>
-              <el-button link size="small" type="primary" @click="goFullRead" style="margin-left: auto">⛶ 全屏阅读</el-button>
-              <el-radio-group v-model="sourceView" size="small">
+              <el-tag size="small" type="success" v-if="source.page_start">第 {{ source.page_start }} - {{ source.page_end || source.page_start }} 页</el-tag>
+              <el-button v-if="source.text" link size="small" type="primary" @click="goFullRead" style="margin-left: auto">⛶ 全屏阅读</el-button>
+              <el-radio-group v-if="source.text" v-model="sourceView" size="small">
                 <el-radio-button value="text">文本</el-radio-button>
                 <el-radio-button value="pdf" v-if="sourceBookType === 'pdf'">PDF 原文</el-radio-button>
               </el-radio-group>
             </div>
-            <div v-if="sourceView === 'text'" class="source-text">{{ source.text }}</div>
-            <div v-else-if="sourceView === 'pdf'" class="pdf-box">
+            <el-alert v-if="source.identity" :type="source.identity.tone" :title="source.identity.message" :closable="false" show-icon class="source-identity" />
+            <div v-if="source.text && sourceView === 'text'" class="source-text">{{ source.text }}</div>
+            <div v-else-if="source.text && sourceView === 'pdf'" class="pdf-box">
               <PdfReader :src="pdfUrl" :book-id="source.book_id" :initial-page="source.page_start || 1" :use-saved-pos="false" />
             </div>
+            <div v-else-if="source.identity?.snippet" class="source-snippet">
+              <div class="source-snippet-hint">引用片段（仅作定位线索，不能当作当前正文）</div>
+              <blockquote class="source-snippet-text">{{ source.identity.snippet }}</blockquote>
+            </div>
+            <div v-else-if="source.identity" class="source-snippet-hint">该引用没有可展示的原文；请回到引用出处核对。</div>
           </template>
           <el-empty v-else description="提问后，答案引用的原文会自动显示在这里" :image-size="80" />
         </el-card>
@@ -176,6 +183,10 @@ import PdfReader from '../components/PdfReader.vue'
 import StudyEmptyState from '../components/StudyEmptyState.vue'
 import ResearchArchivePanel from '../components/ResearchArchivePanel.vue'
 import { sanitizeHtml } from '../utils/markdown'
+import { createSequencer } from '../utils/requestSequencer.js'
+import { buildChatRequest, buildHistoryQuery, evaluateRouteBook, mergeHistoryPage, scopeState } from '../utils/chatScope.js'
+import { archiveRouteChunkOriginalQuery, buildChunkOriginalQuery, citationQuoteCandidate, resolveCitationOriginal } from '../utils/citationIdentity.js'
+import { createAssistantScopeFlow, createDetailFlow, createHistoryFlow, createSourceFlow } from '../utils/chatFlows.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -218,6 +229,14 @@ const msgBox = ref(null)
 // 当前流式请求的取消控制器；停止生成 / 卸载页面时 abort
 const streamAbort = ref(null)
 
+// 路由 bookId 的独立加载状态（不依赖“前 100 条 ready 列表”）。
+// '' 无路由书；loading 正在单独 getBook；ready 已就绪；error 不可用（禁止发送）。
+const routeBookId = ref(null)
+const routeBookState = ref('')
+const routeBookError = ref('')
+const routeBookSequencer = createSequencer()
+let routeBookController = null
+
 // 右侧原文面板状态
 const source = ref({})
 const sourceLoading = ref(false)
@@ -231,40 +250,32 @@ const pdfUrl = computed(() => {
 const activeSourceIndex = ref(null)
 const activeSourceIdx = ref(null)
 
+// 选择器选项：路由书不可用时插入一个明确标注“不可用”的占位项，
+// 绝不把列表里同 id 的旧缓存当成这本书。
+const bookOptions = computed(() => {
+  const rows = books.value.slice()
+  const id = routeBookId.value
+  if (!id || routeBookState.value === 'ready' || rows.some((book) => book.id === id)) return rows
+  const loading = routeBookState.value === 'loading'
+  rows.unshift({ id, title: loading ? `文献 #${id}（加载中…）` : `文献 #${id}（不可用）`, status: loading ? 'pending' : 'failed', unavailable: true })
+  return rows
+})
+const sendBlockedReason = computed(() => {
+  if (routeBookState.value === 'loading') return '正在单独加载链接指向的文献；加载完成前不能发送。'
+  if (routeBookState.value === 'error') return routeBookError.value
+  return ''
+})
+const sendBlocked = computed(() => Boolean(sendBlockedReason.value))
+
 const scrollBottom = () => {
   nextTick(() => {
     if (msgBox.value) msgBox.value.scrollTop = msgBox.value.scrollHeight
   })
 }
 
-const loadSourcePanel = async (bookIdVal, chunkId, sourceMeta = null) => {
-  if (!bookIdVal || !chunkId) return
-  sourceLoading.value = true
+const fetchChapterTitle = async (bookIdVal, chapterId, signal) => {
   try {
-    const data = await getChunkOriginal(bookIdVal, chunkId)
-    const book = books.value.find((b) => b.id === bookIdVal)
-    const chapter = data.chapter_id ? (await fetchChapterTitle(bookIdVal, data.chapter_id)) : ''
-    source.value = {
-      book_id: bookIdVal,
-      chunk_id: chunkId,
-      book_title: book?.title || sourceMeta?.book_title || '',
-      chapter_title: chapter || sourceMeta?.chapter_title || '',
-      page_start: data.page_start || null,
-      page_end: data.page_end || null,
-      text: data.content || '',
-    }
-    sourceBookType.value = book?.file_type || ''
-    sourceView.value = 'text'
-  } catch (e) {
-    ElMessage.error('加载原文失败：' + e.message)
-  } finally {
-    sourceLoading.value = false
-  }
-}
-
-const fetchChapterTitle = async (bookIdVal, chapterId) => {
-  try {
-    const detail = await getBook(bookIdVal)
+    const detail = await getBook(bookIdVal, { signal })
     const walk = (nodes) => {
       for (const n of nodes) {
         if (n.id === chapterId) return n.title
@@ -281,6 +292,36 @@ const fetchChapterTitle = async (bookIdVal, chapterId) => {
   }
 }
 
+// 原文面板：两阶段请求（分块原文 → 章节标题）各有 token 守卫，旧响应不会覆盖新引用。
+const sourceFlow = createSourceFlow({
+  fetchOriginal: ({ bookId: bid, chunkId, sourceMeta, signal }) =>
+    getChunkOriginal(bid, chunkId, { signal, params: buildChunkOriginalQuery(sourceMeta || {}) }),
+  fetchChapterTitle: ({ bookId: bid, chapterId, signal }) => fetchChapterTitle(bid, chapterId, signal),
+  apply: ({ bookId: bid, chunkId, sourceMeta, data, chapterTitle }) => {
+    const identity = resolveCitationOriginal({ data, snippet: sourceMeta?.snippet || sourceMeta?.quote || '' })
+    const book = books.value.find((row) => row.id === bid)
+    source.value = {
+      book_id: bid,
+      chunk_id: chunkId,
+      book_title: book?.title || sourceMeta?.book_title || '',
+      chapter_title: chapterTitle || sourceMeta?.chapter_title || '',
+      page_start: data?.page_start || sourceMeta?.page_start || null,
+      page_end: data?.page_end || sourceMeta?.page_end || null,
+      text: identity.showContent ? identity.content : '',
+      identity,
+    }
+    sourceBookType.value = book?.file_type || ''
+    sourceView.value = 'text'
+  },
+  onLoading: (value) => { sourceLoading.value = value },
+  onError: (error) => ElMessage.error('加载原文失败：' + error.message),
+})
+
+const loadSourcePanel = (bookIdVal, chunkId, sourceMeta = null) => {
+  if (!bookIdVal || !chunkId) return null
+  return sourceFlow.run({ bookId: bookIdVal, chunkId, sourceMeta })
+}
+
 const showSource = (m, s, idx) => {
   const bid = s.book_id || m.bookId || bookId.value
   if (!bid) {
@@ -293,13 +334,17 @@ const showSource = (m, s, idx) => {
 }
 
 const goFullRead = () => {
-  if (!source.value.book_id) return
+  if (!source.value.book_id || !source.value.text) return
   router.push('/reader/' + source.value.book_id + '?page=' + (source.value.page_start || 1))
 }
 
 const send = async () => {
   const q = question.value.trim()
   if (!q || sending.value) return
+  if (sendBlockedReason.value) {
+    ElMessage.warning(sendBlockedReason.value)
+    return
+  }
   if (activeScopeType.value && assistantStatus.value?.total === 0) {
     ElMessage.warning('当前范围没有资料，请先加入书籍')
     return
@@ -313,8 +358,9 @@ const send = async () => {
   const controller = new AbortController()
   streamAbort.value = controller
   try {
-    await chatStream({ book_id: bookId.value || null,
-      scope_type: activeScopeType.value || null, scope_id: activeScopeId.value,
+    // 请求体只从这里生成：书范围 book_id=该书且 scope_type/scope_id=null；
+    // 书架/项目范围 scope_type+scope_id 且 book_id=null；全部资料三者全 null。
+    await chatStream({ ...buildChatRequest(scopeState(scopeValue.value)),
       conversation_id: conversationId.value, question: q }, (event, data) => {
       if (event === 'meta') {
         aiMsg.value.model = data.model || ''
@@ -394,38 +440,49 @@ const stopStream = () => {
   streamAbort.value?.abort()
 }
 
-const loadHistory = async (page = 1, append = false) => {
-  historyLoading.value = true
-  try {
-    const params = { page, page_size: 20 }
-    if (activeScopeType.value) { params.scope_type = activeScopeType.value; params.scope_id = activeScopeId.value }
-    else if (bookId.value) params.book_id = bookId.value
-    const resp = await chatHistory(params)
-    history.value = append ? [...history.value, ...resp.items] : resp.items
-    historyPage.value = page
-    historyTotal.value = resp.total
-  } catch { /* ignore */ } finally { historyLoading.value = false }
+// 历史列表：分页/加载更早/切范围都用同一 flow，只有最新 token 能写 history/loading/error。
+const historyFlow = createHistoryFlow({
+  fetchPage: ({ params, signal }) => chatHistory(params, { signal }),
+  apply: (result, { page, append }) => {
+    const next = mergeHistoryPage({ current: history.value, page, append, result })
+    history.value = next.items
+    historyPage.value = next.page
+    historyTotal.value = next.total
+  },
+  onLoading: (value) => { historyLoading.value = value },
+})
+
+const loadHistory = (page = 1, append = false) => {
+  const params = buildHistoryQuery({ ...scopeState(scopeValue.value), page, pageSize: 20 })
+  return historyFlow.run({ page, append, params })
 }
 
 const loadMoreHistory = () => loadHistory(historyPage.value + 1, true)
 
-const viewHistory = async (summary) => {
+// 历史详情：A 慢 B 快时，A 的响应不得覆盖 B 打开的对话。
+const detailFlow = createDetailFlow({
+  fetchDetail: (id, { signal }) => getChat(id, { signal }),
+  apply: (h) => {
+    conversationId.value = h.conversation_id || freshConversationId()
+    saveConversationId()
+    messages.value = [{ role: 'user', content: h.question }]
+    const msg = { role: 'assistant', content: h.answer, originalQuestion: h.question, model: h.model, qa: h.qa || null,
+      clarifyOptions: h.qa?.intent === 'clarify' ? clarCandidates(h) : [], sources: h.sources || [],
+      citationAudit: h.citation_audit || null, styleAudit: h.style_audit || null, bookId: bookId.value }
+    messages.value.push(msg)
+    if (h.sources?.length) {
+      activeSourceIndex.value = messages.value.length - 1
+      activeSourceIdx.value = 0
+      loadSourcePanel(h.sources[0].book_id || bookId.value, h.sources[0].chunk_id, h.sources[0])
+    }
+    scrollBottom()
+  },
+  onError: (error) => ElMessage.error('历史详情加载失败：' + error.message),
+})
+
+const viewHistory = (summary) => {
   if (sending.value) return
-  let h
-  try { h = await getChat(summary.id) } catch (error) { ElMessage.error('历史详情加载失败：' + error.message); return }
-  conversationId.value = h.conversation_id || freshConversationId()
-  saveConversationId()
-  messages.value = [{ role: 'user', content: h.question }]
-  const msg = { role: 'assistant', content: h.answer, originalQuestion: h.question, model: h.model, qa: h.qa || null,
-    clarifyOptions: h.qa?.intent === 'clarify' ? clarCandidates(h) : [], sources: h.sources || [],
-    citationAudit: h.citation_audit || null, styleAudit: h.style_audit || null, bookId: bookId.value }
-  messages.value.push(msg)
-  if (h.sources?.length) {
-    activeSourceIndex.value = messages.value.length - 1
-    activeSourceIdx.value = 0
-    loadSourcePanel(h.sources[0].book_id || bookId.value, h.sources[0].chunk_id, h.sources[0])
-  }
-  scrollBottom()
+  detailFlow.run(summary.id)
 }
 
 const searchBooks = async (query = '') => {
@@ -447,31 +504,37 @@ const prepareArchiveEvidence = async (message, citation) => {
   const bid = citation.book_id || message.bookId || bookId.value
   if (!bid || !citation.chunk_id) { ElMessage.warning('这条引用没有可核对的原文定位'); return }
   try {
-    const original = await getChunkOriginal(bid, citation.chunk_id)
+    const original = await getChunkOriginal(bid, citation.chunk_id, { params: buildChunkOriginalQuery(citation) })
     const suggested = (citation.quote || citation.snippet || '').trim()
     archiveCandidate.value = { book_id: bid, chunk_id: citation.chunk_id,
-      quote: suggested && original.content?.includes(suggested) ? suggested : (original.content || '').slice(0, 180).trim() }
+      quote: citationQuoteCandidate({ data: original, preferred: suggested }) }
     archiveDialog.value = true
   } catch (e) { ElMessage.error(e.message) }
 }
+const archiveRouteSequencer = createSequencer()
 const openArchiveRoute = async () => {
   const bid = Number(route.query.archiveBookId)
   const chunkId = Number(route.query.archiveChunkId)
   if (!bid || !chunkId || !activeScopeType.value || archiveRouteHandled.value) return
+  const token = archiveRouteSequencer.next()
+  const scopeType = activeScopeType.value
+  const scopeId = activeScopeId.value
   try {
-    const status = await getAssistantStatus(activeScopeType.value, activeScopeId.value)
+    const status = await getAssistantStatus(scopeType, scopeId)
+    if (!archiveRouteSequencer.isCurrent(token)) return
     if (!status.books?.some(book => book.book_id === bid)) {
       ElMessage.warning('请选择包含该文献的书架或项目，再加入档案')
       return
     }
-    const original = await getChunkOriginal(bid, chunkId)
+    const original = await getChunkOriginal(bid, chunkId, { params: archiveRouteChunkOriginalQuery(route.query) })
+    if (!archiveRouteSequencer.isCurrent(token)) return
     const suggested = String(route.query.archiveQuote || '').trim()
     archiveCandidate.value = { book_id: bid, chunk_id: chunkId,
-      quote: suggested && original.content?.includes(suggested) ? suggested : (original.content || '').slice(0, 180).trim(),
+      quote: citationQuoteCandidate({ data: original, preferred: suggested }),
       statement: String(route.query.archiveStatement || '') }
     archiveDialog.value = true
     archiveRouteHandled.value = true
-  } catch (e) { ElMessage.error(e.message) }
+  } catch (e) { if (archiveRouteSequencer.isCurrent(token)) ElMessage.error(e.message) }
 }
 const openArchiveSource = evidence => {
   archiveDialog.value = false
@@ -495,25 +558,37 @@ const newConversation = () => {
   source.value = {}
 }
 
-const loadAssistantScope = async () => {
-  if (!activeScopeType.value) { assistantStatus.value = null; memories.value = []; connections.value = []; connectionsKey = ''; return }
-  const type = activeScopeType.value
-  const id = activeScopeId.value
-  try {
-    const [status, ownMemory] = await Promise.all([getAssistantStatus(type, id), listAssistantMemories(type, id)])
-    if (activeScopeType.value === type && activeScopeId.value === id) {
-      assistantStatus.value = status
-      memories.value = ownMemory
-      const key = JSON.stringify([type, id, status.books.filter(b => b.state === 'prepared').map(b => b.artifact_id), ownMemory.map(m => [m.id, m.updated_at]), type === 'project' ? Math.floor(Date.now() / 60000) : 0])
-      if (key !== connectionsKey) {
-        const found = status.prepared ? await getAssistantConnections(type, id) : []
-        if (activeScopeType.value === type && activeScopeId.value === id) {
-          connections.value = found
-          connectionsKey = key
-        }
-      }
+// 范围助手：status/memories/connections 只有最新一次 scope 请求能写入。
+const assistantScopeFlow = createAssistantScopeFlow({
+  fetchStatus: ({ scopeType, scopeId, signal }) => getAssistantStatus(scopeType, scopeId, { signal }),
+  fetchMemories: ({ scopeType, scopeId, signal }) => listAssistantMemories(scopeType, scopeId, { signal }),
+  fetchConnections: ({ scopeType, scopeId, signal }) => getAssistantConnections(scopeType, scopeId, { signal }),
+  apply: ({ scopeType, scopeId, status, memories: rows, connections: found, connectionsKey: key, connectionsFetched }) => {
+    if (activeScopeType.value !== scopeType || activeScopeId.value !== scopeId) return
+    assistantStatus.value = status
+    memories.value = rows
+    if (connectionsFetched) {
+      connections.value = found
+      connectionsKey = key
     }
-  } catch (e) { ElMessage.error('助手范围加载失败：' + e.message) }
+  },
+  onError: (error) => ElMessage.error('助手范围加载失败：' + error.message),
+})
+
+const loadAssistantScope = () => {
+  if (!activeScopeType.value) {
+    assistantScopeFlow.invalidate()
+    assistantStatus.value = null
+    memories.value = []
+    connections.value = []
+    connectionsKey = ''
+    return
+  }
+  return assistantScopeFlow.run({
+    scopeType: activeScopeType.value,
+    scopeId: activeScopeId.value,
+    connectionsKey,
+  })
 }
 
 const startPrepare = async () => {
@@ -608,14 +683,78 @@ const removeProject = async () => {
   } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message) }
 }
 
+// 路由 bookId 的唯一处理路径：首次进入与后续 watch 都走这里。
+// 单独 getBook，不依赖列表；失败/非 ready 时保留明确原因并禁止发送，绝不回退 all/localStorage。
+const markRouteBookUnavailable = (id, reason) => {
+  books.value = books.value.filter((book) => book.id !== id)
+  routeBookId.value = id
+  routeBookState.value = 'error'
+  routeBookError.value = reason
+}
+const applyRouteBookId = async (rawId) => {
+  const id = Number(rawId)
+  const valid = Number.isInteger(id) && id > 0
+  const token = routeBookSequencer.next()
+  routeBookController?.abort()
+  routeBookController = null
+  if (!valid) {
+    routeBookId.value = null
+    routeBookState.value = 'error'
+    routeBookError.value = evaluateRouteBook({ bookId: rawId }).reason
+    return
+  }
+  routeBookId.value = id
+  routeBookState.value = 'loading'
+  routeBookError.value = ''
+  if (bookId.value !== id) scopeValue.value = `book:${id}`
+  const controller = new AbortController()
+  routeBookController = controller
+  try {
+    const book = await getBook(id, { signal: controller.signal })
+    if (!routeBookSequencer.isCurrent(token) || controller.signal.aborted) return
+    const verdict = evaluateRouteBook({ bookId: id, book })
+    if (!verdict.ok) { markRouteBookUnavailable(id, verdict.reason); return }
+    books.value = [book, ...books.value.filter((row) => row.id !== id)]
+    routeBookState.value = 'ready'
+    routeBookError.value = ''
+  } catch (error) {
+    if (!routeBookSequencer.isCurrent(token) || controller.signal.aborted) return
+    markRouteBookUnavailable(id, evaluateRouteBook({ bookId: id, error }).reason)
+  } finally {
+    if (routeBookController === controller) routeBookController = null
+  }
+}
+
+// 用户在选择器里明确选择其他范围：解除路由书的发送禁用，恢复原有提问流程。
+const onScopeChange = (value) => {
+  if (!routeBookState.value) return
+  if (routeBookId.value && value === `book:${routeBookId.value}`) return
+  routeBookSequencer.invalidate()
+  routeBookController?.abort()
+  routeBookController = null
+  routeBookId.value = null
+  routeBookState.value = ''
+  routeBookError.value = ''
+}
+
+// 组件初始化期间由 onMounted 统一加载，避免 watch 与 mount 重复请求。
+let scopeWatchEnabled = false
 watch(scopeValue, () => {
+  if (!scopeWatchEnabled) return
   archiveDialog.value = false
   archiveCandidate.value = null
   localStorage.setItem('assistantScope', scopeValue.value)
+  archiveRouteSequencer.invalidate()
+  historyFlow.invalidate()
+  detailFlow.invalidate()
+  sourceFlow.invalidate()
+  assistantScopeFlow.invalidate()
   restoreConversationId()
   messages.value = []
   source.value = {}
+  sourceLoading.value = false
   history.value = []
+  historyLoading.value = false
   connections.value = []
   connectionsKey = ''
   loadHistory()
@@ -625,23 +764,29 @@ watch(scopeValue, () => {
 })
 
 onMounted(async () => {
+  const requestedBook = route.query.bookId
+  const hasRequestedBook = requestedBook !== undefined && requestedBook !== null && String(requestedBook) !== ''
+  const requestedShelf = Number(route.query.shelfId)
+  const requestedProject = Number(route.query.projectId)
   try {
-      await Promise.all([searchBooks(''), listShelves().then(rows => { shelves.value = rows }),
-        listAssistantProjects().then(rows => { projects.value = rows })])
-      const requestedBook = Number(route.query.bookId)
-      const requestedShelf = Number(route.query.shelfId)
-      const requestedProject = Number(route.query.projectId)
-      if (requestedShelf && shelves.value.some(s => s.id === requestedShelf)) scopeValue.value = `shelf:${requestedShelf}`
-      else if (requestedProject && projects.value.some(p => p.id === requestedProject)) scopeValue.value = `project:${requestedProject}`
-      else if (requestedBook && books.value.some(b => b.id === requestedBook)) scopeValue.value = `book:${requestedBook}`
-      else {
-        const saved = localStorage.getItem('assistantScope')
-        if (saved && (saved === 'all' || shelves.value.some(s => saved === `shelf:${s.id}`)
-          || projects.value.some(p => saved === `project:${p.id}`)
-          || books.value.some(b => saved === `book:${b.id}`))) scopeValue.value = saved
-      }
+    await Promise.all([searchBooks(''), listShelves().then(rows => { shelves.value = rows }),
+      listAssistantProjects().then(rows => { projects.value = rows })])
   } catch { /* ignore */ }
-  if (!conversationId.value) restoreConversationId()
+  if (hasRequestedBook) {
+    // 优先按路由单独取书，不依赖前 100 条列表；找不到就直接显示原因。
+    await applyRouteBookId(requestedBook)
+  } else if (requestedShelf && shelves.value.some(s => s.id === requestedShelf)) {
+    scopeValue.value = `shelf:${requestedShelf}`
+  } else if (requestedProject && projects.value.some(p => p.id === requestedProject)) {
+    scopeValue.value = `project:${requestedProject}`
+  } else {
+    const saved = localStorage.getItem('assistantScope')
+    if (saved && (saved === 'all' || shelves.value.some(s => saved === `shelf:${s.id}`)
+      || projects.value.some(p => saved === `project:${p.id}`)
+      || books.value.some(b => saved === `book:${b.id}`))) scopeValue.value = saved
+  }
+  scopeWatchEnabled = true
+  restoreConversationId()
   loadHistory()
   loadAssistantScope()
   openArchiveRoute()
@@ -650,24 +795,45 @@ onMounted(async () => {
   statusPollTimer = setInterval(() => { if (activeScopeType.value) loadAssistantScope() }, 15000)
 })
 
+watch(() => route.query.bookId, (value) => {
+  if (value !== undefined && value !== null && String(value) !== '') {
+    applyRouteBookId(value)
+    return
+  }
+  // 路由书被移除（例如侧边栏回到「对话」）：必须解除上一次的失效禁用，
+  // 否则 routeBookState='error' 会永久阻止发送；若当前范围正是这本路由书，
+  // 退回「全部资料」，由用户重新明确选择范围。
+  const previous = routeBookId.value
+  routeBookSequencer.invalidate()
+  routeBookController?.abort()
+  routeBookController = null
+  routeBookId.value = null
+  routeBookState.value = ''
+  routeBookError.value = ''
+  if (previous !== null && scopeValue.value === `book:${previous}`) scopeValue.value = 'all'
+})
+
 watch(() => [route.query.archiveBookId, route.query.archiveChunkId], () => {
   archiveRouteHandled.value = false
   openArchiveRoute()
 })
 
-watch(() => [route.query.shelfId, route.query.projectId, route.query.bookId], async ([shelfId, projectId, requestedBook]) => {
+watch(() => [route.query.shelfId, route.query.projectId], ([shelfId, projectId]) => {
   if (Number(shelfId) && shelves.value.some(s => s.id === Number(shelfId))) scopeValue.value = `shelf:${Number(shelfId)}`
   else if (Number(projectId) && projects.value.some(p => p.id === Number(projectId))) scopeValue.value = `project:${Number(projectId)}`
-  else if (Number(requestedBook)) {
-    const id = Number(requestedBook)
-    if (!books.value.some(b => b.id === id)) {
-      try { books.value.unshift(await getBook(id)) } catch { return }
-    }
-    scopeValue.value = `book:${id}`
-  }
 })
 
-onBeforeUnmount(() => { streamAbort.value?.abort(); clearInterval(statusPollTimer) })
+onBeforeUnmount(() => {
+  streamAbort.value?.abort()
+  clearInterval(statusPollTimer)
+  routeBookSequencer.invalidate()
+  routeBookController?.abort()
+  archiveRouteSequencer.invalidate()
+  historyFlow.invalidate()
+  detailFlow.invalidate()
+  sourceFlow.invalidate()
+  assistantScopeFlow.invalidate()
+})
 </script>
 
 <style scoped>
@@ -720,14 +886,20 @@ onBeforeUnmount(() => { streamAbort.value?.abort(); clearInterval(statusPollTime
 .history-time { font-size: 11px; color: var(--el-text-color-placeholder); }
 .history-more{width:100%;min-height:36px}
 .source-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.source-identity { margin-bottom: 10px; }
+.source-identity :deep(.el-alert__title) { line-height: 1.6; }
 .source-text {
   background: var(--el-fill-color-lighter); border-radius: 8px; padding: 14px;
   font-size: 14px; line-height: 2; color: var(--el-text-color-primary);
   max-height: 560px; overflow-y: auto; white-space: pre-wrap;
   border: 1px solid var(--el-border-color-extra-light);
 }
+.source-snippet { background: var(--el-fill-color-lighter); border-radius: 8px; padding: 14px; border: 1px solid var(--el-border-color-extra-light); }
+.source-snippet-hint { color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; margin-bottom: 8px; }
+.source-snippet-text { margin: 0; padding-left: 12px; border-left: 3px solid var(--el-border-color); color: var(--el-text-color-regular); font-size: 14px; line-height: 1.9; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pdf-box { height: 480px; border-radius: 8px; overflow: hidden; border: 1px solid var(--el-border-color-extra-light); }
 .side-card,.chat-card,.source-card{border-radius:var(--study-radius-md)}
+.scope-blocked{margin-top:8px}.scope-blocked :deep(.el-alert__title){line-height:1.5}
 .scope-actions{display:flex;gap:8px;margin-top:5px}.assistant-scope-status{display:flex;flex-direction:column;gap:8px;margin-top:12px;padding:10px;border-radius:8px;background:var(--el-fill-color-light)}
 .assistant-scope-status small,.dialog-hint{color:var(--el-text-color-secondary);line-height:1.5}.scope-warning{font-size:12px;color:var(--el-color-warning-dark-2)}.scope-progress{font-size:12px;color:var(--el-color-primary)}
 .memory-input{margin:10px 0}.memory-item{padding:10px 0;border-bottom:1px solid var(--el-border-color-lighter);line-height:1.6;overflow-wrap:anywhere}.memory-item>div:last-child{text-align:right}

@@ -220,6 +220,7 @@ import {
   listFullTextInterpretations, listSensemakingArtifacts, listSensemakingRevisions, listUnderstandingAttempts,
   reviewArgumentNode, reviewDiscoveryCard, startArgumentMap, startConceptDiscovery, submitUnderstandingAttempt, subscribeTask,
 } from '../api'
+import { buildArchiveJumpQuery } from '../utils/sensemakingArchive.js'
 import { notifyTaskSubmitted } from '../stores/taskCenter'
 import { searchKnowledgeBooks, setKnowledgeScope } from '../stores/knowledgeScope'
 
@@ -297,8 +298,10 @@ const openEvidence = ev => router.push({ path: `/reader/${ev.book_id}`, query: e
 const sendNodeToArchive = node => {
   const evidence = node.evidence?.find(ev => ev.book_id && ev.chunk_id)
   if (!evidence) return
-  router.push({ path: '/chat', query: { archiveBookId: evidence.book_id,
-    archiveChunkId: evidence.chunk_id, archiveQuote: evidence.quote || '', archiveStatement: node.statement } })
+  // 证据里若带有可核验的内容指纹/来源版本，一并传给 ChatView 校验引用身份；
+  // 取不到就不传（禁止伪造），由后端按 legacy_unverified 提示用户核对原文。
+  const query = buildArchiveJumpQuery({ evidence, statement: node.statement })
+  if (query) router.push({ path: '/chat', query })
 }
 const chooseNode = node => { selectedNodeId.value = node.id; clearFeedback(); document.querySelector('.teachback')?.scrollIntoView({ behavior: 'smooth' }) }
 const clearFeedback = () => { feedback.value = null; coachResult.value = null }

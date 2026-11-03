@@ -133,8 +133,9 @@ def _replacement_items(db, book: Book, rows: list[dict]) -> list[dict]:
 
 def rebuild_book_toc(db, book: Book, record=None, *, allow_ocr: bool = True) -> dict:
     structured_path = settings.structured_dir / f"{book.file_hash or book.id}.json"
-    source_path = settings.uploads_dir / book.file_path
-    if book.file_type != "pdf" or not source_path.exists():
+    from backend.app.core.config import resolve_under
+    source_path = resolve_under(settings.uploads_dir, book.file_path)
+    if source_path is None or book.file_type != "pdf" or not source_path.exists():
         return {"book_id": book.id, "status": "skipped", "reason": "缺少 PDF 原文件"}
     document = None
     if structured_path.exists():

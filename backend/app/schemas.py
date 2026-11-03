@@ -140,6 +140,11 @@ class SearchResultItem(BaseModel):
     page_start: int | None = None
     page_end: int | None = None
     snippet: str
+    # 引用身份：新搜索结果写入笔记/问答时持久化，重解析后据此校验原文。
+    content_hash: str | None = None
+    source_version_uid: str | None = None
+    identity_status: str | None = None
+    identity_verified: bool | None = None
 
 
 class SearchResp(BaseModel):
@@ -202,6 +207,15 @@ class ChatSource(BaseModel):
     book_title: str = ""
     chapter_title: str | None = None
     snippet: str
+    # 引用身份：新引用优先持久化 content_hash/source_version_uid；读取历史详情时逐条校验，
+    # identity_status 为 ok/stale/legacy_unverified/needs_review/invalid/missing，
+    # content 只在能证明是引用时原文（或旧书未重解析的当前正文）时给出。
+    content_hash: str | None = None
+    source_version_uid: str | None = None
+    identity_status: str | None = None
+    identity_verified: bool | None = None
+    content: str | None = None
+    message: str | None = None
 
 
 class ChatHistoryItem(BaseModel):

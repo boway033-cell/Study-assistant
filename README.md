@@ -267,7 +267,7 @@ cd ..
 3. 导入一份测试资料，确认解析完成，阅读并做一条批注。
 4. 在“我的助手”选择这份资料或其书架，提问后打开引用核对。
 
-`.env` 是可选配置，支持项见 [.env.example](.env.example)；日常模型管理推荐在界面完成。更新或迁移前停止服务并备份整个 `backend/data/`，完整步骤见[下载与安装指南](docs/DOWNLOAD_AND_INSTALL.md)。
+`.env` 是可选配置，支持项见 [.env.example](.env.example)；日常模型管理推荐在界面完成。更新或迁移前先停止服务，再运行 `scripts\maintenance\backup.bat` 备份实际数据目录（自动解析 `DATA_DIR` 并校验压缩包与数据库完整性）；未使用自定义 `DATA_DIR` 时也可以复制整个 `backend/data/`。完整步骤见[下载与安装指南](docs/DOWNLOAD_AND_INSTALL.md)。
 
 ## 技术栈与依赖
 
@@ -359,7 +359,7 @@ API Key 与原始文件默认留在本机；全文研读可能分批发送所选
 
 ### 如何备份或迁移资料？
 
-先运行 `stop.bat`，再执行 `scripts\maintenance\backup.bat`，或复制整个 `backend/data/`。迁移到新目录或新电脑后重建依赖；不要只复制数据库，原文、输出与索引同样需要保留。
+先运行 `stop.bat`，再执行 `scripts\maintenance\backup.bat`。脚本按实际 `DATA_DIR`（环境变量 > 仓库根 `.env` > 默认 `backend/data`）生成经校验的 `backup-*.zip`；数据目录不存在、压缩或校验失败时会以非零退出码结束。也可以停止服务后复制整个实际数据目录。迁移到新目录或新电脑后重建依赖；不要只复制数据库，原文、输出与索引同样需要保留。
 
 ## 反馈与参与
 

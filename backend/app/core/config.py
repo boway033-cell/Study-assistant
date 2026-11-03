@@ -9,6 +9,21 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 PROJECT_ROOT = BACKEND_DIR.parent
 
 
+def resolve_under(root: str | Path, relative: str | Path) -> Path | None:
+    """把 relative 安全地解析到 root 之内；越界（含 ../、绝对路径、符号链接逃逸）返回 None。"""
+    base = Path(root).resolve()
+    candidate = Path(relative)
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    try:
+        candidate = candidate.resolve(strict=False)
+    except OSError:
+        return None
+    if candidate == base:
+        return candidate
+    return candidate if base in candidate.parents else None
+
+
 def _load_dotenv() -> None:
     """加载项目根目录 .env（可选，未安装 python-dotenv 时静默跳过）。"""
     try:

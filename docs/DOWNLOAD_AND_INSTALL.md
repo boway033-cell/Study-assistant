@@ -1,4 +1,4 @@
-# Study Assistant 2.6.0 下载、安装与更新
+# Study Assistant 2.6.1 下载、安装与更新
 
 本文面向 Windows 10/11。当前发布形态是本机运行的 Web 应用，不是桌面 EXE：双击启动器后由本地服务打开浏览器，资料不会上传到项目作者的服务器。
 
@@ -17,7 +17,7 @@ Release 已包含构建后的前端，因此不需要 Node.js；仍需安装 Pyt
 ```powershell
 git clone https://github.com/boway033-cell/Study-assistant.git
 cd Study-assistant
-git checkout v2.6.0
+git checkout v2.6.1
 ```
 
 源码方式需要 Node.js 22+ 来构建前端。
@@ -73,7 +73,7 @@ cd ..
 - 双击 `stop.bat`：只停止本项目确认拥有的本地进程。
 - 关闭浏览器标签页不会自动停止后端；需要释放内存时请运行 `stop.bat`。
 
-首次启动会创建 `backend/data/`。原始文献、数据库、索引、笔记和输出都在此目录中。
+首次启动会创建 `backend/data/`。原始文献、数据库、索引、笔记和输出都在此目录中；如果通过环境变量 `DATA_DIR` 或仓库根 `.env` 指定了自定义数据目录，实际数据目录以该配置为准。
 
 ### 4. 可选：建立桌面入口
 
@@ -102,22 +102,25 @@ API Key 只保存在本机并加密显示。调用云端模型时，所选范围
 
 ## 更新到新版本
 
-更新前必须先备份：
+更新前必须先停止服务，再备份实际数据目录：
 
 ```powershell
+.\stop.bat
 .\scripts\maintenance\backup.bat
 ```
+
+备份脚本遵循与应用相同的 `DATA_DIR` 解析规则：环境变量 `DATA_DIR` 优先，其次是仓库根 `.env` 中的 `DATA_DIR`，最后是默认的 `backend/data`；相对路径以仓库根为基准。执行前会打印“来源”（实际数据目录）和“目标”（备份 zip 绝对路径）。服务仍在运行、数据目录不存在、压缩或校验失败时，脚本以非零退出码结束，不会打印“成功”；成功后还会重新打开备份包，校验成员齐全并用 `PRAGMA integrity_check` 检查 `study.db`。
 
 ### Release 用户
 
 1. 运行 `stop.bat`。
 2. 下载并解压新版本到新目录。
-3. 把旧目录中的 `backend/data/` 完整复制到新目录的同一位置。
+3. 复制/解压旧数据到新目录的实际数据目录：默认把旧目录的 `backend/data/` 复制到新目录的 `backend/data/`；如果使用了自定义 `DATA_DIR`，复制该目录，并把同样的 `DATA_DIR` 配置带到新目录（环境变量或新目录的 `.env`）。也可以把上一步的备份包解压到新目录的数据目录。
 4. 在新目录重新创建 `.venv` 并安装依赖。
 5. 启动新版本；应用会自动执行幂等数据库迁移。
 6. 确认文献、笔记和设置正常后，再决定是否删除旧目录。
 
-不要覆盖唯一一份旧目录，也不要只复制 `study.db`；上传原文、写作输出和缓存索引也位于 `backend/data/`。
+不要覆盖唯一一份旧目录，也不要只复制 `study.db`；上传原文、写作输出和缓存索引也位于数据目录中。
 
 ### Git 用户
 
@@ -137,9 +140,14 @@ cd ..
 
 ## 备份、迁移与卸载
 
-- 推荐备份：运行 `scripts\maintenance\backup.bat`。
-- 手工备份：停止服务后复制整个 `backend/data/`。
-- 迁移电脑：把项目目录或新的发布目录与备份的 `backend/data/` 一起复制，在新电脑重建 `.venv`。
+- 推荐备份：先运行 `stop.bat`，再运行 `scripts\maintenance\backup.bat`。脚本按实际 `DATA_DIR` 备份，在仓库根生成 `backup-YYYYmmdd-HHMMSS.zip`；结束时校验压缩包可打开、必需成员齐全、`study.db` 的 `PRAGMA integrity_check` 为 `ok`。任一步失败都会以非零退出码结束且不打印“成功”；数据目录不存在时同样失败，不会静默创建目录。
+- 备份内容：`study.db`（SQLite 一致性快照，包含 WAL 中已提交内容）、`uploads/`、`structured/`、`presentations/`、`chroma/`、`models/`、`runtime/`、`writing/` 以及数据目录中的其他子目录。原始 `study.db-wal` / `study.db-shm` 不打包（已提交内容在快照中）；`.env` 与密钥文件不会写入备份包，也不会被打印。
+- 自定义数据目录：如果通过环境变量 `DATA_DIR` 或仓库根 `.env` 指定了数据目录，备份的就是该目录；迁移时复制该目录或把备份包解压到新位置，并在新环境配置相同的 `DATA_DIR`。也可用 `backup.bat --data-dir <目录>` 临时指定，`backup.bat --output <zip 路径>` 指定输出位置。
+- 恢复：先停止服务，确认目标数据目录不存在或已另行备份，再把压缩包内容解压到该数据目录（保持包内相对结构），最后启动应用。
+- 在线备份：服务无法停止时可用 `backup.bat --allow-online`；`study.db` 仍走 SQLite 一致性备份，但附件（`uploads/` 等）是在线复制，可能捕获正在写入的文件，因此优先停服备份。
+- 自动化调用：`backup.bat --no-pause --quiet` 不等待按键并精简过程输出，退出码可直接用于脚本判断；手动双击时保留暂停以便查看结果。
+- 手工备份：停止服务后复制整个实际数据目录。
+- 迁移电脑：把项目目录或新的发布目录与备份的数据目录一起复制，在新电脑重建 `.venv`。
 - 卸载：先备份，运行 `stop.bat`，再删除项目目录；如注册过协议入口，可运行 `scripts\protocol\uninstall.ps1`。
 
 ## 常见问题

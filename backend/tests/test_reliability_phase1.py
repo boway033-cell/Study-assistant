@@ -225,12 +225,23 @@ def test_delete_book_cleans_foreign_keys_and_keeps_access_audit():
         db.close()
 
 
-def test_reparse_preserves_user_content_without_stale_chapter_fk(monkeypatch):
+def test_reparse_keeps_old_version_until_atomic_activation(monkeypatch):
+    """重解析入口不再先删数据；只有激活事务成功后才切换正文并重映射用户引用。"""
     import backend.app.api.books as books_api
     from backend.app.core.database import SessionLocal
     from backend.app.models import Book, Chapter, Chunk, KnowledgeNode, Note, Quiz
+    from backend.app.services.book_lifecycle import (
+        activate_staged_version,
+        stage_chapters,
+        stage_chunks,
+        start_staging_version,
+    )
+    from backend.app.services.rag import fts
+    from backend.app.services.source_identity import content_hash, verify_chunk_ref
 
-    monkeypatch.setattr(books_api, "submit", lambda *args, **kwargs: SimpleNamespace(id="reimport-test"))
+    monkeypatch.setattr(
+        books_api, "submit_unique", lambda *args, **kwargs: SimpleNamespace(id="reimport-test")
+    )
     db = SessionLocal()
     try:
         book = Book(title="Reparse lifecycle", file_path="missing.pdf", file_type="pdf", status="ready")
@@ -239,21 +250,63 @@ def test_reparse_preserves_user_content_without_stale_chapter_fk(monkeypatch):
         chapter = Chapter(book_id=book.id, title="Old", level=1, order_index=0)
         db.add(chapter)
         db.flush()
+        old_chunk = Chunk(book_id=book.id, chapter_id=chapter.id, content="old", chunk_index=0)
         db.add_all([
-            Chunk(book_id=book.id, chapter_id=chapter.id, content="old", chunk_index=0),
+            old_chunk,
             Note(book_id=book.id, chapter_id=chapter.id, page=1, content="keep"),
             Quiz(book_id=book.id, chapter_id=chapter.id, q_type="short", question="keep", answer="yes"),
             KnowledgeNode(title="keep", book_id=book.id, chapter_id=chapter.id),
         ])
         db.commit()
         book_id = book.id
+        old_chunk_id = old_chunk.id
+        old_hash = content_hash("old")
 
+        # 1) 重解析入口只提交任务，不破坏任何已有内容。
         assert books_api.reparse_book(book_id, db) == {"task_id": "reimport-test"}
-        assert db.query(Chapter).filter_by(book_id=book_id).count() == 0
-        assert db.query(Chunk).filter_by(book_id=book_id).count() == 0
-        assert db.query(Note).filter_by(book_id=book_id).one().chapter_id is None
-        assert db.query(Quiz).filter_by(book_id=book_id).one().chapter_id is None
-        assert db.query(KnowledgeNode).filter_by(book_id=book_id).one().chapter_id is None
+        assert db.query(Chapter).filter_by(book_id=book_id).count() == 1
+        assert db.query(Chunk).filter_by(book_id=book_id).count() == 1
+        assert db.get(Book, book_id).status == "ready"
+        assert db.query(Note).filter_by(book_id=book_id).one().chapter_id == chapter.id
+        assert db.query(Quiz).filter_by(book_id=book_id).one().chapter_id == chapter.id
+        assert db.query(KnowledgeNode).filter_by(book_id=book_id).one().chapter_id == chapter.id
+
+        # 2) 新解析产物写入暂存区时，旧正文仍可读、旧引用仍有效。
+        version = start_staging_version(db, book_id)
+        staged = stage_chapters(db, version, [{
+            "title": "Old", "level": 1, "parent_id": None, "order_index": 0,
+            "start_page": 1, "end_page": 2,
+        }])
+        stage_chunks(db, version, [{
+            "chapter_id": staged[0].id, "content": "brand new text",
+            "page_start": 2, "page_end": 2, "chunk_index": 0, "word_count": 3,
+        }])
+        db.commit()
+        assert db.get(Chunk, old_chunk_id).content == "old"
+        assert db.get(Book, book_id).status == "ready"
+
+        # 3) 激活事务：旧分块归档、新正文与 FTS 同事务生效，用户章节引用按稳定身份重映射。
+        summary = activate_staged_version(db, book_id)
+        db.commit()
+        new_book = db.get(Book, book_id)
+        assert new_book.status == "ready"
+        assert summary["version_uid"]
+        assert new_book.active_source_version_id is not None
+        assert db.query(Chunk).filter_by(book_id=book_id).one().content == "brand new text"
+        new_chapter = db.query(Chapter).filter_by(book_id=book_id).one()
+        assert db.query(Note).filter_by(book_id=book_id).one().chapter_id == new_chapter.id
+        assert db.query(Quiz).filter_by(book_id=book_id).one().chapter_id == new_chapter.id
+        assert db.query(KnowledgeNode).filter_by(book_id=book_id).one().chapter_id == new_chapter.id
+        hits = fts.search("brand new text", book_id=book_id)
+        assert [hit["chunk_id"] for hit in hits["items"]] == [db.query(Chunk).filter_by(book_id=book_id).one().id]
+
+        # 4) 旧编号即使被复用也不能静默指向新正文：
+        #    带引用时指纹 → 返回归档原文并标 stale；无指纹 → needs_review。
+        stale = verify_chunk_ref(db, book_id, old_chunk_id, expected_hash=old_hash)
+        assert stale["status"] == "stale"
+        assert stale["content"] == "old"
+        assert stale["identity_verified"] is True
+        assert verify_chunk_ref(db, book_id, old_chunk_id)["status"] == "needs_review"
         books_api.delete_book(book_id, db)
     finally:
         db.close()
