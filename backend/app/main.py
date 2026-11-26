@@ -311,7 +311,7 @@ async def lifespan(_app: FastAPI):
         pass
 
 
-app = FastAPI(title="Study assistant", version="2.6.1", lifespan=lifespan)
+app = FastAPI(title="Study assistant", version="2.6.3", lifespan=lifespan)
 
 
 class SPAStaticFiles(StaticFiles):

@@ -12,6 +12,7 @@ from backend.app.core.config import settings
 from backend.app.core.database import SessionLocal
 from backend.app.models import Book, Chapter
 from backend.app.services.analyzer.layout import analyze_structured
+from backend.app.services.book_lifecycle import active_layout_path
 from backend.app.services.parser.structured import StructuredDocument
 from backend.app.services.rag.toc_editor import replace_book_toc
 from backend.app.services.rag.toc_import import select_import_toc
@@ -132,7 +133,7 @@ def _replacement_items(db, book: Book, rows: list[dict]) -> list[dict]:
 
 
 def rebuild_book_toc(db, book: Book, record=None, *, allow_ocr: bool = True) -> dict:
-    structured_path = settings.structured_dir / f"{book.file_hash or book.id}.json"
+    structured_path = active_layout_path(db, book)
     from backend.app.core.config import resolve_under
     source_path = resolve_under(settings.uploads_dir, book.file_path)
     if source_path is None or book.file_type != "pdf" or not source_path.exists():

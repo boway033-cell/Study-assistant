@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
+from backend.app.core.config import settings
 from backend.app.models import (
     Annotation,
     Attempt,
@@ -47,6 +49,32 @@ from backend.app.services.source_identity import (
 _CHAPTER_REF_MODELS = (Note, Quiz, KnowledgeNode, EvidenceCard, KnowledgeNote)
 
 
+def versioned_layout_path(version: SourceVersion) -> Path:
+    return settings.structured_dir / f"book-{version.book_id}-{version.version_uid}.json"
+
+
+def active_layout_path(db: Session, book: Book) -> Path:
+    version = db.get(SourceVersion, book.active_source_version_id) if book.active_source_version_id else None
+    if version is not None:
+        try:
+            payload = json.loads(version.payload_json or "{}")
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict) and payload.get("versioned_layout"):
+            return versioned_layout_path(version)
+    return settings.structured_dir / f"{book.file_hash or book.id}.json"
+
+
+def _discard_staged_layout(version: SourceVersion) -> None:
+    path = versioned_layout_path(version)
+    for cache_file in (path, path.with_suffix(".json.tmp")):
+        try:
+            cache_file.unlink(missing_ok=True)
+        except OSError:
+            # An unused cache is safe to leave for normal cache pruning.
+            pass
+
+
 def _latest_seq(db: Session, book_id: int) -> int:
     seq = db.scalar(
         select(func.max(SourceVersion.seq)).where(SourceVersion.book_id == book_id)
@@ -75,8 +103,7 @@ def start_staging_version(
             SourceVersion.book_id == book_id, SourceVersion.status == "staging"
         )
     ).all():
-        _discard_staged_rows(db, stale.id)
-        stale.status = "abandoned"
+        abandon_staged_version(db, book_id, stale.id)
     version = SourceVersion(
         version_uid=new_version_uid(),
         book_id=book_id,
@@ -84,7 +111,7 @@ def start_staging_version(
         status="staging",
         file_hash=file_hash,
         created_by_task=task_id,
-        payload_json="{}",
+        payload_json=json.dumps({"versioned_layout": True}),
     )
     db.add(version)
     db.flush()
@@ -161,8 +188,9 @@ def abandon_staged_version(db: Session, book_id: int, version_id: int | None) ->
     if not version_id:
         return
     version = db.get(SourceVersion, version_id)
-    if version is not None:
+    if version is not None and version.status == "staging":
         _discard_staged_rows(db, version.id)
+        _discard_staged_layout(version)
         version.status = "abandoned"
         version.payload_json = "{}"
     book = db.get(Book, book_id)
@@ -179,12 +207,7 @@ def cleanup_stale_staging_versions(db: Session) -> int:
     for version in db.scalars(
         select(SourceVersion).where(SourceVersion.status == "staging")
     ).all():
-        _discard_staged_rows(db, version.id)
-        version.status = "abandoned"
-        version.payload_json = "{}"
-        book = db.get(Book, version.book_id)
-        if book is not None and book.staging_source_version_id == version.id:
-            book.staging_source_version_id = None
+        abandon_staged_version(db, version.book_id, version.id)
         count += 1
     if count:
         db.commit()

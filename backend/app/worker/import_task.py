@@ -28,6 +28,7 @@ from backend.app.services.book_lifecycle import (
     stage_chunks,
     start_staging_version,
     update_staged_payload,
+    versioned_layout_path,
 )
 from backend.app.services.rag.chunker import build_chapter_pages, build_chapters, split_pages_into_chunks
 from backend.app.services.parser import ParseError, parse_document
@@ -267,11 +268,10 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
             except Exception:  # noqa: BLE001
                 layout = None  # 版面分析失败不阻塞导入
 
-        # 结构证据按文件哈希原子保存；Markdown、目录和后续修复均可重复派生。
+        # 版面缓存随解析版本写入，目录重建只读取已激活版本。
         if result.structured is not None:
             try:
-                structured_path = settings.structured_dir / f"{book.file_hash or book.id}.json"
-                result.structured.save_json(structured_path)
+                result.structured.save_json(versioned_layout_path(version))
             except OSError:
                 pass
             finally:
@@ -377,6 +377,8 @@ async def run_import(record: TaskRecord, book_id: int) -> dict:
         # 重映射用户章节引用，全部在同一事务内完成。任一步失败都回滚到旧版本。
         update_progress(record, 0.9, "activating", "正在切换来源版本...")
         summary = activate_staged_version(db, book_id)
+        if record.cancel_requested:
+            raise TaskCancelled("重新解析已取消")
         db.commit()
         version = None  # 已转为 active，后续失败不再清理暂存数据
         # 激活已提交：之后的取消/异常不得再把书籍状态回写为 pending/failed，

@@ -50,7 +50,7 @@ DB_NAME = "study.db"
 # 原始 SQLite 旁路文件不进入备份包：快照已经包含已提交事务。
 SQLITE_SIDECAR_PREFIX = "study.db-"
 SQLITE_SIDECAR_NAMES = {"study.db-wal", "study.db-shm", "study.db-journal"}
-# 永远不打包、也不打印内容的密钥文件。
+# 不打包 .env。数据目录的 .secret_key 用于恢复数据库中的加密配置。
 SECRET_NAMES = {".env"}
 SECRET_PREFIXES = (".env.",)
 DEFAULT_HEALTH_PORTS = tuple(range(8000, 8011))
@@ -80,13 +80,13 @@ def _is_sqlite_sidecar(name: str) -> bool:
     return name in SQLITE_SIDECAR_NAMES or name.startswith(SQLITE_SIDECAR_PREFIX)
 
 
-def _read_dotenv_data_dir(env_file: Path) -> str | None:
+def _read_dotenv_setting(env_file: Path, name: str) -> str | None:
     """使用与 load_dotenv 相同的解析和插值规则，不修改进程环境。"""
     from dotenv.main import DotEnv
 
     # load_dotenv 默认 override=False：插值时现有环境变量优先。
     # DotEnv.get 不向 os.environ 写入任何值，也不输出其他配置。
-    return DotEnv(env_file, override=False, encoding="utf-8").get("DATA_DIR")
+    return DotEnv(env_file, override=False, encoding="utf-8").get(name)
 
 
 def resolve_data_dir(data_dir_arg: str | None, project_root: Path) -> tuple[Path, str]:
@@ -98,7 +98,7 @@ def resolve_data_dir(data_dir_arg: str | None, project_root: Path) -> tuple[Path
     elif env_value is not None:
         raw, source = env_value, "环境变量 DATA_DIR"
     else:
-        dotenv_value = _read_dotenv_data_dir(env_file)
+        dotenv_value = _read_dotenv_setting(env_file, "DATA_DIR")
         if dotenv_value is not None:
             raw, source = dotenv_value, f"{env_file} 中的 DATA_DIR"
         else:
@@ -228,15 +228,18 @@ def detect_running_service(project_root: Path, data_dir: Path, ports: list[int],
     return evidence
 
 
-def _find_service_ports(args: argparse.Namespace, data_dir: Path) -> list[int]:
+def _find_service_ports(args: argparse.Namespace, data_dir: Path, project_root: Path) -> list[int]:
     explicit = _parse_ports(args.port)
     if explicit:
         return explicit
-    ports: list[int] = []
-    for port in [*_runtime_url_ports(data_dir), *DEFAULT_HEALTH_PORTS]:
-        if port not in ports:
-            ports.append(port)
-    return ports
+    configured = os.environ.get("PORT")
+    if configured is None:
+        try:
+            configured = _read_dotenv_setting(project_root / ".env", "PORT")
+        except (ImportError, OSError, UnicodeError) as exc:
+            raise BackupError("无法读取 .env 中的服务端口，请检查安装与配置。") from exc
+    configured_ports = _parse_ports([configured]) if configured else []
+    return list(dict.fromkeys([*configured_ports, *_runtime_url_ports(data_dir), *DEFAULT_HEALTH_PORTS]))
 
 
 def _snapshot_database(source: Path, destination: Path) -> None:
@@ -467,7 +470,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--project-root",
         help="高级选项：覆盖项目根目录定位（.env 与相对路径基准），供测试/诊断使用",
     )
-    parser.add_argument("--port", action="append", help="健康检查端口，可重复或逗号分隔；默认检查 8000-8010 与 runtime/server.url")
+    parser.add_argument("--port", action="append", help="覆盖健康检查端口，可重复或逗号分隔；默认检查配置的 PORT、runtime/server.url 和 8000-8010")
     parser.add_argument("--health-timeout", type=float, default=0.35, help="单次健康检查超时（秒）")
     parser.add_argument("--allow-online", action="store_true", help="服务运行时仍继续备份（study.db 仍用 SQLite 一致性备份，附件为在线复制）")
     parser.add_argument("--quiet", action="store_true", help="减少过程输出（成功摘要与错误仍会输出）")
@@ -516,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
                 "        目录可能不是学习助手的数据目录，或应用从未在该目录启动过。"
             )
 
-        ports = _find_service_ports(args, data_dir)
+        ports = _find_service_ports(args, data_dir, project_root)
         evidence = detect_running_service(project_root, data_dir, ports, max(0.05, args.health_timeout))
         if evidence and not args.allow_online:
             print("[错误] 检测到学习助手服务可能仍在运行，默认拒绝备份：", file=sys.stderr)

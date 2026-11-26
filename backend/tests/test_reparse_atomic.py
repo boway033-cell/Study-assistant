@@ -1,6 +1,7 @@
 """P1-1 回归：重解析中途失败/取消不得破坏旧版本、旧引用与检索。"""
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -247,3 +248,56 @@ def test_activation_failure_rolls_back_content_fts_and_refs(monkeypatch):
         assert fts.search("never", book_id=book_id)["items"]
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("outcome", ["failure", "cancel", "success"])
+def test_reparse_layout_changes_only_on_activation(tmp_path, monkeypatch, outcome):
+    from backend.app.services.parser import ParseResult
+    from backend.app.services.parser.structured import StructuredDocument
+    from backend.app.worker import import_task
+
+    monkeypatch.setattr(book_lifecycle.settings, "structured_dir", tmp_path)
+    with SessionLocal() as db:
+        book_id, _, _ = _make_ready_book(db)
+        book = db.get(Book, book_id)
+        legacy_path = book_lifecycle.active_layout_path(db, book)
+        StructuredDocument(backend="old-layout").save_json(legacy_path)
+
+    parsed = ParseResult(pages=["Synthetic new text for a parsed document. " * 8], total_pages=1,
+                         structured=StructuredDocument(backend="new-layout"))
+    monkeypatch.setattr(import_task, "parse_document", lambda *_: parsed)
+    record = import_task.TaskRecord(id="layout-audit", name="reimport", book_id=book_id)
+    real_activate = import_task.activate_staged_version
+
+    def activate(session, bid):
+        assert book_lifecycle.active_layout_path(session, session.get(Book, bid)) == legacy_path
+        result = real_activate(session, bid)
+        if outcome == "failure":
+            raise RuntimeError("failure after cache write and database activation")
+        if outcome == "cancel":
+            record.cancel_requested = True
+        return result
+
+    monkeypatch.setattr(import_task, "activate_staged_version", activate)
+    if outcome == "success":
+        asyncio.run(import_task.run_import(record, book_id))
+    else:
+        expected = RuntimeError if outcome == "failure" else import_task.TaskCancelled
+        with pytest.raises(expected):
+            asyncio.run(import_task.run_import(record, book_id))
+
+    with SessionLocal() as db:
+        book = db.get(Book, book_id)
+        assert book.status == "ready"
+        assert book.staging_source_version_id is None
+        assert StructuredDocument.load_json(legacy_path).backend == "old-layout"
+        path = book_lifecycle.active_layout_path(db, book)
+        if outcome == "success":
+            assert path != legacy_path
+            assert StructuredDocument.load_json(path).backend == "new-layout"
+            path.unlink()
+            assert book_lifecycle.active_layout_path(db, book) == path
+        else:
+            assert path == legacy_path
+            assert db.scalar(select(Chunk.content).where(Chunk.book_id == book_id)) == "original text"
+            assert list(tmp_path.iterdir()) == [legacy_path]

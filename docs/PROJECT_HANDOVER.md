@@ -1,7 +1,7 @@
 # 项目交接文档 · Study assistant（学习助手）
 
 > **用途**：供新对话/新协作者快速接管项目。阅读本文件 + 启动项目即可继续开发。
-> **最后更新**：2026 年 10 月 17 日，真实书目端到端回归与真实 provider 最小预算冒烟；当前发布版本 **v2.6.1**，包含下述报告任务与真实 PDF 引文核查修复。
+> **版本说明**：当前应用版本为 **v2.6.3**。下方 v2.6.1 快照保留 2026 年 10 月 17 日的验证记录。
 
 ## v2.6.1 发布快照（2026-10-17）
 
@@ -562,7 +562,7 @@ GitHub 首页更新为当前四个核心工作区，特别说明研究报告的�
 
 ## 12. 开源发布状态
 
-- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，当前发布版本 v2.6.1）
+- 仓库：https://github.com/boway033-cell/Study-assistant（分支 main，发布版本见 Releases）
 - 许可证 MIT、PRIVACY.md、SECURITY.md、CHANGELOG.md、CONTRIBUTING.md、.gitattributes
 - CI（ci.yml）+ Release 自动打包（release.yml）
 - 分享给朋友：下载 Release 的 zip（含前端产物，不装 Node 也能用），或 git clone 后 `cd frontend && npm i && npm run build`
@@ -579,7 +579,8 @@ cd frontend && npm run build               # 改完前端构建（需 npm.cmd）
 
 # git 推送
 git push origin main
-git tag v2.6.1 && git push origin v2.6.1  # 触发 Release 自动打包
+git tag vX.Y.Z
+git push origin vX.Y.Z  # 将 vX.Y.Z 替换为本次版本，触发 Release 自动打包
 
 # 关键文档
 docs/README.md  docs/产品文档.md  docs/PROJECT_HANDOVER.md

@@ -80,6 +80,7 @@ def _run_backup(
     env_data_dir: str | None = None,
     extra_args: list[str] | None = None,
     port: int | None = None,
+    use_configured_port: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     work = project / "_work"
     work.mkdir(exist_ok=True)
@@ -92,9 +93,9 @@ def _run_backup(
         str(project),
         "--work-dir",
         str(work),
-        "--port",
-        str(port if port is not None else _free_port()),
     ]
+    if not use_configured_port:
+        args += ["--port", str(port if port is not None else _free_port())]
     if data_dir is not None:
         args += ["--data-dir", str(data_dir)]
     args += list(extra_args or [])
@@ -358,6 +359,14 @@ def test_archive_is_verifiable_and_contains_recoverable_data(tmp_path: Path) -> 
     data_dir = project / "backend" / "data"
     _populate_data_dir(data_dir)
     (data_dir / ".env").write_text(f"DEEPSEEK_API_KEY={SECRET_VALUE}\n", encoding="utf-8")
+    from cryptography.fernet import Fernet
+
+    recovery_key = Fernet.generate_key()
+    (data_dir / ".secret_key").write_bytes(recovery_key)
+    encrypted = Fernet(recovery_key).encrypt(b"fake-credential-for-restore-test")
+    with contextlib.closing(sqlite3.connect(data_dir / DB_NAME)) as conn, conn:
+        conn.execute("CREATE TABLE credentials (ciphertext BLOB)")
+        conn.execute("INSERT INTO credentials VALUES (?)", (encrypted,))
 
     result = _run_backup(project)
 
@@ -365,11 +374,11 @@ def test_archive_is_verifiable_and_contains_recoverable_data(tmp_path: Path) -> 
     assert "[OK] 备份成功" in result.stdout
     assert "integrity_check=ok" in result.stdout
     assert SECRET_VALUE not in result.stdout + result.stderr
+    assert recovery_key.decode("ascii") not in result.stdout + result.stderr
     archive = _only_zip(project)
     with zipfile.ZipFile(archive) as zf:
         names = zf.namelist()
-        assert DB_NAME in names
-        assert names[0] == DB_NAME, "备份包内文件应位于根目录"
+        assert DB_NAME in names, "数据库应位于压缩包根目录"
         assert ".env" not in names
         assert not any(name.startswith(".env.") for name in names)
         assert not any("study.db-" in name for name in names)
@@ -387,6 +396,10 @@ def test_archive_is_verifiable_and_contains_recoverable_data(tmp_path: Path) -> 
 
     recovered = tmp_path / "recovered"
     recovered_db = _extract(archive, recovered, DB_NAME)
+    recovered_key = _extract(archive, recovered, ".secret_key").read_bytes()
+    with contextlib.closing(sqlite3.connect(recovered_db)) as conn:
+        recovered_value = conn.execute("SELECT ciphertext FROM credentials").fetchone()[0]
+    assert Fernet(recovered_key).decrypt(recovered_value) == b"fake-credential-for-restore-test"
     titles = _assert_database_ok(recovered_db)
     assert ("虚构教材",) in titles
 
@@ -446,6 +459,24 @@ def test_running_service_detected_by_http_health(tmp_path: Path) -> None:
 
     archive = _only_zip(project)
     _assert_database_ok(_extract(archive, tmp_path / "recovered-online", DB_NAME))
+
+
+@pytest.mark.parametrize("port_source", ["environment", "dotenv"])
+def test_running_service_detected_by_configured_port(tmp_path: Path, monkeypatch, port_source: str) -> None:
+    project = _make_project(tmp_path)
+    _populate_data_dir(project / "backend" / "data")
+    monkeypatch.delenv("PORT", raising=False)
+    with _fake_health_server() as port:
+        assert port not in range(8000, 8011)
+        if port_source == "environment":
+            (project / ".env").write_text("PORT=invalid\n", encoding="utf-8")
+            monkeypatch.setenv("PORT", str(port))
+        else:
+            (project / ".env").write_text(f"SERVICE_PORT={port}\nPORT=${{SERVICE_PORT}}\n", encoding="utf-8")
+        result = _run_backup(project, use_configured_port=True)
+    assert result.returncode != 0
+    assert f"127.0.0.1:{port} 的 /api/health" in result.stderr
+    assert not list(project.glob("backup-*.zip"))
 
 
 def test_running_service_detected_by_pid_file(tmp_path: Path) -> None:

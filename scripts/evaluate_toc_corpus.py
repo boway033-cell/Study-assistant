@@ -17,6 +17,7 @@ from backend.app.core.config import settings
 from backend.app.core.database import SessionLocal
 from backend.app.models import Book, Chapter
 from backend.app.services.analyzer.layout import analyze_structured
+from backend.app.services.book_lifecycle import active_layout_path
 from backend.app.services.parser.structured import StructuredDocument
 from backend.app.services.rag.toc_heuristic import _norm_title_key, contents_page_numbers
 from backend.app.services.rag.toc_import import select_import_toc
@@ -25,8 +26,8 @@ from backend.app.services.rag.toc_rebuild import _native_toc
 DEFAULT_CORPUS = ROOT / "backend/tests/fixtures/toc_corpus.json"
 
 
-def _read_pages(book: Book, source: Path) -> tuple[list[str], object | None]:
-    cache = settings.structured_dir / f"{book.file_hash or book.id}.json"
+def _read_pages(db, book: Book, source: Path) -> tuple[list[str], object | None]:
+    cache = active_layout_path(db, book)
     if cache.exists():
         document = StructuredDocument.load_json(cache)
         layout = analyze_structured(document)
@@ -84,7 +85,7 @@ def evaluate_case(db, case: dict) -> dict:
     if actual_hash != case["sha256"]:
         return {"id": case["id"], "status": "unavailable", "reason": "PDF SHA-256 mismatch"}
 
-    cleaned, layout = _read_pages(book, source)
+    cleaned, layout = _read_pages(db, book, source)
     detected = contents_page_numbers(cleaned)
     if layout:
         detected.update(contents_page_numbers(["\n".join(block.text for block in page)

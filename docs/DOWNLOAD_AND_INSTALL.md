@@ -1,4 +1,4 @@
-# Study Assistant 2.6.1 下载、安装与更新
+# Study Assistant 2.6.3 下载、安装与更新
 
 本文面向 Windows 10/11。当前发布形态是本机运行的 Web 应用，不是桌面 EXE：双击启动器后由本地服务打开浏览器，资料不会上传到项目作者的服务器。
 
@@ -17,7 +17,7 @@ Release 已包含构建后的前端，因此不需要 Node.js；仍需安装 Pyt
 ```powershell
 git clone https://github.com/boway033-cell/Study-assistant.git
 cd Study-assistant
-git checkout v2.6.1
+git checkout v2.6.3
 ```
 
 源码方式需要 Node.js 22+ 来构建前端。
@@ -141,10 +141,10 @@ cd ..
 ## 备份、迁移与卸载
 
 - 推荐备份：先运行 `stop.bat`，再运行 `scripts\maintenance\backup.bat`。脚本按实际 `DATA_DIR` 备份，在仓库根生成 `backup-YYYYmmdd-HHMMSS.zip`；结束时校验压缩包可打开、必需成员齐全、`study.db` 的 `PRAGMA integrity_check` 为 `ok`。任一步失败都会以非零退出码结束且不打印“成功”；数据目录不存在时同样失败，不会静默创建目录。
-- 备份内容：`study.db`（SQLite 一致性快照，包含 WAL 中已提交内容）、`uploads/`、`structured/`、`presentations/`、`chroma/`、`models/`、`runtime/`、`writing/` 以及数据目录中的其他子目录。原始 `study.db-wal` / `study.db-shm` 不打包（已提交内容在快照中）；`.env` 与密钥文件不会写入备份包，也不会被打印。
+- 备份包含 `study.db` 的一致性快照，以及原文、索引和输出等数据目录内容。快照包含 WAL 中已提交的内容，无需打包原始 `study.db-wal` 或 `study.db-shm`。备份排除 `.env`，但会保留数据目录中本机生成的 `.secret_key`，用于恢复数据库中加密的 API Key。请妥善保管备份包。若曾通过环境变量或 `.env` 设置 `SECRET_KEY`，迁移后需要安全地恢复同一值，或重新配置 API Key。
 - 自定义数据目录：如果通过环境变量 `DATA_DIR` 或仓库根 `.env` 指定了数据目录，备份的就是该目录；迁移时复制该目录或把备份包解压到新位置，并在新环境配置相同的 `DATA_DIR`。也可用 `backup.bat --data-dir <目录>` 临时指定，`backup.bat --output <zip 路径>` 指定输出位置。
 - 恢复：先停止服务，确认目标数据目录不存在或已另行备份，再把压缩包内容解压到该数据目录（保持包内相对结构），最后启动应用。
-- 在线备份：服务无法停止时可用 `backup.bat --allow-online`；`study.db` 仍走 SQLite 一致性备份，但附件（`uploads/` 等）是在线复制，可能捕获正在写入的文件，因此优先停服备份。
+- 停服检查会探测环境变量或 `.env` 配置的 `PORT`、启动器记录的端口和默认端口。手动启动时若用 `--port` 覆盖了配置，备份时也可用 `backup.bat --port <端口>` 指定。必须在线备份时可用 `backup.bat --allow-online`。此时数据库仍使用 SQLite 一致性快照，附件可能在写入期间被复制。
 - 自动化调用：`backup.bat --no-pause --quiet` 不等待按键并精简过程输出，退出码可直接用于脚本判断；手动双击时保留暂停以便查看结果。
 - 手工备份：停止服务后复制整个实际数据目录。
 - 迁移电脑：把项目目录或新的发布目录与备份的数据目录一起复制，在新电脑重建 `.venv`。

@@ -5,14 +5,14 @@
       <el-col :span="5">
         <el-card shadow="never" class="side-card">
           <template #header>提问范围</template>
-          <el-select v-model="scopeValue" placeholder="选择资料范围" filterable :disabled="sending" style="width: 100%" @change="onScopeChange">
+          <el-select v-model="scopeValue" placeholder="选择资料范围" filterable :disabled="sending || scopeInitializing" style="width: 100%" @change="onScopeChange">
             <el-option label="全部资料" value="all" />
             <el-option-group label="书架"><el-option v-for="s in shelves" :key="`shelf:${s.id}`" :label="s.name" :value="`shelf:${s.id}`" /></el-option-group>
             <el-option-group label="项目"><el-option v-for="p in projects" :key="`project:${p.id}`" :label="p.name" :value="`project:${p.id}`" /></el-option-group>
             <el-option-group label="单本资料"><el-option v-for="b in bookOptions" :key="`book:${b.id}`" :label="b.title" :value="`book:${b.id}`" /></el-option-group>
           </el-select>
           <el-alert v-if="sendBlockedReason" :title="sendBlockedReason" type="warning" :closable="false" show-icon class="scope-blocked" />
-          <div class="scope-actions"><el-button link type="primary" @click="openProjectDialog()">＋ 项目</el-button><el-button v-if="activeScopeType==='project'" link @click="openProjectDialog(true)">编辑项目</el-button></div>
+          <div class="scope-actions"><el-button link type="primary" :disabled="sending || scopeInitializing" @click="openProjectDialog()">＋ 项目</el-button><el-button v-if="activeScopeType==='project'" link @click="openProjectDialog(true)">编辑项目</el-button></div>
           <div v-if="activeScopeType" class="assistant-scope-status">
             <template v-if="assistantStatus">
               <b>{{ assistantStatus.name }}</b>
@@ -234,6 +234,7 @@ const streamAbort = ref(null)
 const routeBookId = ref(null)
 const routeBookState = ref('')
 const routeBookError = ref('')
+const scopeInitializing = ref(true)
 const routeBookSequencer = createSequencer()
 let routeBookController = null
 
@@ -263,6 +264,8 @@ const bookOptions = computed(() => {
 const sendBlockedReason = computed(() => {
   if (routeBookState.value === 'loading') return '正在单独加载链接指向的文献；加载完成前不能发送。'
   if (routeBookState.value === 'error') return routeBookError.value
+  if (scopeInitializing.value) return '正在初始化提问范围，完成后即可发送。'
+  if (routeBookState.value === 'ready' && bookId.value !== routeBookId.value) return '当前范围与链接文献不一致，请重新选择提问范围。'
   return ''
 })
 const sendBlocked = computed(() => Boolean(sendBlockedReason.value))
@@ -671,6 +674,7 @@ const saveProject = async () => {
     projects.value = await listAssistantProjects()
     projectDialog.value = false
     scopeValue.value = `project:${project.id}`
+    onScopeChange(scopeValue.value)
   } catch (e) { ElMessage.error(e.message) } finally { projectSaving.value = false }
 }
 const removeProject = async () => {
@@ -701,6 +705,7 @@ const applyRouteBookId = async (rawId) => {
     routeBookId.value = null
     routeBookState.value = 'error'
     routeBookError.value = evaluateRouteBook({ bookId: rawId }).reason
+    scopeValue.value = ''
     return
   }
   routeBookId.value = id
@@ -738,9 +743,8 @@ const onScopeChange = (value) => {
 }
 
 // 组件初始化期间由 onMounted 统一加载，避免 watch 与 mount 重复请求。
-let scopeWatchEnabled = false
 watch(scopeValue, () => {
-  if (!scopeWatchEnabled) return
+  if (scopeInitializing.value) return
   archiveDialog.value = false
   archiveCandidate.value = null
   localStorage.setItem('assistantScope', scopeValue.value)
@@ -764,28 +768,23 @@ watch(scopeValue, () => {
 })
 
 onMounted(async () => {
-  const requestedBook = route.query.bookId
-  const hasRequestedBook = requestedBook !== undefined && requestedBook !== null && String(requestedBook) !== ''
+  await Promise.allSettled([searchBooks(''), listShelves().then(rows => { shelves.value = rows }),
+    listAssistantProjects().then(rows => { projects.value = rows })])
+  if (scopeUnmounted) return
   const requestedShelf = Number(route.query.shelfId)
   const requestedProject = Number(route.query.projectId)
-  try {
-    await Promise.all([searchBooks(''), listShelves().then(rows => { shelves.value = rows }),
-      listAssistantProjects().then(rows => { projects.value = rows })])
-  } catch { /* ignore */ }
-  if (hasRequestedBook) {
-    // 优先按路由单独取书，不依赖前 100 条列表；找不到就直接显示原因。
-    await applyRouteBookId(requestedBook)
-  } else if (requestedShelf && shelves.value.some(s => s.id === requestedShelf)) {
-    scopeValue.value = `shelf:${requestedShelf}`
-  } else if (requestedProject && projects.value.some(p => p.id === requestedProject)) {
-    scopeValue.value = `project:${requestedProject}`
-  } else {
-    const saved = localStorage.getItem('assistantScope')
-    if (saved && (saved === 'all' || shelves.value.some(s => saved === `shelf:${s.id}`)
-      || projects.value.some(p => saved === `project:${p.id}`)
-      || books.value.some(b => saved === `book:${b.id}`))) scopeValue.value = saved
+  if (!routeBookState.value) {
+    if (requestedShelf && shelves.value.some(s => s.id === requestedShelf)) {
+      scopeValue.value = `shelf:${requestedShelf}`
+    } else if (requestedProject && projects.value.some(p => p.id === requestedProject)) {
+      scopeValue.value = `project:${requestedProject}`
+    } else {
+      const saved = localStorage.getItem('assistantScope')
+      if (saved && (saved === 'all' || shelves.value.some(s => saved === `shelf:${s.id}`)
+        || projects.value.some(p => saved === `project:${p.id}`)
+        || books.value.some(b => saved === `book:${b.id}`))) scopeValue.value = saved
+    }
   }
-  scopeWatchEnabled = true
   restoreConversationId()
   loadHistory()
   loadAssistantScope()
@@ -793,10 +792,14 @@ onMounted(async () => {
   if (route.query.archive === '1' && activeScopeType.value) archiveDialog.value = true
   if (route.query.archiveChunkId && !activeScopeType.value) ElMessage.info('请选择书架或项目后加入档案')
   statusPollTimer = setInterval(() => { if (activeScopeType.value) loadAssistantScope() }, 15000)
+  // 等初始化引起的范围 watcher 执行完，再放开正常的范围切换。
+  await nextTick()
+  scopeInitializing.value = false
 })
 
+let scopeUnmounted = false
 watch(() => route.query.bookId, (value) => {
-  if (value !== undefined && value !== null && String(value) !== '') {
+  if (value !== undefined) {
     applyRouteBookId(value)
     return
   }
@@ -810,8 +813,8 @@ watch(() => route.query.bookId, (value) => {
   routeBookId.value = null
   routeBookState.value = ''
   routeBookError.value = ''
-  if (previous !== null && scopeValue.value === `book:${previous}`) scopeValue.value = 'all'
-})
+  if (!scopeValue.value || (previous !== null && scopeValue.value === `book:${previous}`)) scopeValue.value = 'all'
+}, { immediate: true, flush: 'sync' })
 
 watch(() => [route.query.archiveBookId, route.query.archiveChunkId], () => {
   archiveRouteHandled.value = false
@@ -819,11 +822,13 @@ watch(() => [route.query.archiveBookId, route.query.archiveChunkId], () => {
 })
 
 watch(() => [route.query.shelfId, route.query.projectId], ([shelfId, projectId]) => {
+  if (scopeInitializing.value || route.query.bookId !== undefined) return
   if (Number(shelfId) && shelves.value.some(s => s.id === Number(shelfId))) scopeValue.value = `shelf:${Number(shelfId)}`
   else if (Number(projectId) && projects.value.some(p => p.id === Number(projectId))) scopeValue.value = `project:${Number(projectId)}`
 })
 
 onBeforeUnmount(() => {
+  scopeUnmounted = true
   streamAbort.value?.abort()
   clearInterval(statusPollTimer)
   routeBookSequencer.invalidate()

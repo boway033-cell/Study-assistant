@@ -16,7 +16,7 @@
 | 安全响应头缺失 | `X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、`Referrer-Policy: same-origin` |
 | 自定义模型地址的 SSRF | base URL 仅允许 HTTPS 或本机 HTTP，拒绝 userinfo；自定义公网 HTTPS 地址属于用户主动行为 |
 | 后台并发写库 | 后台任务 FIFO 串行 + 每任务独立数据库 Session |
-| API Key 泄露 | `.env` 与 `backend/data/` 已 gitignore；设置页仅显示脱敏值；备份默认排除 `.env` |
+| API Key 泄露 | `.env` 与 `backend/data/` 已 gitignore，设置页仅显示脱敏值。备份排除 `.env`，但包含数据目录中用于恢复加密 API Key 的 `.secret_key`，应妥善保管。 |
 
 ## 已知边界（不承诺防护）
 

@@ -6,7 +6,7 @@
 
 本地优先的个人知识库，连接文献管理、原文阅读、限定范围的 AI 问答与研究写作。
 
-[![Version](https://img.shields.io/badge/version-v2.6.1-8B5A2B)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v2.6.3-8B5A2B)](CHANGELOG.md)
 [![CI](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/boway033-cell/Study-assistant/actions/workflows/ci.yml)
 [![Platform](https://img.shields.io/badge/platform-Windows-304747)](docs/DOWNLOAD_AND_INSTALL.md)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB)](requirements.txt)
